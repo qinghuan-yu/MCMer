@@ -31,6 +31,7 @@ venv/
 backend/.env.dev
 recover_from_history.ps1
 recovery_report.txt
+backend/.local/
 
 # Logs
 logs/
@@ -38,8 +39,7 @@ backend/logs/
 *.log
 
 # Output
-backend/project/work_dir/
-backend/project/runtime_config.json
+backend/project/
 
 # OS
 .DS_Store

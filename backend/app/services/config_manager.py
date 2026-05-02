@@ -12,7 +12,9 @@ from app.utils.log_util import logger
 class ConfigManager:
     """运行时配置管理器 - 存储 API Keys 到本地 JSON 文件"""
 
-    CONFIG_FILE = Path(__file__).parent.parent.parent / "project" / "runtime_config.json"
+    BASE_DIR = Path(__file__).resolve().parent.parent.parent
+    CONFIG_FILE = BASE_DIR / ".local" / "runtime_config.json"
+    LEGACY_CONFIG_FILE = BASE_DIR / "project" / "runtime_config.json"
 
     def __init__(self):
         self._config: dict = {}
@@ -21,6 +23,7 @@ class ConfigManager:
     def _load(self) -> None:
         """从文件加载配置"""
         try:
+            self._migrate_legacy_config()
             if self.CONFIG_FILE.exists():
                 with open(self.CONFIG_FILE, "r", encoding="utf-8") as f:
                     self._config = json.load(f)
@@ -38,6 +41,18 @@ class ConfigManager:
                 json.dump(self._config, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存运行时配置失败: {e}")
+
+    def _migrate_legacy_config(self) -> None:
+        """兼容旧位置的本地运行时配置。"""
+        if self.CONFIG_FILE.exists() or not self.LEGACY_CONFIG_FILE.exists():
+            return
+
+        try:
+            self.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.LEGACY_CONFIG_FILE.replace(self.CONFIG_FILE)
+            logger.info("已迁移运行时配置到本地目录: %s", self.CONFIG_FILE)
+        except Exception as e:
+            logger.warning(f"迁移旧运行时配置失败: {e}")
 
     def get_all_keys(self) -> dict:
         """获取所有 API Key 配置（脱敏显示）"""

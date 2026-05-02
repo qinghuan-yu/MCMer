@@ -26,7 +26,7 @@ frontend/
 
 - Python 环境建议使用项目根目录下的 `.venv`
 - 配置文件示例见 [backend/.env.example](backend/.env.example)
-- 运行配置模板见 [backend/project/runtime_config.example.json](backend/project/runtime_config.example.json)
+- 运行配置模板见 [backend/runtime_config.example.json](backend/runtime_config.example.json)
 
 启动后端：
 
@@ -66,7 +66,8 @@ cd backend
 ## 配置说明
 
 - 不要提交真实密钥到仓库
-- 本地运行时配置文件 `backend/project/runtime_config.json` 已被忽略
+- 本地运行时配置文件会在首次保存 key 时自动创建到 `backend/.local/runtime_config.json`
+- `backend/project/` 目录仅用于本地产物与运行数据，已整体忽略
 - 本地开发环境文件 `backend/.env.dev` 已被忽略
 
 ## 许可证
