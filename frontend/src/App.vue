@@ -951,11 +951,14 @@ onBeforeUnmount(() => {
   position: relative;
   z-index: 3;
   flex: 1;
+  height: calc(100vh - 112px);
   padding: 24px 74px;
   max-width: 1200px;
   width: 100%;
   min-width: 0;
   margin: 0 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* ---- Steps ---- */

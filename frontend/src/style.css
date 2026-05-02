@@ -33,7 +33,7 @@
 html {
   min-height: 100%;
   overflow-y: scroll;
-  scrollbar-gutter: stable both-edges;
+  scrollbar-gutter: stable;
 }
 
 body {

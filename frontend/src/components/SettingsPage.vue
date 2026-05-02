@@ -170,12 +170,15 @@ async function saveModels() {
   position: relative;
   z-index: 3;
   width: 100%;
+  min-width: 0;
 }
 
 .settings-shell {
   display: flex;
   flex-direction: column;
   gap: 28px;
+  width: 100%;
+  min-width: 0;
 }
 
 .page-header {
@@ -235,12 +238,14 @@ async function saveModels() {
   grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.9fr);
   gap: 22px;
   align-items: start;
+  min-width: 0;
 }
 
 .model-card {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  min-width: 0;
   padding: 28px;
   border: 1px solid var(--line);
   border-radius: 18px;

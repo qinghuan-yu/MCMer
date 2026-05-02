@@ -300,6 +300,7 @@ async function saveKeys() {
   display: flex;
   flex-direction: column;
   gap: 22px;
+  min-width: 0;
   padding: 30px 34px;
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -359,9 +360,11 @@ async function saveKeys() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
+  min-width: 0;
 }
 
 .provider-section {
+  min-width: 0;
   padding: 22px;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -397,6 +400,7 @@ async function saveKeys() {
 .field-group input,
 .field-group select {
   width: 100%;
+  min-width: 0;
   min-height: 46px;
   padding: 11px 14px;
   border: 1px solid rgba(20, 28, 45, 0.12);
@@ -416,10 +420,12 @@ async function saveKeys() {
 .input-row {
   display: flex;
   gap: 10px;
+  min-width: 0;
 }
 
 .input-row input {
   flex: 1;
+  min-width: 0;
 }
 
 .toggle-btn {
