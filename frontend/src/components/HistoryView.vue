@@ -141,6 +141,7 @@ interface HistoryTask {
   task_id: string
   question: string
   status: string
+  task_type: 'writing' | 'polish'
   created_at: string
   has_paper: boolean
   has_notebook: boolean
@@ -197,7 +198,10 @@ function startRevise(task: HistoryTask) {
 }
 
 function getProjectTitle(task: HistoryTask) {
-  return task.is_revision ? '修订项目' : '数学建模项目'
+  if (task.task_type === 'polish') {
+    return task.is_revision ? '润色修订项目' : '论文润色项目'
+  }
+  return task.is_revision ? '写作修订项目' : '数学建模项目'
 }
 
 function openTask(task: HistoryTask) {

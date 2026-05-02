@@ -31,6 +31,10 @@ class TaskManager:
         revision_number: int = 0,
         feedback: str = "",
         revise_code: bool = False,
+        task_type: str = "writing",
+        source_question: str = "",
+        paper_content: str = "",
+        polishing_requirements: str = "",
     ) -> str:
         """创建新任务（支持作为修订子任务）"""
         task_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
@@ -42,6 +46,7 @@ class TaskManager:
             "task_id": task_id,
             "question": question,
             "status": TaskStatus.PENDING.value,
+            "task_type": task_type,
             "work_dir": work_dir,
             "created_at": datetime.now().isoformat(),
             "parent_task_id": parent_task_id,
@@ -49,6 +54,9 @@ class TaskManager:
             "is_revision": bool(parent_task_id),
             "feedback": feedback,
             "revise_code": revise_code,
+            "source_question": source_question,
+            "paper_content": paper_content,
+            "polishing_requirements": polishing_requirements,
         }
         self._active_tasks[task_id] = task_info
 
@@ -184,6 +192,7 @@ class TaskManager:
                 "task_id": task_info.get("task_id", task_dir.name),
                 "question": task_info.get("question", "")[:120],
                 "status": task_info.get("status", "unknown"),
+                "task_type": task_info.get("task_type", "writing"),
                 "created_at": task_info.get("created_at", ""),
                 "has_paper": has_paper,
                 "has_notebook": (task_dir / "notebook.ipynb").exists(),
@@ -199,6 +208,7 @@ class TaskManager:
                     "task_id": tid,
                     "question": info.get("question", "")[:120],
                     "status": info.get("status", "pending"),
+                    "task_type": info.get("task_type", "writing"),
                     "created_at": info.get("created_at", ""),
                     "has_paper": os.path.exists(os.path.join(info["work_dir"], "res.md")),
                     "has_notebook": os.path.exists(os.path.join(info["work_dir"], "notebook.ipynb")),
@@ -238,6 +248,7 @@ class TaskManager:
             "latest_paper": paper_v2 or paper,
             "paper_version": 2 if paper_v2 else (1 if paper else 0),
             "status": task.get("status", "unknown"),
+            "task_type": task.get("task_type", "writing"),
             "created_at": task.get("created_at", ""),
         }
 

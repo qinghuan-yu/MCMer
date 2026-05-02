@@ -43,6 +43,7 @@ class TaskResult(BaseModel):
     """任务结果"""
     task_id: str
     status: str
+    task_type: str = "writing"
     paper_path: str = ""
     notebook_path: str = ""
     work_dir: str = ""
@@ -58,6 +59,7 @@ class HistoryTaskInfo(BaseModel):
     task_id: str
     question: str = ""
     status: str = "unknown"
+    task_type: str = "writing"
     created_at: str = ""
     has_paper: bool = False
     has_notebook: bool = False

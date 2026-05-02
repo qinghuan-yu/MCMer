@@ -35,8 +35,22 @@
             <section class="hero">
               <div class="hero-left">
                 <h1 class="title">
-                  Everything in<br /><span>Agent</span>
+                  {{ heroTitleLine1 }}<br /><span>{{ heroTitleLine2 }}</span>
                 </h1>
+                <p class="subtitle">{{ heroSubtitle }}</p>
+                <div class="entry-switcher">
+                  <button
+                    v-for="entry in entryOptions"
+                    :key="entry.id"
+                    class="entry-card"
+                    :class="{ active: selectedTaskType === entry.id }"
+                    @click="selectedTaskType = entry.id"
+                  >
+                    <span class="entry-kicker">{{ entry.kicker }}</span>
+                    <strong>{{ entry.title }}</strong>
+                    <small>{{ entry.description }}</small>
+                  </button>
+                </div>
                 <div class="hero-geometry">
                   <div class="geo-circle"></div>
                   <div class="geo-line"></div>
@@ -44,6 +58,7 @@
               </div>
               <div class="panel" data-layout-anchor="new-panel">
                 <TaskInput
+                  :mode="selectedTaskType"
                   @submit="handleSubmit"
                   :loading="isRunning"
                 />
@@ -51,20 +66,13 @@
             </section>
 
             <section class="steps">
-              <div class="step" :class="{ 'active-step': currentStage === '' }">
-                <span>01</span>
-                <strong>分析</strong>
-              </div>
-              <div class="divider"></div>
-              <div class="step" :class="{ 'active-step': currentStage === 'modeler' }">
-                <span>02</span>
-                <strong>建模</strong>
-              </div>
-              <div class="divider"></div>
-              <div class="step" :class="{ 'active-step': currentStage === 'writer' || currentStage === 'coder' }">
-                <span>03</span>
-                <strong>写作</strong>
-              </div>
+              <template v-for="(step, index) in currentEntrySteps" :key="step.id">
+                <div class="step" :class="{ 'active-step': currentStage === step.id || (!currentStage && index === 0) }">
+                  <span>{{ String(index + 1).padStart(2, '0') }}</span>
+                  <strong>{{ step.label }}</strong>
+                </div>
+                <div v-if="index < currentEntrySteps.length - 1" class="divider"></div>
+              </template>
             </section>
           </template>
 
@@ -93,6 +101,7 @@
               :progress="progress"
               :stage="currentStage"
               :result="taskResult"
+              :task-type="currentTaskType"
               :is-revision="isRevision"
               :stopping="isStoppingTask"
               @back="handleRunningBack"
@@ -119,6 +128,8 @@ import HistoryView from './components/HistoryView.vue'
 import PaperView from './components/PaperView.vue'
 import SettingsPage from './components/SettingsPage.vue'
 
+type TaskType = 'writing' | 'polish'
+
 interface RuntimeMessage {
   type: string
   agent?: string
@@ -131,6 +142,7 @@ interface RuntimeMessage {
     stage: string
     progress: number
     message: string
+    task_type?: TaskType
     current_subtask?: string
     paper_path?: string
     notebook_path?: string
@@ -143,6 +155,7 @@ interface HistoryTask {
   task_id: string
   question: string
   status: string
+  task_type: TaskType
   created_at: string
   has_paper: boolean
   has_notebook: boolean
@@ -154,16 +167,27 @@ interface HistoryTask {
 interface TaskDetail {
   task_id: string
   status: string
+  task_type: TaskType
   work_dir: string
 }
 
 interface TaskResultPayload {
   task_id: string
   status: string
+  task_type: TaskType
   paper_path: string
   notebook_path: string
   work_dir: string
   error_message?: string
+}
+
+interface TaskDraftPayload {
+  taskType: TaskType
+  question: string
+  sourceQuestion: string
+  paperContent: string
+  polishingRequirements: string
+  files: File[]
 }
 
 // 视图状态
@@ -183,6 +207,8 @@ const selectedTaskId = ref('')
 const runtimeSourceView = ref<'new' | 'history'>('new')
 const reconnectAttempts = ref(0)
 const isStoppingTask = ref(false)
+const selectedTaskType = ref<TaskType>('writing')
+const currentTaskType = ref<TaskType>('writing')
 
 let activeSocket: WebSocket | null = null
 let messagePoller: number | null = null
@@ -199,6 +225,44 @@ const statusText = computed(() => {
 })
 
 const pageClass = computed(() => `view-${currentView.value}`)
+const entryOptions = [
+  {
+    id: 'writing' as TaskType,
+    kicker: '7 AGENTS',
+    title: '写作功能',
+    description: '题目拆解、建模、审查、求解、验证、图表、成文。',
+  },
+  {
+    id: 'polish' as TaskType,
+    kicker: '5 AGENTS',
+    title: '论文润色',
+    description: '一致性审查、数据复核、图文核对与竞赛化措辞修订。',
+  },
+]
+const taskTypeSteps: Record<TaskType, { id: string; label: string }[]> = {
+  writing: [
+    { id: 'breakdown', label: '拆解' },
+    { id: 'modeling', label: '建模' },
+    { id: 'review', label: '审查' },
+    { id: 'solve', label: '求解' },
+    { id: 'analysis', label: '验证' },
+    { id: 'charts', label: '图表' },
+    { id: 'writing', label: '成文' },
+  ],
+  polish: [
+    { id: 'breakdown', label: '拆解' },
+    { id: 'consistency', label: '一致性' },
+    { id: 'recalculation', label: '复核' },
+    { id: 'chart_consistency', label: '图文' },
+    { id: 'wording', label: '润色' },
+  ],
+}
+const currentEntrySteps = computed(() => taskTypeSteps[selectedTaskType.value])
+const heroTitleLine1 = computed(() => selectedTaskType.value === 'writing' ? 'Modeling to' : 'Polish to')
+const heroTitleLine2 = computed(() => selectedTaskType.value === 'writing' ? 'Submission' : 'Competition Style')
+const heroSubtitle = computed(() => selectedTaskType.value === 'writing'
+  ? '从题目拆解到算法求解、图表生成与论文成文的完整链路。'
+  : '对已有论文执行结构审查、数值复核、图文校验与措辞修订。')
 
 function switchView(view: ViewState) {
   currentView.value = view
@@ -213,6 +277,7 @@ function resetRuntimeState() {
   taskStatus.value = 'idle'
   isRunning.value = false
   isRevision.value = false
+  currentTaskType.value = selectedTaskType.value
   reconnectAttempts.value = 0
   isStoppingTask.value = false
 }
@@ -240,12 +305,14 @@ function prepareRuntimeView(
   taskId: string,
   isRev: boolean,
   source: 'new' | 'history',
-  status: string = 'running'
+  status: string = 'running',
+  taskType: TaskType = 'writing'
 ) {
   stopRuntimeTracking()
   runtimeSourceView.value = source
   currentTaskId.value = taskId
   isRevision.value = isRev
+  currentTaskType.value = taskType
   taskStatus.value = status
   isRunning.value = status === 'running' || status === 'pending'
   currentView.value = 'running'
@@ -307,6 +374,9 @@ function hydrateRuntimeState(runtimeMessages: RuntimeMessage[]) {
     (msg) => msg.type === 'result' || msg.type === 'error' || msg.type === 'cancelled'
   )
   if (terminalMessage?.data) {
+    if (terminalMessage.data.task_type) {
+      currentTaskType.value = terminalMessage.data.task_type
+    }
     if (terminalMessage.type === 'result') {
       taskResult.value = terminalMessage.data as TaskResultPayload
       taskStatus.value = 'completed'
@@ -360,6 +430,7 @@ function buildFallbackResult(task: HistoryTask, detail: TaskDetail | null) {
   return {
     task_id: task.task_id,
     status: detail.status || task.status,
+    task_type: detail.task_type || task.task_type,
     paper_path: task.has_paper ? `${detail.work_dir}\\res.md` : '',
     notebook_path: task.has_notebook ? `${detail.work_dir}\\notebook.ipynb` : '',
     work_dir: detail.work_dir,
@@ -370,20 +441,28 @@ function buildFallbackResult(task: HistoryTask, detail: TaskDetail | null) {
 // ============================================================
 // 普通任务提交 (题目 + 数据集文件)
 // ============================================================
-async function handleSubmit(question: string, files: File[] = []) {
+async function handleSubmit(payload: TaskDraftPayload) {
   try {
-    // 1. 创建任务
     const createRes = await fetch('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({
+        question: payload.question,
+        task_type: payload.taskType,
+        source_question: payload.sourceQuestion,
+        paper_content: payload.paperContent,
+        polishing_requirements: payload.polishingRequirements,
+      }),
     })
+    if (!createRes.ok) {
+      const data = await createRes.json().catch(() => ({}))
+      throw new Error(data.detail || '创建任务失败')
+    }
     const task = await createRes.json()
     const taskId = task.task_id
 
-    // 2. 上传数据集文件
-    if (files.length > 0) {
-      for (const file of files) {
+    if (payload.files.length > 0) {
+      for (const file of payload.files) {
         const formData = new FormData()
         formData.append('file', file)
         try {
@@ -397,11 +476,11 @@ async function handleSubmit(question: string, files: File[] = []) {
       }
     }
 
-    // 3. 启动 WebSocket
-    startWebSocket(taskId, false, 'new')
+    startWebSocket(taskId, false, 'new', false, payload.taskType)
   } catch (e) {
     console.error('创建任务失败:', e)
     taskStatus.value = 'failed'
+    window.alert(e instanceof Error ? e.message : '创建任务失败')
   }
 }
 
@@ -414,7 +493,7 @@ function handleViewPaper(taskId: string) {
 }
 
 async function handleOpenProject(task: HistoryTask) {
-  prepareRuntimeView(task.task_id, task.is_revision, 'history', task.status)
+  prepareRuntimeView(task.task_id, task.is_revision, 'history', task.status, task.task_type)
   await syncTaskMessages(task.task_id)
 
   if (!taskResult.value) {
@@ -451,7 +530,7 @@ async function handleStartRevise(taskId: string, feedback: string, reviseCode: b
     const revision = await reviseRes.json()
 
     // 2. 启动修订任务
-    startWebSocket(revision.revision_task_id, true, 'history')
+    startWebSocket(revision.revision_task_id, true, 'history', false, 'polish')
   } catch (e) {
     console.error('创建修订任务失败:', e)
   }
@@ -464,14 +543,16 @@ function startWebSocket(
   taskId: string,
   isRev: boolean,
   source: 'new' | 'history',
-  preserveState: boolean = false
+  preserveState: boolean = false,
+  taskType: TaskType = currentTaskType.value
 ) {
   if (!preserveState) {
-    prepareRuntimeView(taskId, isRev, source, 'running')
+    prepareRuntimeView(taskId, isRev, source, 'running', taskType)
   } else {
     runtimeSourceView.value = source
     currentTaskId.value = taskId
     isRevision.value = isRev
+    currentTaskType.value = taskType
     taskStatus.value = 'running'
     isRunning.value = true
     currentView.value = 'running'
@@ -497,8 +578,12 @@ function startWebSocket(
     if (msg.type === 'progress' && msg.data) {
       progress.value = msg.data.progress
       currentStage.value = msg.data.stage
+      if (msg.data.task_type) {
+        currentTaskType.value = msg.data.task_type
+      }
     } else if (msg.type === 'result') {
       taskResult.value = msg.data as TaskResultPayload
+      currentTaskType.value = (msg.data?.task_type as TaskType) || currentTaskType.value
       taskStatus.value = 'completed'
       progress.value = 1
       currentStage.value = 'done'
@@ -507,6 +592,7 @@ function startWebSocket(
       ws.close()
     } else if (msg.type === 'error') {
       taskResult.value = msg.data as TaskResultPayload
+      currentTaskType.value = (msg.data?.task_type as TaskType) || currentTaskType.value
       taskStatus.value = 'failed'
       isRunning.value = false
       void syncTaskMessages(taskId)
@@ -848,6 +934,52 @@ onBeforeUnmount(() => {
   letter-spacing: 0.02em;
 }
 
+.entry-switcher {
+  margin-top: 34px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 560px;
+}
+
+.entry-card {
+  border: 1px solid rgba(20, 28, 45, 0.12);
+  background: rgba(255, 255, 255, 0.62);
+  border-radius: 10px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s;
+}
+
+.entry-card:hover,
+.entry-card.active {
+  transform: translateY(-2px);
+  border-color: rgba(36, 78, 168, 0.3);
+  box-shadow: 0 16px 30px rgba(36, 78, 168, 0.08);
+}
+
+.entry-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: var(--blue);
+}
+
+.entry-card strong {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.entry-card small {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
 .hero-geometry {
   position: absolute;
   left: 0; top: 320px;
@@ -904,13 +1036,14 @@ onBeforeUnmount(() => {
   z-index: 5;
   display: flex;
   align-items: center;
-  gap: 86px;
-  width: 720px;
+  flex-wrap: wrap;
+  gap: 20px;
+  width: min(100%, 1180px);
   margin-left: 124px;
   padding-bottom: 60px;
 }
 
-.step { min-width: 96px; }
+.step { min-width: 88px; }
 
 .step span {
   display: block;
@@ -927,7 +1060,7 @@ onBeforeUnmount(() => {
 
 .divider {
   width: 1px;
-  height: 56px;
+  height: 36px;
   background: var(--line);
 }
 

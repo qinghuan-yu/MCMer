@@ -2,10 +2,7 @@
   <div class="chat-container">
     <div class="progress-section">
       <div class="progress-bar">
-        <div
-          class="progress-fill"
-          :style="{ width: `${progress * 100}%` }"
-        ></div>
+        <div class="progress-fill" :style="{ width: `${progress * 100}%` }"></div>
       </div>
       <div class="progress-info">
         <span class="progress-stage">{{ stageLabel }}</span>
@@ -19,16 +16,14 @@
           v-for="item in displayMessages"
           :key="item.id"
           class="message"
-          :class="`message-${item.agent}`"
+          :style="{ borderColor: item.borderColor }"
         >
           <div class="message-icon">{{ item.icon }}</div>
           <div class="message-content">
             <div class="message-meta">
               <span class="message-agent">{{ item.agentLabel }}</span>
               <span v-if="item.section" class="message-section">{{ item.section }}</span>
-              <span v-if="item.progress !== null" class="message-progress">
-                {{ item.progress }}%
-              </span>
+              <span v-if="item.progress !== null" class="message-progress">{{ item.progress }}%</span>
             </div>
             <pre v-if="item.isCode" class="message-code">{{ item.text }}</pre>
             <div v-else class="message-text">{{ item.text }}</div>
@@ -36,30 +31,18 @@
         </div>
 
         <div v-if="result" class="result-card">
-          <div class="result-icon">{{ isRevision ? '✨' : '🎉' }}</div>
-          <h3>{{ isRevision ? '修订完成' : '项目完成' }}</h3>
+          <div class="result-icon">{{ taskType === 'polish' ? '✨' : '🎉' }}</div>
+          <h3>{{ taskType === 'polish' ? '润色完成' : '写作完成' }}</h3>
           <div class="result-files">
-            <a
-              v-if="result.paper_path"
-              :href="getFileUrl(result.paper_path)"
-              target="_blank"
-              class="file-link"
-            >
+            <a v-if="result.paper_path" :href="getFileUrl(result.paper_path)" target="_blank" class="file-link">
               📄 查看论文
             </a>
-            <a
-              v-if="result.notebook_path"
-              :href="getFileUrl(result.notebook_path)"
-              target="_blank"
-              class="file-link"
-            >
+            <a v-if="result.notebook_path" :href="getFileUrl(result.notebook_path)" target="_blank" class="file-link">
               📓 查看 Notebook
             </a>
             <span v-if="result && result.work_dir" class="file-path">结果文件已保存到项目工作区</span>
           </div>
-          <div v-if="result.error_message" class="result-error">
-            ❌ 错误: {{ result.error_message }}
-          </div>
+          <div v-if="result.error_message" class="result-error">❌ 错误: {{ result.error_message }}</div>
         </div>
 
         <div v-if="isRunning && !result" class="typing-indicator">
@@ -78,6 +61,10 @@
           <div class="monitor-row">
             <span class="label">当前任务</span>
             <span class="value">{{ currentSubtask }}</span>
+          </div>
+          <div class="monitor-row">
+            <span class="label">任务类型</span>
+            <span class="value">{{ taskType === 'polish' ? '论文润色' : '论文写作' }}</span>
           </div>
         </div>
 
@@ -109,11 +96,7 @@
 
         <div class="timeline-title">{{ selectedAgentTitle }}</div>
         <div class="timeline-list">
-          <div
-            v-for="item in filteredAgentMessages"
-            :key="`${item.id}-${selectedAgent}`"
-            class="timeline-item"
-          >
+          <div v-for="item in filteredAgentMessages" :key="`${item.id}-${selectedAgent}`" class="timeline-item">
             <div class="timeline-head">
               <span class="timeline-agent">{{ item.icon }} {{ item.agentLabel }}</span>
               <span v-if="item.section" class="timeline-section">{{ item.section }}</span>
@@ -121,34 +104,25 @@
             <pre v-if="item.isCode" class="timeline-code">{{ item.text }}</pre>
             <div v-else class="timeline-text">{{ item.text }}</div>
           </div>
-          <div v-if="filteredAgentMessages.length === 0" class="timeline-empty">
-            当前视图还没有内容。
-          </div>
+          <div v-if="filteredAgentMessages.length === 0" class="timeline-empty">当前视图还没有内容。</div>
         </div>
       </aside>
     </div>
 
     <div class="actions-bar">
-      <button class="action-btn secondary" @click="$emit('back')">
-        ← 返回
-      </button>
-      <button
-        v-if="isRunning"
-        class="action-btn danger"
-        :disabled="stopping"
-        @click="$emit('stop', props.taskId)"
-      >
+      <button class="action-btn secondary" @click="$emit('back')">← 返回</button>
+      <button v-if="isRunning" class="action-btn danger" :disabled="stopping" @click="$emit('stop', props.taskId)">
         {{ stopping ? '停止中...' : '停止任务' }}
       </button>
-      <button v-if="result" class="action-btn primary" @click="$emit('newTask')">
-        🔄 新建任务
-      </button>
+      <button v-if="result" class="action-btn primary" @click="$emit('newTask')">🔄 新建任务</button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+
+type TaskType = 'writing' | 'polish'
 
 interface RuntimeMessage {
   type?: string
@@ -173,11 +147,19 @@ interface NormalizedMessage {
   agent: string
   agentLabel: string
   icon: string
+  borderColor: string
   kind: string
   text: string
   section: string
   progress: number | null
   isCode: boolean
+}
+
+interface AgentMeta {
+  id: string
+  label: string
+  icon: string
+  color: string
 }
 
 const props = defineProps<{
@@ -186,6 +168,7 @@ const props = defineProps<{
   progress: number
   stage: string
   result: Record<string, any> | null
+  taskType: TaskType
   isRevision?: boolean
   stopping?: boolean
 }>()
@@ -200,13 +183,31 @@ defineEmits<{
 const messagesContainer = ref<HTMLElement>()
 const selectedAgent = ref('all')
 
-const agentTabs = [
-  { id: 'all', label: '总览', icon: '◌' },
-  { id: 'coordinator', label: '协调手', icon: '📋' },
-  { id: 'modeler', label: '建模手', icon: '🧮' },
-  { id: 'coder', label: '代码手', icon: '💻' },
-  { id: 'writer', label: '论文手', icon: '📝' },
-]
+const agentMetaByTaskType: Record<TaskType, AgentMeta[]> = {
+  writing: [
+    { id: 'breakdown', label: '题目拆解', icon: '🧭', color: 'rgba(15, 118, 110, 0.22)' },
+    { id: 'modeling', label: '假设与建模', icon: '🧮', color: 'rgba(245, 158, 11, 0.22)' },
+    { id: 'review', label: '模型审查', icon: '🔎', color: 'rgba(220, 38, 38, 0.18)' },
+    { id: 'solve', label: '算法求解', icon: '💻', color: 'rgba(36, 78, 168, 0.22)' },
+    { id: 'analysis', label: '结果验证', icon: '📈', color: 'rgba(5, 150, 105, 0.22)' },
+    { id: 'charts', label: '图表一致性', icon: '📊', color: 'rgba(124, 58, 237, 0.18)' },
+    { id: 'writing', label: '论文组织', icon: '📝', color: 'rgba(22, 163, 74, 0.18)' },
+  ],
+  polish: [
+    { id: 'breakdown', label: '题目拆解', icon: '🧭', color: 'rgba(15, 118, 110, 0.22)' },
+    { id: 'consistency', label: '模型一致性', icon: '🧩', color: 'rgba(245, 158, 11, 0.22)' },
+    { id: 'recalculation', label: '数据复核', icon: '🧪', color: 'rgba(36, 78, 168, 0.22)' },
+    { id: 'chart_consistency', label: '图文一致性', icon: '📊', color: 'rgba(124, 58, 237, 0.18)' },
+    { id: 'wording', label: '措辞修订', icon: '✍️', color: 'rgba(22, 163, 74, 0.18)' },
+  ],
+}
+
+const agentTabs = computed(() => [
+  { id: 'all', label: '总览', icon: '◌', color: 'rgba(20, 28, 45, 0.12)' },
+  ...agentMetaByTaskType[props.taskType],
+])
+
+const agentMetaMap = computed(() => Object.fromEntries(agentTabs.value.map((tab) => [tab.id, tab])))
 
 const isRunning = computed(() => !props.result && props.progress < 1)
 
@@ -224,7 +225,7 @@ const filteredAgentMessages = computed(() => {
 })
 
 const agentCards = computed(() => {
-  return agentTabs
+  return agentTabs.value
     .filter((tab) => tab.id !== 'all')
     .map((tab) => {
       const list = normalizedMessages.value.filter((item) => item.agent === tab.id)
@@ -238,7 +239,7 @@ const agentCards = computed(() => {
 })
 
 const selectedAgentTitle = computed(() => {
-  const active = agentTabs.find((tab) => tab.id === selectedAgent.value)
+  const active = agentTabs.value.find((tab) => tab.id === selectedAgent.value)
   return active ? `${active.icon} ${active.label} 视图` : 'Agent 视图'
 })
 
@@ -252,19 +253,21 @@ const currentSubtask = computed(() => {
 
 const stageLabel = computed(() => stageLabelFromStage(props.stage))
 
+watch(() => props.taskType, () => {
+  selectedAgent.value = 'all'
+})
+
 function normalizeMessage(msg: RuntimeMessage, index: number): NormalizedMessage {
   const kind = msg.type || 'info'
   const stage = msg.data?.stage || ''
   const agent = inferAgent(msg, stage)
-  const progress = typeof msg.data?.progress === 'number'
-    ? Math.round(msg.data.progress * 100)
-    : null
+  const meta = agentMetaMap.value[agent] || { id: agent, label: '系统', icon: '🔄', color: 'rgba(20, 28, 45, 0.12)' }
+  const progress = typeof msg.data?.progress === 'number' ? Math.round(msg.data.progress * 100) : null
   const section = msg.section || msg.data?.current_subtask || ''
 
   let text = msg.content || msg.data?.message || msg.message || ''
-
   if (kind === 'result' && msg.data?.paper_path) {
-    text = '项目结果已生成，可查看论文与 Notebook。'
+    text = props.taskType === 'polish' ? '润色结果已生成，可查看论文与 Notebook。' : '项目结果已生成，可查看论文与 Notebook。'
   }
   if (kind === 'error' && msg.data?.error_message) {
     text = msg.data.error_message
@@ -276,8 +279,9 @@ function normalizeMessage(msg: RuntimeMessage, index: number): NormalizedMessage
   return {
     id: `${agent}-${kind}-${index}`,
     agent,
-    agentLabel: agentLabel(agent),
-    icon: agentIcon(agent),
+    agentLabel: meta.label,
+    icon: meta.icon,
+    borderColor: meta.color,
     kind,
     text,
     section,
@@ -287,50 +291,26 @@ function normalizeMessage(msg: RuntimeMessage, index: number): NormalizedMessage
 }
 
 function inferAgent(msg: RuntimeMessage, stage: string): string {
-  if (msg.agent) return msg.agent
-  if (stage === 'revision') return 'writer'
-  if (stage) return stage
+  if (msg.agent === 'coder') {
+    return props.taskType === 'polish' ? 'recalculation' : 'solve'
+  }
+  if (msg.agent === 'writer') {
+    return props.taskType === 'polish' ? 'wording' : 'writing'
+  }
+  if (msg.agent === 'coordinator') return 'breakdown'
+  if (msg.agent === 'modeler') return 'modeling'
+  if (msg.agent && agentMetaMap.value[msg.agent]) return msg.agent
+  if (stage && agentMetaMap.value[stage]) return stage
   if (msg.type === 'code' || (msg.type === 'result' && typeof msg.content === 'string')) {
-    return 'coder'
+    return props.taskType === 'polish' ? 'recalculation' : 'solve'
   }
-  if (msg.type === 'text' || msg.type === 'section_complete' || msg.type === 'citation') {
-    return 'writer'
-  }
-  return 'system'
+  return 'all'
 }
 
 function stageLabelFromStage(stage: string) {
-  const map: Record<string, string> = {
-    coordinator: '📋 协调手',
-    modeler: '🧮 建模手',
-    coder: '💻 代码手',
-    writer: '📝 论文手',
-    revision: '✏️ 修订流程',
-    done: '✅ 完成',
-  }
-  return map[stage] || '处理中...'
-}
-
-function agentLabel(agent: string) {
-  const map: Record<string, string> = {
-    coordinator: '协调手',
-    modeler: '建模手',
-    coder: '代码手',
-    writer: '论文手',
-    system: '系统',
-  }
-  return map[agent] || '系统'
-}
-
-function agentIcon(agent: string) {
-  const map: Record<string, string> = {
-    coordinator: '📋',
-    modeler: '🧮',
-    coder: '💻',
-    writer: '📝',
-    system: '🔄',
-  }
-  return map[agent] || '🔄'
+  const active = agentMetaMap.value[stage]
+  if (stage === 'done') return '✅ 完成'
+  return active ? `${active.icon} ${active.label}` : '处理中...'
 }
 
 function getFileUrl(path: string) {
@@ -414,22 +394,6 @@ watch(
   border-radius: 10px;
   border: 1px solid transparent;
   animation: fadeIn 0.3s ease;
-}
-
-.message-coder {
-  border-color: rgba(36, 78, 168, 0.18);
-}
-
-.message-writer {
-  border-color: rgba(22, 163, 74, 0.14);
-}
-
-.message-modeler {
-  border-color: rgba(245, 158, 11, 0.18);
-}
-
-.message-coordinator {
-  border-color: rgba(15, 118, 110, 0.16);
 }
 
 @keyframes fadeIn {
@@ -541,10 +505,6 @@ watch(
   font-size: 0.86rem;
   text-align: right;
   word-break: break-word;
-}
-
-.mono {
-  font-family: monospace;
 }
 
 .agent-overview {
@@ -759,54 +719,29 @@ watch(
 }
 
 .action-btn {
-  padding: 10px 24px;
-  border: none;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  font-weight: 500;
+  height: 42px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: white;
+  font-weight: 700;
   cursor: pointer;
-  transition: all 0.2s;
-}
-
-.action-btn.secondary {
-  background: var(--bg-input);
-  color: var(--text);
 }
 
 .action-btn.primary {
-  background: linear-gradient(135deg, var(--primary), #244ea8);
+  background: var(--primary);
   color: white;
+  border-color: var(--primary);
 }
 
 .action-btn.danger {
-  background: rgba(254, 242, 242, 0.96);
-  color: #991b1b;
-  border: 1px solid rgba(185, 28, 28, 0.16);
+  color: var(--error);
+  border-color: rgba(220, 38, 38, 0.2);
+  background: rgba(220, 38, 38, 0.06);
 }
 
 .action-btn:disabled {
+  opacity: 0.6;
   cursor: not-allowed;
-  opacity: 0.62;
-}
-
-.action-btn:hover {
-  transform: translateY(-1px);
-}
-
-@media (max-width: 1080px) {
-  .runtime-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .agent-overview {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 960px) {
-  .chat-container {
-    height: auto;
-    min-height: calc(100vh - 140px);
-  }
 }
 </style>
