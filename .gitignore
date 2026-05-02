@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# Build
+dist/
+build/
+**/.vite/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.prod
+
+# Logs
+logs/
+backend/logs/
+*.log
+
+# Output
+backend/project/work_dir/
+backend/project/runtime_config.json
+
+# OS
+.DS_Store
+Thumbs.db
