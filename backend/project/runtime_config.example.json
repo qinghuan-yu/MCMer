@@ -1,0 +1,9 @@
+{
+  "DEEPSEEK_API_KEY": "",
+  "WRITER_MODEL": "mimo/mimo-v2.5",
+  "DEFAULT_MODEL": "mimo/mimo-v2.5",
+  "OPENAI_API_KEY": "",
+  "OPENAI_BASE_URL": "https://api.deepseek.com",
+  "MIMO_API_KEY": "",
+  "MIMO_BASE_URL": "https://token-plan-sgp.xiaomimimo.com/v1"
+}

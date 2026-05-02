@@ -1,0 +1,36 @@
+[project]
+name = "mcmer-backend"
+version = "0.1.0"
+description = "专为数学建模设计的 Multi-Agent 系统"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=12.0",
+    "litellm>=1.50.0",
+    "redis>=5.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "jupyter-client>=8.0.0",
+    "nbformat>=5.10.0",
+    "ipykernel>=6.29.0",
+    "aiofiles>=24.0.0",
+    "python-multipart>=0.0.9",
+    "tomli>=2.0.0",
+    "icecream>=2.1.0",
+    "loguru>=0.7.0",
+    "pypandoc>=1.13",
+]
+
+[project.optional-dependencies]
+e2b = ["e2b>=1.0.0"]
+daytona = ["daytona>=0.1.0"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.5.0",
+]
