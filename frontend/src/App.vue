@@ -29,12 +29,7 @@
     </header>
 
     <main class="view-shell">
-      <Transition
-        name="view-fade"
-        mode="out-in"
-        @before-enter="handleViewBeforeEnter"
-        @after-enter="handleViewAfterEnter"
-      >
+      <Transition name="view-fade" mode="out-in">
         <section :key="currentView" class="view-stage">
           <template v-if="currentView === 'new'">
             <section class="hero">
@@ -99,9 +94,11 @@
               :stage="currentStage"
               :result="taskResult"
               :is-revision="isRevision"
+              :stopping="isStoppingTask"
               @back="handleRunningBack"
               @new-task="handleStartFreshTask"
               @view-paper="handleViewPaperFromResult"
+              @stop="handleStopTask"
             />
           </section>
 
@@ -115,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import TaskInput from './components/TaskInput.vue'
 import ChatView from './components/ChatView.vue'
 import HistoryView from './components/HistoryView.vue'
@@ -185,27 +182,10 @@ const taskResult = ref<TaskResultPayload | null>(null)
 const selectedTaskId = ref('')
 const runtimeSourceView = ref<'new' | 'history'>('new')
 const reconnectAttempts = ref(0)
-const pageRef = ref<HTMLElement>()
-const layoutDebugEnabled = import.meta.env.DEV
+const isStoppingTask = ref(false)
 
 let activeSocket: WebSocket | null = null
 let messagePoller: number | null = null
-let layoutDebugToken = 0
-
-interface LayoutSnapshot {
-  stage: string
-  view: ViewState
-  anchorName: string
-  left: number | null
-  top: number | null
-  width: number | null
-  innerWidth: number
-  clientWidth: number
-  visualViewportWidth: number | null
-  scrollbarWidth: number
-  hasVerticalScroll: boolean
-  pageClass: string
-}
 
 const statusText = computed(() => {
   const map: Record<string, string> = {
@@ -213,113 +193,12 @@ const statusText = computed(() => {
     running: '运行中',
     completed: '已完成',
     failed: '失败',
+    cancelled: '已停止',
   }
   return map[taskStatus.value] || '就绪'
 })
 
 const pageClass = computed(() => `view-${currentView.value}`)
-
-function resolveDebugAnchors(view: ViewState) {
-  const root = pageRef.value
-  if (!root) {
-    return [{
-      anchorName: 'missing-root',
-      element: null as HTMLElement | null,
-    }]
-  }
-
-  const anchorMap: Record<ViewState, string[]> = {
-    new: ['[data-layout-anchor="new-panel"]', '[data-layout-anchor="task-input-textarea"]'],
-    history: ['[data-layout-anchor="history-content"]'],
-    paper: ['[data-layout-anchor="paper-content"]'],
-    running: ['[data-layout-anchor="running-content"]'],
-    settings: ['[data-layout-anchor="settings-shell"]'],
-  }
-
-  return anchorMap[view].map((selector) => ({
-    anchorName: selector,
-    element: root.querySelector<HTMLElement>(selector),
-  }))
-}
-
-function summarizeAnchorName(anchorName: string) {
-  return anchorName
-    .replace('[data-layout-anchor="', '')
-    .replace('"]', '')
-}
-
-function captureLayoutSnapshot(stage: string, view: ViewState) {
-  if (!layoutDebugEnabled) return
-
-  const snapshots: LayoutSnapshot[] = resolveDebugAnchors(view).map(({ anchorName, element }) => {
-    const rect = element?.getBoundingClientRect()
-    return {
-      stage,
-      view,
-      anchorName,
-      left: rect ? Number(rect.left.toFixed(2)) : null,
-      top: rect ? Number(rect.top.toFixed(2)) : null,
-      width: rect ? Number(rect.width.toFixed(2)) : null,
-      innerWidth: window.innerWidth,
-      clientWidth: document.documentElement.clientWidth,
-      visualViewportWidth: window.visualViewport ? Number(window.visualViewport.width.toFixed(2)) : null,
-      scrollbarWidth: window.innerWidth - document.documentElement.clientWidth,
-      hasVerticalScroll: document.documentElement.scrollHeight > document.documentElement.clientHeight,
-      pageClass: `view-${view}`,
-    }
-  })
-
-  const viewportSummary = `vw=${window.innerWidth}/${document.documentElement.clientWidth} scroll=${window.innerWidth - document.documentElement.clientWidth}`
-  const anchorSummary = snapshots
-    .map((snapshot) => `${summarizeAnchorName(snapshot.anchorName)}(left=${snapshot.left},top=${snapshot.top},width=${snapshot.width})`)
-    .join(' | ')
-
-  console.groupCollapsed(`[layout-debug] ${stage} -> ${view}`)
-  console.log(`${viewportSummary} :: ${anchorSummary}`)
-  console.log(snapshots)
-  snapshots
-    .filter((snapshot) => snapshot.left === null)
-    .forEach((snapshot) => {
-      console.warn('anchor-missing', { anchorName: snapshot.anchorName })
-    })
-  console.groupEnd()
-}
-
-function schedulePostTransitionSnapshots(token: number) {
-  if (!layoutDebugEnabled) return
-
-  const view = currentView.value
-
-  const checkpoint = (label: string) => {
-    if (token !== layoutDebugToken) return
-    captureLayoutSnapshot(label, view)
-  }
-
-  requestAnimationFrame(() => {
-    checkpoint('after-enter:raf-1')
-    requestAnimationFrame(() => {
-      checkpoint('after-enter:raf-2')
-      window.setTimeout(() => checkpoint('after-enter:180ms'), 180)
-      window.setTimeout(() => checkpoint('after-enter:420ms'), 420)
-    })
-  })
-}
-
-function handleViewBeforeEnter() {
-  if (!layoutDebugEnabled) return
-  layoutDebugToken += 1
-  captureLayoutSnapshot('before-enter', currentView.value)
-}
-
-function handleViewAfterEnter() {
-  if (!layoutDebugEnabled) return
-  const token = layoutDebugToken
-  const view = currentView.value
-  void nextTick(() => {
-    captureLayoutSnapshot('after-enter', view)
-    schedulePostTransitionSnapshots(token)
-  })
-}
 
 function switchView(view: ViewState) {
   currentView.value = view
@@ -335,6 +214,7 @@ function resetRuntimeState() {
   isRunning.value = false
   isRevision.value = false
   reconnectAttempts.value = 0
+  isStoppingTask.value = false
 }
 
 function stopMessagePolling() {
@@ -424,16 +304,23 @@ function hydrateRuntimeState(runtimeMessages: RuntimeMessage[]) {
   }
 
   const terminalMessage = [...runtimeMessages].reverse().find(
-    (msg) => msg.type === 'result' || msg.type === 'error'
+    (msg) => msg.type === 'result' || msg.type === 'error' || msg.type === 'cancelled'
   )
   if (terminalMessage?.data) {
-    taskResult.value = terminalMessage.data as TaskResultPayload
     if (terminalMessage.type === 'result') {
+      taskResult.value = terminalMessage.data as TaskResultPayload
       taskStatus.value = 'completed'
       progress.value = 1
       currentStage.value = 'done'
-    } else {
+    } else if (terminalMessage.type === 'error') {
+      taskResult.value = terminalMessage.data as TaskResultPayload
       taskStatus.value = 'failed'
+    } else {
+      taskResult.value = null
+      taskStatus.value = 'cancelled'
+      progress.value = 1
+      currentStage.value = 'done'
+      isRunning.value = false
     }
   }
 }
@@ -624,6 +511,14 @@ function startWebSocket(
       isRunning.value = false
       void syncTaskMessages(taskId)
       ws.close()
+    } else if (msg.type === 'cancelled') {
+      taskResult.value = null
+      taskStatus.value = 'cancelled'
+      progress.value = 1
+      currentStage.value = 'done'
+      isRunning.value = false
+      void syncTaskMessages(taskId)
+      ws.close()
     } else {
       void syncTaskMessages(taskId)
     }
@@ -667,6 +562,48 @@ function handleStartFreshTask() {
   stopRuntimeTracking()
   resetRuntimeState()
   currentView.value = 'new'
+}
+
+async function handleStopTask(taskId: string) {
+  if (!taskId || isStoppingTask.value) return
+
+  const confirmed = window.confirm('停止后当前运行中的任务会被中断，是否继续？')
+  if (!confirmed) return
+
+  isStoppingTask.value = true
+  try {
+    const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || '停止任务失败')
+    }
+
+    taskStatus.value = 'cancelled'
+    isRunning.value = false
+    progress.value = 1
+    currentStage.value = 'done'
+    messages.value = [
+      ...messages.value,
+      {
+        type: 'cancelled',
+        agent: 'system',
+        message: '任务已停止',
+        data: {
+          task_id: taskId,
+          status: 'cancelled',
+          stage: 'done',
+          progress: 1,
+          message: '任务已停止',
+        },
+      },
+    ]
+    stopRuntimeTracking()
+  } catch (error) {
+    console.error('停止任务失败:', error)
+    window.alert(error instanceof Error ? error.message : '停止任务失败，请重试')
+  } finally {
+    isStoppingTask.value = false
+  }
 }
 
 function handleViewPaperFromResult(taskId: string) {

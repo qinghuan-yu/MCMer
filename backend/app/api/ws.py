@@ -9,11 +9,26 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.workflow import run_workflow, run_revision_workflow
 from app.services.task_service import task_manager
 from app.services.redis_manager import redis_manager
+from app.schemas.enums import TaskStatus
 from app.utils.log_util import logger
 
 router = APIRouter()
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+
+def _cancel_payload(task_id: str, is_revision: bool = False) -> dict:
+    return {
+        "type": "cancelled",
+        "message": "修订任务已停止" if is_revision else "任务已停止",
+        "data": {
+            "task_id": task_id,
+            "status": TaskStatus.CANCELLED.value,
+            "stage": "done",
+            "progress": 1,
+            "message": "修订任务已停止" if is_revision else "任务已停止",
+        },
+    }
 
 
 def _mark_task_auto_started(task_id: str, task: dict) -> None:
@@ -76,6 +91,8 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
             _run_and_stream(websocket, task_id, task["question"])
         )
 
+    task_manager.register_workflow_task(task_id, workflow_task)
+
     try:
         while not workflow_task.done():
             try:
@@ -122,17 +139,19 @@ async def _run_and_stream(websocket: WebSocket, task_id: str, question: str):
             if client_connected:
                 client_connected = await _safe_send_json(websocket, message)
     except asyncio.CancelledError:
+        task_manager.update_status(task_id, TaskStatus.CANCELLED)
+        payload = _cancel_payload(task_id)
+        await redis_manager.publish_message(task_id, payload)
         if client_connected:
-            await _safe_send_json(
-                websocket,
-                {"type": "cancelled", "message": "工作流被取消"},
-            )
+            await _safe_send_json(websocket, payload)
     except Exception as e:
         logger.error(f"工作流执行失败: {e}")
         error_payload = {"type": "error", "message": str(e)}
         await redis_manager.publish_message(task_id, error_payload)
         if client_connected:
             await _safe_send_json(websocket, error_payload)
+    finally:
+        task_manager.cleanup(task_id)
 
 
 async def _run_revision_and_stream(
@@ -146,17 +165,19 @@ async def _run_revision_and_stream(
             if client_connected:
                 client_connected = await _safe_send_json(websocket, message)
     except asyncio.CancelledError:
+        task_manager.update_status(task_id, TaskStatus.CANCELLED)
+        payload = _cancel_payload(task_id, is_revision=True)
+        await redis_manager.publish_message(task_id, payload)
         if client_connected:
-            await _safe_send_json(
-                websocket,
-                {"type": "cancelled", "message": "修订工作流被取消"},
-            )
+            await _safe_send_json(websocket, payload)
     except Exception as e:
         logger.error(f"修订工作流执行失败: {e}")
         error_payload = {"type": "error", "message": str(e)}
         await redis_manager.publish_message(task_id, error_payload)
         if client_connected:
             await _safe_send_json(websocket, error_payload)
+    finally:
+        task_manager.cleanup(task_id)
 
 
 async def _relay_existing_task_stream(websocket: WebSocket, task_id: str):

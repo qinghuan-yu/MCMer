@@ -10,6 +10,7 @@ from app.services.task_service import task_manager
 from app.services.config_manager import config_manager
 from app.services.redis_manager import redis_manager
 from app.core.workflow import run_workflow
+from app.schemas.enums import TaskStatus
 from app.schemas.response import (
     HistoryTaskInfo,
     PaperContent,
@@ -49,6 +50,20 @@ async def _run_workflow_background(task_id: str, question: str) -> None:
             task_id,
             {"type": "error", "message": f"后台工作流异常: {e}"},
         )
+
+
+def _cancel_payload(task_id: str) -> dict:
+    return {
+        "type": "cancelled",
+        "message": "任务已停止",
+        "data": {
+            "task_id": task_id,
+            "status": TaskStatus.CANCELLED.value,
+            "stage": "done",
+            "progress": 1,
+            "message": "任务已停止",
+        },
+    }
 
 
 # ============================================================
@@ -104,7 +119,8 @@ async def modeling_compat(
         # 标记为后台运行任务
         task["auto_started"] = True
         task_manager._save_task_info(task_id, task)
-        asyncio.create_task(_run_workflow_background(task_id, ques_all))
+        workflow_task = asyncio.create_task(_run_workflow_background(task_id, ques_all))
+        task_manager.register_workflow_task(task_id, workflow_task)
 
     return ModelingCompatResponse(task_id=task_id)
 
@@ -162,13 +178,18 @@ async def list_active_tasks():
 
 @router.delete("/tasks/{task_id}")
 async def cancel_task(task_id: str):
-    """取消任务"""
+    """停止运行中的任务"""
     task = task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    task_manager.cleanup(task_id)
-    return {"message": "任务已取消", "task_id": task_id}
+    status = task.get("status", "unknown")
+    if status not in {TaskStatus.RUNNING.value, TaskStatus.PENDING.value} and task_id not in task_manager._workflow_tasks:
+        raise HTTPException(status_code=400, detail="任务当前不在运行中")
+
+    await task_manager.cancel_running_task(task_id)
+    await redis_manager.publish_message(task_id, _cancel_payload(task_id))
+    return {"message": "任务已停止", "task_id": task_id}
 
 
 # ============================================================
@@ -180,6 +201,22 @@ async def list_history():
     """列出所有历史任务（包括已完成和进行中的）"""
     tasks = task_manager.list_historical_tasks()
     return {"tasks": tasks, "total": len(tasks)}
+
+
+@router.delete("/history/{task_id}")
+async def delete_history_task(task_id: str):
+    """删除历史项目及其工作目录。"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    status = task.get("status", "unknown")
+    if status in {TaskStatus.RUNNING.value, TaskStatus.PENDING.value} or task_id in task_manager._workflow_tasks:
+        raise HTTPException(status_code=400, detail="运行中的任务请先停止")
+
+    work_dir = task_manager.delete_task_files(task_id)
+    await redis_manager.delete_task(task_id)
+    return {"message": "历史项目已删除", "task_id": task_id, "work_dir": work_dir or ""}
 
 
 @router.get("/history/{task_id}", response_model=PaperContent)

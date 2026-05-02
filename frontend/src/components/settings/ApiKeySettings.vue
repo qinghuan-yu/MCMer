@@ -1,13 +1,12 @@
 <template>
   <section class="api-card">
-    <div class="section-head">
+    <div class="card-head">
       <div>
-        <p class="section-kicker">API Keys</p>
         <h2>服务商密钥配置</h2>
+        <p class="section-note">
+          密钥仅保存在后端；留空不会覆盖已保存的值。
+        </p>
       </div>
-      <p class="section-note">
-        密钥仅保存在后端；留空不会覆盖已保存的值。
-      </p>
     </div>
 
     <div v-if="saveMsg" class="save-toast" :class="saveType">{{ saveMsg }}</div>
@@ -15,86 +14,94 @@
     <div class="provider-grid">
       <article class="provider-section">
         <h3>OpenAI</h3>
-        <div class="field-group">
-          <label>API Key</label>
-          <div class="input-row">
-            <input
-              :type="showKeys.openai ? 'text' : 'password'"
-              v-model="form.openai_key"
-              :placeholder="savedState.openai ? '已保存（留空则不改动）' : 'sk-...'"
-            />
-            <button type="button" class="toggle-btn" @click="showKeys.openai = !showKeys.openai">
-              {{ showKeys.openai ? '隐藏' : '显示' }}
-            </button>
+        <div class="provider-fields">
+          <div class="field-group">
+            <label>API Key</label>
+            <div class="input-row">
+              <input
+                :type="showKeys.openai ? 'text' : 'password'"
+                v-model="form.openai_key"
+                :placeholder="savedState.openai ? '已保存（留空则不改动）' : 'sk-...'"
+              />
+              <button type="button" class="toggle-btn" @click="showKeys.openai = !showKeys.openai">
+                {{ showKeys.openai ? '隐藏' : '显示' }}
+              </button>
+            </div>
+            <div v-if="savedState.openai" class="saved-hint">已检测到已保存的 OpenAI Key</div>
           </div>
-          <div v-if="savedState.openai" class="saved-hint">已检测到已保存的 OpenAI Key</div>
-        </div>
-        <div class="field-group">
-          <label>Base URL</label>
-          <input v-model="form.openai_base_url" placeholder="https://api.openai.com/v1" />
+          <div class="field-group">
+            <label>Base URL</label>
+            <input v-model="form.openai_base_url" placeholder="https://api.openai.com/v1" />
+          </div>
         </div>
       </article>
 
       <article class="provider-section">
         <h3>Anthropic</h3>
-        <div class="field-group">
-          <label>API Key</label>
-          <div class="input-row">
-            <input
-              :type="showKeys.anthropic ? 'text' : 'password'"
-              v-model="form.anthropic_key"
-              :placeholder="savedState.anthropic ? '已保存（留空则不改动）' : 'sk-ant-...'"
-            />
-            <button type="button" class="toggle-btn" @click="showKeys.anthropic = !showKeys.anthropic">
-              {{ showKeys.anthropic ? '隐藏' : '显示' }}
-            </button>
+        <div class="provider-fields">
+          <div class="field-group">
+            <label>API Key</label>
+            <div class="input-row">
+              <input
+                :type="showKeys.anthropic ? 'text' : 'password'"
+                v-model="form.anthropic_key"
+                :placeholder="savedState.anthropic ? '已保存（留空则不改动）' : 'sk-ant-...'"
+              />
+              <button type="button" class="toggle-btn" @click="showKeys.anthropic = !showKeys.anthropic">
+                {{ showKeys.anthropic ? '隐藏' : '显示' }}
+              </button>
+            </div>
+            <div v-if="savedState.anthropic" class="saved-hint">已检测到已保存的 Anthropic Key</div>
           </div>
-          <div v-if="savedState.anthropic" class="saved-hint">已检测到已保存的 Anthropic Key</div>
         </div>
       </article>
 
       <article class="provider-section">
         <h3>DeepSeek</h3>
-        <div class="field-group">
-          <label>API Key</label>
-          <div class="input-row">
-            <input
-              :type="showKeys.deepseek ? 'text' : 'password'"
-              v-model="form.deepseek_key"
-              :placeholder="savedState.deepseek ? '已保存（留空则不改动）' : 'sk-...'"
-            />
-            <button type="button" class="toggle-btn" @click="showKeys.deepseek = !showKeys.deepseek">
-              {{ showKeys.deepseek ? '隐藏' : '显示' }}
-            </button>
+        <div class="provider-fields">
+          <div class="field-group">
+            <label>API Key</label>
+            <div class="input-row">
+              <input
+                :type="showKeys.deepseek ? 'text' : 'password'"
+                v-model="form.deepseek_key"
+                :placeholder="savedState.deepseek ? '已保存（留空则不改动）' : 'sk-...'"
+              />
+              <button type="button" class="toggle-btn" @click="showKeys.deepseek = !showKeys.deepseek">
+                {{ showKeys.deepseek ? '隐藏' : '显示' }}
+              </button>
+            </div>
+            <div v-if="savedState.deepseek" class="saved-hint">已检测到已保存的 DeepSeek Key</div>
           </div>
-          <div v-if="savedState.deepseek" class="saved-hint">已检测到已保存的 DeepSeek Key</div>
         </div>
       </article>
 
       <article class="provider-section provider-section--wide">
         <h3>MiMo</h3>
-        <div class="field-group">
-          <label>API Key</label>
-          <div class="input-row">
-            <input
-              :type="showKeys.mimo ? 'text' : 'password'"
-              v-model="form.mimo_key"
-              :placeholder="savedState.mimo ? '已保存（留空则不改动）' : 'sk-... 或 tp-...'"
-            />
-            <button type="button" class="toggle-btn" @click="showKeys.mimo = !showKeys.mimo">
-              {{ showKeys.mimo ? '隐藏' : '显示' }}
-            </button>
+        <div class="provider-fields provider-fields--wide">
+          <div class="field-group">
+            <label>API Key</label>
+            <div class="input-row">
+              <input
+                :type="showKeys.mimo ? 'text' : 'password'"
+                v-model="form.mimo_key"
+                :placeholder="savedState.mimo ? '已保存（留空则不改动）' : 'sk-... 或 tp-...'"
+              />
+              <button type="button" class="toggle-btn" @click="showKeys.mimo = !showKeys.mimo">
+                {{ showKeys.mimo ? '隐藏' : '显示' }}
+              </button>
+            </div>
+            <div v-if="savedState.mimo" class="saved-hint">已检测到已保存的 MiMo Key</div>
           </div>
-          <div v-if="savedState.mimo" class="saved-hint">已检测到已保存的 MiMo Key</div>
-        </div>
-        <div class="field-group">
-          <label>Base URL</label>
-          <select v-model="form.mimo_base_url">
-            <option value="https://api.xiaomimimo.com/v1">默认 API（无套餐）</option>
-            <option value="https://token-plan-cn.xiaomimimo.com/v1">Token Plan - 中国区</option>
-            <option value="https://token-plan-sgp.xiaomimimo.com/v1">Token Plan - 新加坡区</option>
-            <option value="https://token-plan-ams.xiaomimimo.com/v1">Token Plan - 欧洲区</option>
-          </select>
+          <div class="field-group">
+            <label>Base URL</label>
+            <select v-model="form.mimo_base_url">
+              <option value="https://api.xiaomimimo.com/v1">默认 API（无套餐）</option>
+              <option value="https://token-plan-cn.xiaomimimo.com/v1">Token Plan - 中国区</option>
+              <option value="https://token-plan-sgp.xiaomimimo.com/v1">Token Plan - 新加坡区</option>
+              <option value="https://token-plan-ams.xiaomimimo.com/v1">Token Plan - 欧洲区</option>
+            </select>
+          </div>
         </div>
       </article>
     </div>
@@ -301,40 +308,29 @@ async function saveKeys() {
   flex-direction: column;
   gap: 22px;
   min-width: 0;
-  padding: 30px 34px;
-  border: 1px solid var(--line);
+  padding: 22px 20px 20px;
+  border: 1px solid rgba(20, 28, 45, 0.09);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 24px 60px rgba(18, 31, 58, 0.05);
-  backdrop-filter: blur(14px);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 14px 36px rgba(18, 31, 58, 0.06);
 }
 
-.section-head {
+.card-head {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 24px;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.section-kicker {
-  margin: 0 0 8px;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--blue);
-}
-
-.section-head h2 {
+.card-head h2 {
   margin: 0;
-  font-size: 30px;
-  letter-spacing: -0.04em;
+  font-size: 22px;
+  letter-spacing: -0.03em;
 }
 
 .section-note {
-  max-width: 300px;
   margin: 0;
-  font-size: 14px;
+  max-width: 320px;
+  font-size: 13px;
   line-height: 1.7;
   color: var(--muted);
 }
@@ -358,41 +354,49 @@ async function saveKeys() {
 
 .provider-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-columns: 1fr;
+  gap: 14px;
   min-width: 0;
 }
 
 .provider-section {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 16px;
   min-width: 0;
-  padding: 22px;
-  border: 1px solid var(--line);
+  padding: 14px 14px 12px;
+  border: 1px solid rgba(20, 28, 45, 0.08);
   border-radius: 14px;
-  background: rgba(247, 249, 252, 0.78);
-}
-
-.provider-section--wide {
-  grid-column: 1 / -1;
+  background: #fcfdff;
+  box-shadow: 0 4px 16px rgba(18, 31, 58, 0.04);
 }
 
 .provider-section h3 {
-  margin: 0 0 18px;
-  font-size: 18px;
+  margin: 4px 0 0;
+  font-size: 16px;
   letter-spacing: -0.03em;
 }
 
-.field-group {
-  margin-bottom: 14px;
+.provider-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
 }
 
-.field-group:last-child {
+.provider-fields--wide {
+  grid-template-columns: 1.35fr minmax(180px, 0.95fr);
+}
+
+.field-group {
   margin-bottom: 0;
 }
 
 .field-group label {
   display: block;
   margin-bottom: 8px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted);
 }
@@ -401,13 +405,13 @@ async function saveKeys() {
 .field-group select {
   width: 100%;
   min-width: 0;
-  min-height: 46px;
-  padding: 11px 14px;
-  border: 1px solid rgba(20, 28, 45, 0.12);
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid rgba(20, 28, 45, 0.1);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.98);
+  background: #fff;
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .field-group input:focus,
@@ -419,7 +423,7 @@ async function saveKeys() {
 
 .input-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -429,26 +433,26 @@ async function saveKeys() {
 }
 
 .toggle-btn {
-  min-width: 76px;
-  padding: 0 14px;
-  border: 1px solid rgba(20, 28, 45, 0.12);
+  min-width: 58px;
+  padding: 0 12px;
+  border: 1px solid rgba(20, 28, 45, 0.1);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.98);
+  background: #fff;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
 }
 
 .saved-hint {
-  margin-top: 8px;
-  font-size: 12px;
+  margin-top: 6px;
+  font-size: 11px;
   color: var(--muted);
 }
 
 .actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   gap: 16px;
 }
@@ -471,13 +475,13 @@ async function saveKeys() {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-width: 164px;
-  min-height: 48px;
-  padding: 0 22px;
-  border: none;
+  min-width: 146px;
+  min-height: 42px;
+  padding: 0 18px;
+  border: 1px solid rgba(36, 78, 168, 0.45);
   border-radius: 14px;
-  background: linear-gradient(135deg, var(--blue), var(--blue-dark));
-  color: white;
+  background: rgba(255, 255, 255, 0.98);
+  color: var(--blue);
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
@@ -504,20 +508,27 @@ async function saveKeys() {
 }
 
 @media (max-width: 960px) {
-  .section-head {
-    flex-direction: column;
+  .provider-section {
+    grid-template-columns: 1fr;
+    row-gap: 14px;
   }
 
-  .section-note {
-    max-width: none;
+  .provider-section h3 {
+    margin-top: 0;
   }
 
-  .provider-grid {
+  .provider-fields,
+  .provider-fields--wide {
     grid-template-columns: 1fr;
   }
 
-  .provider-section--wide {
-    grid-column: auto;
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .btn-primary {
+    width: 100%;
   }
 }
 

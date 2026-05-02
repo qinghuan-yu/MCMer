@@ -24,6 +24,7 @@ from app.schemas.response import SystemMessage, TaskProgress, TaskResult
 from app.tools.local_interpreter import LocalCodeInterpreter
 from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.tools.openalex_scholar import OpenAlexScholar
+from app.services.config_manager import config_manager
 from app.services.redis_manager import redis_manager
 from app.services.task_service import task_manager
 from app.utils.log_util import logger
@@ -126,20 +127,20 @@ async def run_workflow(
     # 初始化各 Agent 的 LLM
     # ========================================
     coordinator_model = LLM(
-        model=settings.COORDINATOR_MODEL or settings.DEFAULT_MODEL,
+        model=config_manager.get_effective_model("COORDINATOR_MODEL"),
         temperature=0.3,
     )
     modeler_model = LLM(
-        model=settings.MODELER_MODEL or settings.DEFAULT_MODEL,
+        model=config_manager.get_effective_model("MODELER_MODEL"),
         temperature=0.5,
     )
     coder_model = LLM(
-        model=settings.CODER_MODEL or settings.DEFAULT_MODEL,
+        model=config_manager.get_effective_model("CODER_MODEL"),
         temperature=0.3,
         max_tokens=8192,
     )
     writer_model = LLM(
-        model=settings.WRITER_MODEL or settings.DEFAULT_MODEL,
+        model=config_manager.get_effective_model("WRITER_MODEL"),
         temperature=0.7,
         max_tokens=16384,
     )
@@ -500,13 +501,13 @@ async def run_revision_workflow(
     # 初始化修订用的 LLM
     # ========================================
     writer_model = LLM(
-        model=settings.WRITER_MODEL or settings.DEFAULT_MODEL,
+        model=config_manager.get_effective_model("WRITER_MODEL"),
         temperature=0.5,
         max_tokens=16384,
     )
 
     coder_model = LLM(
-        model=settings.CODER_MODEL or settings.DEFAULT_MODEL,
+        model=config_manager.get_effective_model("CODER_MODEL"),
         temperature=0.3,
         max_tokens=8192,
     )

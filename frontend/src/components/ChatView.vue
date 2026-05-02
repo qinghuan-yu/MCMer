@@ -132,6 +132,14 @@
       <button class="action-btn secondary" @click="$emit('back')">
         ← 返回
       </button>
+      <button
+        v-if="isRunning"
+        class="action-btn danger"
+        :disabled="stopping"
+        @click="$emit('stop', props.taskId)"
+      >
+        {{ stopping ? '停止中...' : '停止任务' }}
+      </button>
       <button v-if="result" class="action-btn primary" @click="$emit('newTask')">
         🔄 新建任务
       </button>
@@ -179,12 +187,14 @@ const props = defineProps<{
   stage: string
   result: Record<string, any> | null
   isRevision?: boolean
+  stopping?: boolean
 }>()
 
 defineEmits<{
   back: []
   newTask: []
   viewPaper: [taskId: string]
+  stop: [taskId: string]
 }>()
 
 const messagesContainer = ref<HTMLElement>()
@@ -766,6 +776,17 @@ watch(
 .action-btn.primary {
   background: linear-gradient(135deg, var(--primary), #244ea8);
   color: white;
+}
+
+.action-btn.danger {
+  background: rgba(254, 242, 242, 0.96);
+  color: #991b1b;
+  border: 1px solid rgba(185, 28, 28, 0.16);
+}
+
+.action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .action-btn:hover {

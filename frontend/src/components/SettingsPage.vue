@@ -5,9 +5,6 @@
         <div>
           <p class="page-kicker">Settings</p>
           <h1>设置中心</h1>
-          <p class="page-desc">
-            先保存 API Key，再选择默认模型。设置页已经从原弹窗拆成独立子页，避免遮挡主页操作。
-          </p>
         </div>
         <button class="page-action" @click="$emit('new-task')">返回首页</button>
       </header>
@@ -16,38 +13,43 @@
         <ApiKeySettings />
 
         <section class="model-card">
-          <div class="model-head">
+          <div class="card-head model-head">
             <div>
-              <p class="section-kicker">Models</p>
               <h2>默认模型选择</h2>
             </div>
-            <p class="model-note">如果不设置，后端将继续使用环境变量中的默认模型。</p>
           </div>
 
           <div v-if="saveMsg" class="save-toast" :class="saveType">{{ saveMsg }}</div>
 
-          <div class="field-group">
-            <label>默认模型</label>
-            <select v-model="form.default_model">
-              <option value="">使用 .env 配置</option>
-              <option v-for="model in models" :key="model.id" :value="model.id">
-                {{ model.name }} ({{ model.provider }})
-              </option>
-            </select>
-          </div>
+          <div class="model-stack">
+            <div class="model-panel">
+              <div class="field-group">
+                <label>默认模型</label>
+                <select v-model="form.default_model">
+                  <option value="">使用 .env 配置</option>
+                  <option v-for="model in models" :key="model.id" :value="model.id">
+                    {{ model.name }} ({{ model.provider }})
+                  </option>
+                </select>
+              </div>
+            </div>
 
-          <div class="field-group">
-            <label>写作手模型</label>
-            <select v-model="form.writer_model">
-              <option value="">使用默认模型</option>
-              <option v-for="model in models" :key="`writer-${model.id}`" :value="model.id">
-                {{ model.name }} ({{ model.provider }})
-              </option>
-            </select>
+            <div class="model-panel">
+              <div class="field-group">
+                <label>写作手模型</label>
+                <select v-model="form.writer_model">
+                  <option value="">使用默认模型</option>
+                  <option v-for="model in models" :key="`writer-${model.id}`" :value="model.id">
+                    {{ model.name }} ({{ model.provider }})
+                  </option>
+                </select>
+              </div>
+
+              <p class="model-hint">建议为长文写作单独选择更擅长长上下文的模型。</p>
+            </div>
           </div>
 
           <div class="model-actions">
-            <span class="model-hint">建议为长文写作单独选择更擅长长上下文的模型。</span>
             <button class="btn-primary" @click="saveModels" :disabled="saving">
               <span v-if="saving" class="spinner"></span>
               {{ saving ? '保存中...' : '保存模型设置' }}
@@ -176,7 +178,7 @@ async function saveModels() {
 .settings-shell {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 22px;
   width: 100%;
   min-width: 0;
 }
@@ -235,8 +237,8 @@ async function saveModels() {
 
 .page-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.9fr);
-  gap: 22px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(340px, 0.95fr);
+  gap: 20px;
   align-items: start;
   min-width: 0;
 }
@@ -244,14 +246,46 @@ async function saveModels() {
 .model-card {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 22px;
   min-width: 0;
-  padding: 28px;
-  border: 1px solid var(--line);
+  padding: 22px 20px 20px;
+  border: 1px solid rgba(20, 28, 45, 0.09);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 24px 60px rgba(18, 31, 58, 0.05);
-  backdrop-filter: blur(14px);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 14px 36px rgba(18, 31, 58, 0.06);
+}
+
+.card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-head h2 {
+  font-size: 22px;
+  letter-spacing: -0.03em;
+}
+
+.model-note {
+  max-width: 320px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.model-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.model-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(20, 28, 45, 0.09);
+  border-radius: 14px;
+  background: #fbfcfe;
 }
 
 .save-toast {
@@ -274,18 +308,19 @@ async function saveModels() {
 .field-group label {
   display: block;
   margin-bottom: 8px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted);
 }
 
 .field-group select {
   width: 100%;
-  min-height: 46px;
-  padding: 11px 14px;
-  border: 1px solid rgba(20, 28, 45, 0.12);
+  min-width: 0;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid rgba(20, 28, 45, 0.1);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.98);
+  background: #fff;
   color: var(--text);
   font-size: 14px;
 }
@@ -298,14 +333,16 @@ async function saveModels() {
 
 .model-actions {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  justify-content: stretch;
 }
 
 .btn-primary {
   border: none;
   background: linear-gradient(135deg, var(--blue), var(--blue-dark));
   color: white;
+  width: 100%;
+  min-height: 44px;
+  border-radius: 12px;
 }
 
 .btn-primary:disabled {
@@ -344,13 +381,21 @@ async function saveModels() {
     font-size: 30px;
   }
 
+  .model-note {
+    max-width: none;
+  }
+
   .page-action,
   .btn-primary {
     width: 100%;
   }
 
   .model-card {
-    padding: 22px 18px;
+    padding: 20px 16px 16px;
+  }
+
+  .model-panel {
+    padding: 14px;
   }
 }
 </style>

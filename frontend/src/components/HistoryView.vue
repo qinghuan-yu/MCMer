@@ -1,7 +1,7 @@
 <template>
   <div class="history-container">
     <div class="history-header">
-      <h2>📚 历史项目</h2>
+      <h2>历史项目</h2>
       <span class="task-count">共 {{ tasks.length }} 个项目</span>
     </div>
 
@@ -13,12 +13,8 @@
 
     <!-- 空状态 -->
     <div v-else-if="tasks.length === 0" class="empty-state">
-      <div class="empty-icon">📭</div>
       <h3>还没有历史项目</h3>
       <p>完成一次数学建模任务后，项目将出现在这里</p>
-      <button class="action-btn primary" @click="$emit('newTask')">
-        🚀 开始第一个任务
-      </button>
     </div>
 
     <!-- 任务列表 -->
@@ -85,6 +81,14 @@
             @click.stop="startRevise(task)"
           >
             ✏️ 修订论文
+          </button>
+          <button
+            v-if="task.status !== 'running' && task.status !== 'pending'"
+            class="btn-delete"
+            :disabled="deletingTaskId === task.task_id"
+            @click.stop="deleteTask(task)"
+          >
+            {{ deletingTaskId === task.task_id ? '删除中...' : '🗑️ 删除项目' }}
           </button>
           <span v-if="!task.has_paper && task.status === 'failed'" class="hint-text">
             任务未完成，无可用论文
@@ -154,6 +158,7 @@ const emit = defineEmits<{
 
 const tasks = ref<HistoryTask[]>([])
 const loading = ref(true)
+const deletingTaskId = ref('')
 
 // 修订对话框
 const showReviseDialog = ref(false)
@@ -209,11 +214,35 @@ function submitRevise() {
   showReviseDialog.value = false
 }
 
+async function loadHistory() {
+  const res = await fetch('/api/history')
+  const data = await res.json()
+  tasks.value = data.tasks || []
+}
+
+async function deleteTask(task: HistoryTask) {
+  const confirmed = window.confirm('删除后将移除该项目的工作目录、论文和消息记录，是否继续？')
+  if (!confirmed) return
+
+  deletingTaskId.value = task.task_id
+  try {
+    const res = await fetch(`/api/history/${task.task_id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || '删除失败')
+    }
+    tasks.value = tasks.value.filter((item) => item.task_id !== task.task_id)
+  } catch (error) {
+    console.error('删除历史项目失败:', error)
+    window.alert(error instanceof Error ? error.message : '删除失败，请重试')
+  } finally {
+    deletingTaskId.value = ''
+  }
+}
+
 onMounted(async () => {
   try {
-    const res = await fetch('/api/history')
-    const data = await res.json()
-    tasks.value = data.tasks || []
+    await loadHistory()
   } catch (e) {
     console.error('加载历史失败:', e)
   } finally {
@@ -431,6 +460,17 @@ onMounted(async () => {
 .btn-revise:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+}
+
+.btn-delete {
+  background: rgba(254, 242, 242, 0.96);
+  color: #991b1b;
+  border: 1px solid rgba(185, 28, 28, 0.16);
+}
+
+.btn-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .hint-text {

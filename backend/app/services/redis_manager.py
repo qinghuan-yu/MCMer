@@ -139,6 +139,13 @@ class RedisManager:
 
     async def delete_task(self, task_id: str) -> None:
         """删除任务数据"""
+        log_path = os.path.join(self._message_log_dir, f"{task_id}.json")
+        if os.path.exists(log_path):
+            try:
+                os.remove(log_path)
+            except Exception as e:
+                logger.warning(f"删除任务消息日志失败(task_id={task_id}): {e}")
+
         if self._use_memory:
             self._memory_data.pop(task_id, None)
             self._memory_channels.pop(task_id, None)

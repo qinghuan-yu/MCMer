@@ -25,6 +25,7 @@ class ConfigManager:
                 with open(self.CONFIG_FILE, "r", encoding="utf-8") as f:
                     self._config = json.load(f)
                 logger.info(f"已加载运行时配置: {len(self._config)} 项")
+                self._apply_to_env()
         except Exception as e:
             logger.warning(f"加载运行时配置失败: {e}")
             self._config = {}
@@ -98,6 +99,27 @@ class ConfigManager:
 
         from app.config.setting import settings
         return getattr(settings, key_name, None) or os.environ.get(key_name)
+
+    def get_effective_model(self, key_name: str) -> Optional[str]:
+        """获取有效模型配置。
+
+        优先级：运行时专用模型 > 运行时默认模型 > 环境专用模型 > 环境默认模型。
+        """
+        runtime_model = self._config.get(key_name)
+        if runtime_model:
+            return runtime_model
+
+        runtime_default = self._config.get("DEFAULT_MODEL")
+        if runtime_default:
+            return runtime_default
+
+        from app.config.setting import settings
+
+        env_model = getattr(settings, key_name, None) or os.environ.get(key_name)
+        if env_model:
+            return env_model
+
+        return getattr(settings, "DEFAULT_MODEL", None) or os.environ.get("DEFAULT_MODEL")
 
 
 # 全局单例

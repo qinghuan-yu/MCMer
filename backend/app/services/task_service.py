@@ -1,8 +1,10 @@
 """
 任务管理服务
 """
+import asyncio
 import os
 import json
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,7 @@ class TaskManager:
 
     def __init__(self):
         self._active_tasks: dict[str, dict] = {}
+        self._workflow_tasks: dict[str, asyncio.Task] = {}
 
     def create_task(
         self,
@@ -82,10 +85,61 @@ class TaskManager:
 
     def update_status(self, task_id: str, status: TaskStatus) -> None:
         """更新任务状态"""
+        task = self.get_task(task_id)
+        if not task:
+            return
+
+        task["status"] = status.value
         if task_id in self._active_tasks:
             self._active_tasks[task_id]["status"] = status.value
             self._save_task_info(task_id, self._active_tasks[task_id])
-            logger.info(f"任务 {task_id} 状态更新: {status.value}")
+        else:
+            self._save_task_info(task_id, task)
+
+        logger.info(f"任务 {task_id} 状态更新: {status.value}")
+
+    def register_workflow_task(self, task_id: str, workflow_task: asyncio.Task) -> None:
+        """登记运行中的工作流任务，便于后续取消。"""
+        self._workflow_tasks[task_id] = workflow_task
+
+        def _cleanup(done_task: asyncio.Task) -> None:
+            current = self._workflow_tasks.get(task_id)
+            if current is done_task:
+                self._workflow_tasks.pop(task_id, None)
+
+        workflow_task.add_done_callback(_cleanup)
+
+    async def cancel_running_task(self, task_id: str) -> bool:
+        """取消运行中的工作流。"""
+        workflow_task = self._workflow_tasks.get(task_id)
+        cancelled = False
+
+        if workflow_task and not workflow_task.done():
+            workflow_task.cancel()
+            try:
+                await workflow_task
+            except asyncio.CancelledError:
+                cancelled = True
+            except Exception as exc:
+                logger.warning(f"取消任务 {task_id} 时发生异常: {exc}")
+                cancelled = True
+
+        self.update_status(task_id, TaskStatus.CANCELLED)
+        self.cleanup(task_id)
+        return cancelled or workflow_task is not None
+
+    def delete_task_files(self, task_id: str) -> Optional[str]:
+        """删除任务工作目录。"""
+        task = self.get_task(task_id)
+        if not task:
+            return None
+
+        work_dir = task.get("work_dir", "")
+        if work_dir and os.path.exists(work_dir):
+            shutil.rmtree(work_dir)
+
+        self.cleanup(task_id)
+        return work_dir
 
     def update_paper_path(self, task_id: str, paper_path: str) -> None:
         """更新论文路径"""
@@ -110,22 +164,24 @@ class TaskManager:
                 continue
 
             info_path = task_dir / "task_info.json"
+            if not info_path.exists():
+                continue
+
             paper_path = task_dir / "res.md"
 
             task_info = {}
-            if info_path.exists():
-                try:
-                    with open(info_path, "r", encoding="utf-8") as f:
-                        task_info = json.load(f)
-                except Exception:
-                    pass
+            try:
+                with open(info_path, "r", encoding="utf-8") as f:
+                    task_info = json.load(f)
+            except Exception:
+                continue
 
             has_paper = paper_path.exists()
             # 检查是否有修订版本
             revisions = list(task_dir.glob("res_v*.md"))
 
             tasks.append({
-                "task_id": task_dir.name,
+                "task_id": task_info.get("task_id", task_dir.name),
                 "question": task_info.get("question", "")[:120],
                 "status": task_info.get("status", "unknown"),
                 "created_at": task_info.get("created_at", ""),
@@ -216,6 +272,7 @@ class TaskManager:
     def cleanup(self, task_id: str) -> None:
         """清理任务"""
         self._active_tasks.pop(task_id, None)
+        self._workflow_tasks.pop(task_id, None)
 
 
 # 全局单例
