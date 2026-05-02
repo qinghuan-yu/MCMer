@@ -1,114 +1,116 @@
 <template>
-  <div class="task-form">
-    <template v-if="mode === 'writing'">
-      <div class="field">
-        <label>输入题目</label>
-        <textarea
-          data-layout-anchor="task-input-textarea"
-          v-model="question"
-          placeholder="在此输入完整的数学建模题目..."
-          :disabled="loading"
-        ></textarea>
-      </div>
+  <div class="task-form" :class="`mode-${mode}`">
+    <div class="form-body">
+      <template v-if="mode === 'writing'">
+        <div class="field field-grow">
+          <label>输入题目</label>
+          <textarea
+            data-layout-anchor="task-input-textarea"
+            v-model="question"
+            placeholder="在此输入完整的数学建模题目..."
+            :disabled="loading"
+          ></textarea>
+        </div>
 
-      <div class="field compact-field">
-        <label>上传数据</label>
-        <div
-          data-layout-anchor="task-upload-area"
-          class="upload"
-          :class="{ dragging: isDragging, 'has-files': uploadedFiles.length > 0 }"
-          @dragover.prevent="isDragging = true"
-          @dragleave.prevent="isDragging = false"
-          @drop.prevent="handleDrop"
-          @click="triggerFileInput"
-        >
-          <input
-            ref="fileInput"
-            type="file"
-            multiple
-            accept=".csv,.xlsx,.xls,.json,.txt,.dat,.tsv,.md"
-            class="file-input-hidden"
-            @change="handleFileSelect"
-          />
-          <div v-if="uploadedFiles.length === 0">
-            <p>拖拽文件到此处，或点击上传</p>
-            <span>支持 CSV / Excel / JSON / TXT / Markdown</span>
-          </div>
-          <div v-else class="file-list">
-            <div v-for="(f, i) in uploadedFiles" :key="i" class="file-item">
-              <span class="file-name">{{ f.name }}</span>
-              <span class="file-size">{{ formatSize(f.size) }}</span>
-              <button class="file-remove" @click.stop="removeFile(i)" :disabled="loading">✕</button>
+        <div class="field compact-field">
+          <label>上传数据</label>
+          <div
+            data-layout-anchor="task-upload-area"
+            class="upload"
+            :class="{ dragging: isDragging, 'has-files': uploadedFiles.length > 0 }"
+            @dragover.prevent="isDragging = true"
+            @dragleave.prevent="isDragging = false"
+            @drop.prevent="handleDrop"
+            @click="triggerFileInput"
+          >
+            <input
+              ref="fileInput"
+              type="file"
+              multiple
+              accept=".csv,.xlsx,.xls,.json,.txt,.dat,.tsv,.md"
+              class="file-input-hidden"
+              @change="handleFileSelect"
+            />
+            <div v-if="uploadedFiles.length === 0">
+              <p>拖拽文件到此处，或点击上传</p>
+              <span>支持 CSV / Excel / JSON / TXT / Markdown</span>
             </div>
-            <div class="add-more" @click.stop="triggerFileInput">+ 添加更多文件</div>
+            <div v-else class="file-list">
+              <div v-for="(f, i) in uploadedFiles" :key="i" class="file-item">
+                <span class="file-name">{{ f.name }}</span>
+                <span class="file-size">{{ formatSize(f.size) }}</span>
+                <button class="file-remove" @click.stop="removeFile(i)" :disabled="loading">✕</button>
+              </div>
+              <div class="add-more" @click.stop="triggerFileInput">+ 添加更多文件</div>
+            </div>
           </div>
         </div>
-      </div>
-    </template>
+      </template>
 
-    <template v-else>
-      <div class="field field-slim">
-        <label>原始题目</label>
-        <textarea
-          v-model="sourceQuestion"
-          class="short-area"
-          placeholder="可选。输入原始赛题或论文所回答的问题。"
-          :disabled="loading"
-        ></textarea>
-      </div>
+      <template v-else>
+        <div class="field field-slim">
+          <label>原始题目</label>
+          <textarea
+            v-model="sourceQuestion"
+            class="short-area"
+            placeholder="可选。输入原始赛题或论文所回答的问题。"
+            :disabled="loading"
+          ></textarea>
+        </div>
 
-      <div class="field">
-        <label>待润色论文</label>
-        <textarea
-          v-model="paperContent"
-          placeholder="粘贴需要润色的 Markdown 或论文正文..."
-          :disabled="loading"
-        ></textarea>
-      </div>
+        <div class="field field-grow">
+          <label>待润色论文</label>
+          <textarea
+            v-model="paperContent"
+            placeholder="粘贴需要润色的 Markdown 或论文正文..."
+            :disabled="loading"
+          ></textarea>
+        </div>
 
-      <div class="field field-slim compact-field">
-        <label>润色要求</label>
-        <textarea
-          v-model="polishingRequirements"
-          class="short-area"
-          placeholder="例如：收紧措辞、检查图文一致性、复核关键数值、改成竞赛论文风格。"
-          :disabled="loading"
-        ></textarea>
-      </div>
+        <div class="field field-slim compact-field">
+          <label>润色要求</label>
+          <textarea
+            v-model="polishingRequirements"
+            class="short-area"
+            placeholder="例如：收紧措辞、检查图文一致性、复核关键数值、改成竞赛论文风格。"
+            :disabled="loading"
+          ></textarea>
+        </div>
 
-      <div class="field compact-field">
-        <label>补充数据</label>
-        <div
-          class="upload"
-          :class="{ dragging: isDragging, 'has-files': uploadedFiles.length > 0 }"
-          @dragover.prevent="isDragging = true"
-          @dragleave.prevent="isDragging = false"
-          @drop.prevent="handleDrop"
-          @click="triggerFileInput"
-        >
-          <input
-            ref="fileInput"
-            type="file"
-            multiple
-            accept=".csv,.xlsx,.xls,.json,.txt,.dat,.tsv,.md"
-            class="file-input-hidden"
-            @change="handleFileSelect"
-          />
-          <div v-if="uploadedFiles.length === 0">
-            <p>上传表格、原始结果或补充说明</p>
-            <span>支持 CSV / Excel / JSON / TXT / Markdown</span>
-          </div>
-          <div v-else class="file-list">
-            <div v-for="(f, i) in uploadedFiles" :key="i" class="file-item">
-              <span class="file-name">{{ f.name }}</span>
-              <span class="file-size">{{ formatSize(f.size) }}</span>
-              <button class="file-remove" @click.stop="removeFile(i)" :disabled="loading">✕</button>
+        <div class="field compact-field">
+          <label>补充数据</label>
+          <div
+            class="upload"
+            :class="{ dragging: isDragging, 'has-files': uploadedFiles.length > 0 }"
+            @dragover.prevent="isDragging = true"
+            @dragleave.prevent="isDragging = false"
+            @drop.prevent="handleDrop"
+            @click="triggerFileInput"
+          >
+            <input
+              ref="fileInput"
+              type="file"
+              multiple
+              accept=".csv,.xlsx,.xls,.json,.txt,.dat,.tsv,.md"
+              class="file-input-hidden"
+              @change="handleFileSelect"
+            />
+            <div v-if="uploadedFiles.length === 0">
+              <p>上传表格、原始结果或补充说明</p>
+              <span>支持 CSV / Excel / JSON / TXT / Markdown</span>
             </div>
-            <div class="add-more" @click.stop="triggerFileInput">+ 添加更多文件</div>
+            <div v-else class="file-list">
+              <div v-for="(f, i) in uploadedFiles" :key="i" class="file-item">
+                <span class="file-name">{{ f.name }}</span>
+                <span class="file-size">{{ formatSize(f.size) }}</span>
+                <button class="file-remove" @click.stop="removeFile(i)" :disabled="loading">✕</button>
+              </div>
+              <div class="add-more" @click.stop="triggerFileInput">+ 添加更多文件</div>
+            </div>
           </div>
         </div>
-      </div>
-    </template>
+      </template>
+    </div>
 
     <button class="start-btn" :disabled="!canSubmit || loading" @click="handleSubmit">
       <span v-if="loading" class="spinner"></span>
@@ -213,19 +215,29 @@ function handleSubmit() {
   display: flex;
   flex-direction: column;
   gap: 0;
+  height: 100%;
+  min-height: 0;
 }
 
-.field + .field { margin-top: 24px; }
+.form-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.field + .field { margin-top: 18px; }
 
 .field-slim + .field,
 .compact-field {
-  margin-top: 18px;
+  margin-top: 12px;
 }
 
 label {
   display: block;
-  margin-bottom: 14px;
-  font-size: 16px;
+  margin-bottom: 10px;
+  font-size: 15px;
   font-weight: 800;
   letter-spacing: -0.02em;
 }
@@ -233,22 +245,68 @@ label {
 textarea {
   display: block;
   width: 100%;
-  height: 208px;
+  height: 166px;
   resize: none;
-  padding: 22px;
+  padding: 16px 18px;
   border: 1px solid rgba(20, 28, 45, 0.15);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.58);
+  background: #ffffff;
   color: #111;
-  font-size: 15px;
-  line-height: 1.65;
+  font-size: 14px;
+  line-height: 1.55;
   font-family: inherit;
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .short-area {
-  height: 96px;
+  height: 78px;
+}
+
+.field-grow {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+}
+
+.mode-writing textarea {
+  height: auto;
+  min-height: 140px;
+}
+
+.mode-writing .field-grow textarea {
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.mode-writing .short-area {
+  height: 78px;
+}
+
+.mode-polish textarea {
+  height: auto;
+  min-height: 84px;
+}
+
+.mode-polish .field-grow textarea {
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mode-polish .short-area {
+  height: 64px;
+}
+
+.mode-polish .field + .field {
+  margin-top: 14px;
+}
+
+.mode-polish .compact-field {
+  margin-top: 10px;
 }
 
 textarea::placeholder { color: #a4a9b3; }
@@ -261,13 +319,13 @@ textarea:focus {
 textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .upload {
-  min-height: 108px;
+  min-height: 92px;
   display: grid;
   place-items: center;
   text-align: center;
   border: 1px dashed rgba(20, 28, 45, 0.22);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.42);
+  background: #ffffff;
   cursor: pointer;
   transition: border-color 0.2s, background 0.2s;
 }
@@ -279,19 +337,27 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 }
 
 .upload.has-files {
-  min-height: 80px;
+  min-height: 70px;
   border-style: solid;
   border-color: rgba(36, 78, 168, 0.25);
 }
 
+.mode-polish .upload {
+  min-height: 78px;
+}
+
+.mode-polish .upload.has-files {
+  min-height: 62px;
+}
+
 .upload p {
   margin: 0 0 8px;
-  font-size: 15px;
+  font-size: 14px;
   color: #8a909b;
 }
 
 .upload span {
-  font-size: 13px;
+  font-size: 12px;
   color: #9da2ac;
 }
 
@@ -299,18 +365,18 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .file-list {
   width: 100%;
-  padding: 12px 20px;
+  padding: 10px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .file-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 0;
-  font-size: 14px;
+  padding: 5px 0;
+  font-size: 13px;
   border-bottom: 1px solid rgba(20, 28, 45, 0.06);
 }
 
@@ -343,22 +409,22 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 .file-remove:hover { color: var(--error); }
 
 .add-more {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--blue);
-  padding: 6px 0 0;
+  padding: 4px 0 0;
   text-align: center;
   cursor: pointer;
 }
 
 .start-btn {
   width: 100%;
-  height: 62px;
-  margin-top: 28px;
+  height: 58px;
+  margin-top: 18px;
   border: none;
   border-radius: 7px;
   background: linear-gradient(135deg, var(--blue), var(--blue-dark));
   color: #fff;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: 0.03em;
   cursor: pointer;
@@ -369,6 +435,7 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
   justify-content: center;
   gap: 10px;
   font-family: inherit;
+  flex-shrink: 0;
 }
 
 .start-btn:hover:not(:disabled) {
@@ -380,6 +447,7 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
   opacity: 0.5;
   cursor: not-allowed;
 }
+
 
 .spinner {
   width: 20px;

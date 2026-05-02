@@ -35,28 +35,25 @@
             <section class="hero">
               <div class="hero-left">
                 <h1 class="title">
-                  {{ heroTitleLine1 }}<br /><span>{{ heroTitleLine2 }}</span>
+                  Everything in<br /><span>Agent</span>
                 </h1>
-                <p class="subtitle">{{ heroSubtitle }}</p>
-                <div class="entry-switcher">
-                  <button
-                    v-for="entry in entryOptions"
-                    :key="entry.id"
-                    class="entry-card"
-                    :class="{ active: selectedTaskType === entry.id }"
-                    @click="selectedTaskType = entry.id"
-                  >
-                    <span class="entry-kicker">{{ entry.kicker }}</span>
-                    <strong>{{ entry.title }}</strong>
-                    <small>{{ entry.description }}</small>
-                  </button>
-                </div>
                 <div class="hero-geometry">
                   <div class="geo-circle"></div>
                   <div class="geo-line"></div>
                 </div>
               </div>
               <div class="panel" data-layout-anchor="new-panel">
+                <div class="panel-switcher">
+                  <button
+                    v-for="entry in entryOptions"
+                    :key="entry.id"
+                    class="panel-switch"
+                    :class="{ active: selectedTaskType === entry.id }"
+                    @click="selectedTaskType = entry.id"
+                  >
+                    {{ entry.title }}
+                  </button>
+                </div>
                 <TaskInput
                   :mode="selectedTaskType"
                   @submit="handleSubmit"
@@ -66,13 +63,20 @@
             </section>
 
             <section class="steps">
-              <template v-for="(step, index) in currentEntrySteps" :key="step.id">
-                <div class="step" :class="{ 'active-step': currentStage === step.id || (!currentStage && index === 0) }">
-                  <span>{{ String(index + 1).padStart(2, '0') }}</span>
-                  <strong>{{ step.label }}</strong>
-                </div>
-                <div v-if="index < currentEntrySteps.length - 1" class="divider"></div>
-              </template>
+              <div class="step" :class="{ 'active-step': currentStage === '' || currentStage === 'breakdown' || currentStage === 'review' }">
+                <span>01</span>
+                <strong>分析</strong>
+              </div>
+              <div class="divider"></div>
+              <div class="step" :class="{ 'active-step': currentStage === 'modeling' || currentStage === 'consistency' }">
+                <span>02</span>
+                <strong>建模</strong>
+              </div>
+              <div class="divider"></div>
+              <div class="step" :class="{ 'active-step': currentStage === 'solve' || currentStage === 'analysis' || currentStage === 'charts' || currentStage === 'writing' || currentStage === 'recalculation' || currentStage === 'chart_consistency' || currentStage === 'wording' }">
+                <span>03</span>
+                <strong>写作</strong>
+              </div>
             </section>
           </template>
 
@@ -239,31 +243,6 @@ const entryOptions = [
     description: '一致性审查、数据复核、图文核对与竞赛化措辞修订。',
   },
 ]
-const taskTypeSteps: Record<TaskType, { id: string; label: string }[]> = {
-  writing: [
-    { id: 'breakdown', label: '拆解' },
-    { id: 'modeling', label: '建模' },
-    { id: 'review', label: '审查' },
-    { id: 'solve', label: '求解' },
-    { id: 'analysis', label: '验证' },
-    { id: 'charts', label: '图表' },
-    { id: 'writing', label: '成文' },
-  ],
-  polish: [
-    { id: 'breakdown', label: '拆解' },
-    { id: 'consistency', label: '一致性' },
-    { id: 'recalculation', label: '复核' },
-    { id: 'chart_consistency', label: '图文' },
-    { id: 'wording', label: '润色' },
-  ],
-}
-const currentEntrySteps = computed(() => taskTypeSteps[selectedTaskType.value])
-const heroTitleLine1 = computed(() => selectedTaskType.value === 'writing' ? 'Modeling to' : 'Polish to')
-const heroTitleLine2 = computed(() => selectedTaskType.value === 'writing' ? 'Submission' : 'Competition Style')
-const heroSubtitle = computed(() => selectedTaskType.value === 'writing'
-  ? '从题目拆解到算法求解、图表生成与论文成文的完整链路。'
-  : '对已有论文执行结构审查、数值复核、图文校验与措辞修订。')
-
 function switchView(view: ViewState) {
   currentView.value = view
 }
@@ -935,16 +914,38 @@ onBeforeUnmount(() => {
 }
 
 .entry-switcher {
-  margin-top: 34px;
+  display: none;
+}
+
+.panel-switcher {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  max-width: 560px;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.panel-switch {
+  height: 48px;
+  border: 1px solid rgba(20, 28, 45, 0.12);
+  border-radius: 10px;
+  background: #f6f7fb;
+  color: #495165;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+  transition: border-color 0.18s, color 0.18s, background 0.18s;
+}
+
+.panel-switch.active {
+  border-color: rgba(36, 78, 168, 0.28);
+  background: rgba(36, 78, 168, 0.08);
+  color: var(--blue);
 }
 
 .entry-card {
   border: 1px solid rgba(20, 28, 45, 0.12);
-  background: rgba(255, 255, 255, 0.62);
+  background: #fff;
   border-radius: 10px;
   padding: 18px 20px;
   display: flex;
@@ -1005,14 +1006,22 @@ onBeforeUnmount(() => {
 
 .panel {
   position: relative;
+  display: flex;
+  flex-direction: column;
   justify-self: end;
   width: min(100%, 650px);
-  padding: 48px;
+  height: 664px;
+  padding: 28px 36px 30px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--panel);
-  backdrop-filter: blur(18px);
+  background: #ffffff;
+  overflow: hidden;
   box-shadow: 0 28px 80px rgba(18, 31, 58, 0.05), inset 0 1px 0 rgba(255,255,255,0.78);
+}
+
+.panel > :last-child {
+  flex: 1;
+  min-height: 0;
 }
 
 /* ---- Content Area (非首页) ---- */
@@ -1036,14 +1045,13 @@ onBeforeUnmount(() => {
   z-index: 5;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 20px;
-  width: min(100%, 1180px);
+  gap: 86px;
+  width: 720px;
   margin-left: 124px;
   padding-bottom: 60px;
 }
 
-.step { min-width: 88px; }
+.step { min-width: 96px; }
 
 .step span {
   display: block;
@@ -1060,7 +1068,7 @@ onBeforeUnmount(() => {
 
 .divider {
   width: 1px;
-  height: 36px;
+  height: 56px;
   background: var(--line);
 }
 
