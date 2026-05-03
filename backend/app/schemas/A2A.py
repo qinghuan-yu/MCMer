@@ -43,6 +43,7 @@ class CoderToWriter(BaseModel):
     """代码手 -> 写作手"""
     coder_response: str | None = None       # LLM 最后的文字输出（含对结果的文字描述）
     created_images: list[str] = []           # 本次执行新生成的图片文件名列表
+    structured_result_files: list[str] = []  # 本次执行生成/更新的结构化结果文件
 
 
 class WriterResponse(BaseModel):

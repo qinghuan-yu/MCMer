@@ -197,7 +197,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
         yield _message("review", _preview(str(stage_outputs["review"])))
 
-        yield _progress(task_id, "solve", 0.44, "算法与编程求解 Agent 正在执行代码", current_subtask="算法求解")
+        yield _progress(task_id, "solve", 0.42, "算法与编程求解 Agent 正在执行代码", current_subtask="算法求解")
         solver = CoderAgent(
             task_id=task_id,
             model=models["coder"],
@@ -219,12 +219,46 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         solver_images = solver_result.created_images
         yield _message("solve", _preview(solver_result.coder_response), section="算法与编程求解")
 
-        yield _progress(task_id, "analysis", 0.62, "结果分析与验证 Agent 正在复核结论", current_subtask="结果分析")
+        yield _progress(task_id, "verification", 0.56, "数值复核 Agent 正在独立复算关键结果", current_subtask="数值复核")
+        verification_agent = CoderAgent(
+            task_id=task_id,
+            model=models["coder"],
+            work_dir=work_dir,
+            max_chat_turns=settings.MAX_CHAT_TURNS,
+            max_retries=settings.MAX_RETRIES,
+            code_interpreter=code_interpreter,
+        )
+        verification_agent.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["verification"]
+        artifact_context = get_current_files(work_dir)
+        verification_prompt = (
+            f"## 原题\n{question}\n\n"
+            f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
+            f"## 建模方案\n{stage_outputs['modeling']}\n\n"
+            f"## 模型审查意见\n{stage_outputs['review']}\n\n"
+            f"## 求解摘要\n{solver_result.coder_response}\n\n"
+            f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
+            f"## 数据文件\n{data_context}\n\n"
+            f"## 当前工作目录结果文件\n{artifact_context}\n\n"
+            "请独立复算和核验所有关键数值、表格结论与图像结论。"
+            "不要照抄求解摘要；若某结论无法通过数据或结果文件复核，必须列入复核失败项。"
+        )
+        verification_result = await verification_agent.run(
+            prompt=verification_prompt,
+            subtask_title="数值复核",
+        )
+        stage_outputs["verification"] = verification_result.model_dump()
+        yield _message("verification", _preview(verification_result.coder_response), section="数值复核")
+
+        yield _progress(task_id, "analysis", 0.68, "结果分析与验证 Agent 正在复核结论", current_subtask="结果分析")
         analysis_prompt = (
             f"# 原题\n{question}\n\n"
             f"# 模型方案\n{stage_outputs['modeling']}\n\n"
             f"# 审查报告\n{stage_outputs['review']}\n\n"
             f"# 求解输出\n{solver_result.coder_response}\n\n"
+            f"# 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
+            f"# 数值复核报告\n{verification_result.coder_response}\n\n"
+            f"# 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
+            f"# 当前结果文件清单\n{artifact_context}\n\n"
             "请按系统提示中的固定结构输出结果分析与验证报告，并把每个关键结论回链到证据。"
         )
         stage_outputs["analysis"] = await _run_text_agent(
@@ -236,7 +270,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
         yield _message("analysis", _preview(str(stage_outputs["analysis"])))
 
-        yield _progress(task_id, "charts", 0.77, "图表与一致性 Agent 正在生成图表", current_subtask="图表生成")
+        yield _progress(task_id, "charts", 0.8, "图表与一致性 Agent 正在生成图表", current_subtask="图表生成")
         chart_agent = CoderAgent(
             task_id=task_id,
             model=models["coder"],
@@ -248,6 +282,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         chart_prompt = (
             f"## 结果分析报告\n{stage_outputs['analysis']}\n\n"
             f"## 求解结果\n{solver_result.coder_response}\n\n"
+            f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
             f"## 模型符号与假设\n{stage_outputs['modeling']}\n\n"
             "请生成论文所需图表与对应绘图代码，统一风格，并输出格式一致性校验清单。"
         )
@@ -270,6 +305,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 假设与建模\n{stage_outputs['modeling']}\n\n"
             f"# 模型审查报告\n{stage_outputs['review']}\n\n"
             f"# 算法与编程求解\n{solver_result.coder_response}\n\n"
+            f"# 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
+            f"# 数值复核报告\n{verification_result.coder_response}\n\n"
+            f"# 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
             f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
             f"# 图表与一致性\n{chart_result.coder_response}\n\n"
             "请输出完整论文 Markdown。"
@@ -284,42 +322,55 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             raise ValueError("最终写作阶段返回空内容")
         yield _message("writing", _preview(final_paper), section="论文组织与润色")
 
-        yield _progress(task_id, "final_audit", 0.96, "最终审查 Agent 正在核对审查意见是否被落实", current_subtask="最终审查")
-        audit_prompt = (
-            f"# 原题\n{question}\n\n"
-            f"# 模型审查报告\n{stage_outputs['review']}\n\n"
-            f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
-            f"# 图表一致性结果\n{chart_result.coder_response}\n\n"
-            f"# 最终论文\n{final_paper}\n\n"
-            "请检查最终论文是否完整吸收前序审查意见，是否仍存在无证据结论、符号不一致、图文不一致或无法验证的断言。"
-        )
-        audit_report = await _run_text_agent(
-            task_id,
-            models["review"],
-            WRITING_STAGE_SYSTEM_PROMPTS["final_audit"],
-            audit_prompt,
-            "最终审查",
-        )
-        stage_outputs["final_audit"] = audit_report
-        yield _message("final_audit", _preview(audit_report), section="最终审查")
+        audit_report = ""
+        max_audit_rounds = 2
+        for audit_round in range(1, max_audit_rounds + 1):
+            yield _progress(task_id, "final_audit", 0.96, f"最终审查 Agent 第{audit_round}轮核对审查意见", current_subtask="最终审查")
+            audit_prompt = (
+                f"# 原题\n{question}\n\n"
+                f"# 模型审查报告\n{stage_outputs['review']}\n\n"
+                f"# 数值复核报告\n{verification_result.coder_response}\n\n"
+                f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
+                f"# 图表一致性结果\n{chart_result.coder_response}\n\n"
+                f"# 最终论文\n{final_paper}\n\n"
+                "请检查最终论文是否完整吸收前序审查意见，是否仍存在无证据结论、符号不一致、图文不一致、复核失败项被写入正文或无法验证的断言。"
+            )
+            audit_report = await _run_text_agent(
+                task_id,
+                models["review"],
+                WRITING_STAGE_SYSTEM_PROMPTS["final_audit"],
+                audit_prompt,
+                f"最终审查第{audit_round}轮",
+            )
+            stage_outputs[f"final_audit_round_{audit_round}"] = audit_report
+            yield _message("final_audit", _preview(audit_report), section=f"最终审查第{audit_round}轮")
 
-        audit_first_line = audit_report.splitlines()[0].upper() if audit_report.splitlines() else ""
-        if "审计结论：BLOCK" in audit_report or "AUDIT结论：BLOCK" in audit_report or "BLOCK" in audit_first_line:
-            yield _progress(task_id, "writing", 0.985, "论文组织与润色 Agent 正在根据最终审查修订全文", current_subtask="审查后修订")
+            audit_first_line = audit_report.splitlines()[0].upper() if audit_report.splitlines() else ""
+            blocked = "审计结论：BLOCK" in audit_report or "AUDIT结论：BLOCK" in audit_report or "BLOCK" in audit_first_line
+            if not blocked:
+                break
+
+            if audit_round == max_audit_rounds:
+                break
+
+            yield _progress(task_id, "writing", 0.985, f"论文组织与润色 Agent 正在根据第{audit_round}轮审查修订全文", current_subtask="审查后修订")
             revision_prompt = (
                 f"# 原题\n{question}\n\n"
                 f"# 已生成论文\n{final_paper}\n\n"
+                f"# 数值复核报告\n{verification_result.coder_response}\n\n"
                 f"# 最终审查报告\n{audit_report}\n\n"
-                "请严格根据最终审查报告修订全文。若某问题仍无法修正，必须在正文中降级措辞，不得忽略。"
+                "请严格根据最终审查报告修订全文。若某问题仍无法修正，必须在正文中降级措辞，不得忽略，也不得保留与复核报告冲突的确定性表述。"
             )
             revised_writer_result = await writer.run(
                 prompt=revision_prompt,
                 available_images=solver_images + chart_images,
-                sub_title="审查后修订",
+                sub_title=f"审查后修订第{audit_round}轮",
             )
             final_paper = revised_writer_result.response_content
-            stage_outputs["writing_revision"] = final_paper
-            yield _message("writing", _preview(final_paper), section="审查后修订")
+            stage_outputs[f"writing_revision_round_{audit_round}"] = final_paper
+            yield _message("writing", _preview(final_paper), section=f"审查后修订第{audit_round}轮")
+
+        stage_outputs["final_audit"] = audit_report
 
         paper_path, docx_path, notebook_path = await _finalize_outputs(
             task_id=task_id,

@@ -11,7 +11,10 @@ from app.core.llm.llm import LLM
 from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT, get_reflection_prompt
 from app.utils.common_utils import get_current_files
+from pathlib import Path
+import importlib.metadata
 import json
+import re
 from app.core.functions import coder_tools
 
 
@@ -33,6 +36,144 @@ class CoderAgent(Agent):
         self.code_interpreter = code_interpreter
         self.last_executed_code = ""
         self.same_code_repeat_count = 0
+
+    @staticmethod
+    def _sanitize_section_name(section: str) -> str:
+        sanitized = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "_", (section or "result").strip())
+        sanitized = sanitized.strip("_")
+        return sanitized or "result"
+
+    def _structured_result_filename(self, subtask_title: str) -> str:
+        return f"{self._sanitize_section_name(subtask_title)}_structured_results.json"
+
+    @staticmethod
+    def _looks_like_non_mutating_summary_code(code: str) -> bool:
+        normalized = (code or "").lower()
+        if not normalized.strip():
+            return False
+
+        summary_markers = [
+            "最终总结报告",
+            "检查是否还有其他需要修复的问题",
+            "所有检查通过",
+            "任务已完成",
+            "print(",
+        ]
+        has_summary_intent = any(marker.lower() in normalized for marker in summary_markers)
+        if not has_summary_intent:
+            return False
+
+        write_markers = [
+            "write_text(",
+            "write_bytes(",
+            "to_csv(",
+            "to_excel(",
+            "to_json(",
+            "json.dump(",
+            "savefig(",
+            "document.save(",
+            "open(",
+        ]
+
+        if "open(" in normalized:
+            if any(mode in normalized for mode in ["'w'", '"w"', "'a'", '"a"', "'wb'", '"wb"']):
+                return False
+
+        return not any(marker in normalized for marker in write_markers if marker != "open(")
+
+    async def _handle_completion_loop(
+        self,
+        code: str,
+        subtask_title: str,
+        expected_result_file: Path,
+        tool_id: str,
+    ) -> bool:
+        is_valid, _ = self._validate_structured_result_file(expected_result_file, subtask_title)
+        if not is_valid:
+            return False
+
+        if not self._looks_like_non_mutating_summary_code(code):
+            return False
+
+        logger.warning("检测到已完成任务仍在执行只读收尾脚本，强制要求模型直接输出最终结论")
+        await self.append_chat_history(
+            {
+                "role": "tool",
+                "tool_call_id": tool_id,
+                "name": "execute_code",
+                "content": (
+                    f"{expected_result_file.name} 已存在且校验通过。"
+                    "你本轮请求的代码只是在读取现有结果并打印检查/总结，不会生成新的结果文件。"
+                    "不要再调用 execute_code；请直接输出最终结果摘要、关键结论、生成文件和风险提示。"
+                ),
+            }
+        )
+        await self.append_chat_history(
+            {
+                "role": "user",
+                "content": (
+                    "停止执行收尾检查或最终总结代码。"
+                    "当前子任务已经具备有效的结构化结果文件，请直接给出最终自然语言结论，"
+                    "不要继续调用 execute_code。"
+                ),
+            }
+        )
+        return True
+
+    @staticmethod
+    def _installed_package_summary(limit: int = 80) -> str:
+        preferred = [
+            "numpy", "pandas", "scipy", "matplotlib", "seaborn", "openpyxl",
+            "pypdf", "python-docx", "aiofiles", "fastapi", "pydantic",
+        ]
+        installed = {dist.metadata.get("Name", "") for dist in importlib.metadata.distributions()}
+        ordered = [name for name in preferred if name in installed]
+        remaining = sorted(name for name in installed if name and name not in ordered)
+        package_names = ordered + remaining
+        if len(package_names) > limit:
+            package_names = package_names[:limit] + ["..."]
+        return ", ".join(package_names)
+
+    @staticmethod
+    def _validate_structured_result_file(file_path: Path, expected_section: str) -> tuple[bool, str]:
+        if not file_path.exists() or not file_path.is_file():
+            return False, "结构化结果文件不存在"
+
+        try:
+            payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return False, f"结构化结果文件不是有效 JSON: {exc}"
+
+        if not isinstance(payload, dict):
+            return False, "结构化结果文件顶层必须是 JSON 对象"
+
+        required_keys = ["section", "summary", "key_results", "generated_files", "warnings"]
+        missing = [key for key in required_keys if key not in payload]
+        if missing:
+            return False, f"结构化结果文件缺少字段: {', '.join(missing)}"
+
+        if not isinstance(payload.get("key_results"), list):
+            return False, "key_results 必须是数组"
+
+        if payload.get("section") != expected_section:
+            return False, f"section 字段必须为 {expected_section}"
+
+        return True, ""
+
+    async def _ensure_structured_result_contract(self, subtask_title: str) -> None:
+        result_filename = self._structured_result_filename(subtask_title)
+        installed_packages = self._installed_package_summary()
+        contract_prompt = (
+            f"当前子任务必须遵守以下执行契约：\n"
+            f"1. 只能使用当前环境已安装的库；已知可用包示例：{installed_packages}\n"
+            "2. 如果需要第三方库但环境未安装，必须立刻改用标准库、已安装库或已有结果文件，不能继续依赖不存在的包。\n"
+            f"3. 在结束前，必须在工作目录写出结构化结果文件 {result_filename}。\n"
+            "4. 该 JSON 文件必须包含字段：section、summary、key_results、generated_files、warnings。\n"
+            f"5. section 字段必须严格等于 {subtask_title}。\n"
+            "6. key_results 必须是数组；每个元素至少应包含 name、value、unit、evidence、source。\n"
+            "7. 若结果不可靠，必须写入 warnings，并在 key_results 中显式标注无法确认。"
+        )
+        await self.append_chat_history({"role": "user", "content": contract_prompt})
 
     async def _soft_reset_retry_limit(self, last_error_message: str):
         logger.warning(f"达到最大尝试次数，重置计数并继续: {self.max_retries}")
@@ -130,12 +271,16 @@ class CoderAgent(Agent):
                 }
             )
 
+        await self._ensure_structured_result_contract(subtask_title)
+
         # 添加 sub_task
         logger.info(f"添加子任务提示: {prompt}")
         await self.append_chat_history({"role": "user", "content": prompt})
 
         retry_count = 0
         last_error_message = ""
+        structured_result_retry_count = 0
+        expected_result_file = Path(self.work_dir) / self._structured_result_filename(subtask_title)
 
         while True:
             if retry_count >= self.max_retries:
@@ -180,6 +325,14 @@ class CoderAgent(Agent):
                         )
 
                         code = json.loads(tool_call.function.arguments)["code"]
+
+                        if await self._handle_completion_loop(
+                            code,
+                            subtask_title,
+                            expected_result_file,
+                            tool_id,
+                        ):
+                            continue
 
                         if await self._handle_repeated_code(code, subtask_title):
                             continue
@@ -259,6 +412,28 @@ class CoderAgent(Agent):
                 else:
                     # 没有工具调用，表示任务完成
                     logger.info("没有工具调用，任务完成")
+                    is_valid, validation_error = self._validate_structured_result_file(
+                        expected_result_file,
+                        subtask_title,
+                    )
+                    if not is_valid:
+                        structured_result_retry_count += 1
+                        await self.append_chat_history(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"你还不能结束，因为结构化结果文件校验失败：{validation_error}。"
+                                    f"请立即通过执行代码生成或修复 {expected_result_file.name}，"
+                                    "然后再给出最终总结。"
+                                ),
+                            }
+                        )
+                        if structured_result_retry_count >= 3:
+                            raise RuntimeError(
+                                f"{subtask_title} 未能按要求生成有效的结构化结果文件: {validation_error}"
+                            )
+                        continue
+
                     await redis_manager.publish_message(
                         self.task_id,
                         InterpreterMessage(
@@ -272,6 +447,7 @@ class CoderAgent(Agent):
                         created_images=await self.code_interpreter.get_created_images(
                             subtask_title
                         ),
+                        structured_result_files=[expected_result_file.name],
                     )
 
             except Exception as e:

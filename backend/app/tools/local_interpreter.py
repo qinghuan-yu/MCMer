@@ -5,6 +5,8 @@
 import os
 import glob
 import asyncio
+import ast
+import importlib.util
 from typing import Optional
 
 import nbformat
@@ -123,6 +125,16 @@ except Exception:
         """
         await self._ensure_kernel()
 
+        unavailable_imports = self._find_unavailable_imports(code)
+        if unavailable_imports:
+            modules = ", ".join(unavailable_imports)
+            error_message = (
+                "检测到未安装的第三方库导入: "
+                f"{modules}。请改用当前环境已安装的库，或使用标准库/已存在结果文件完成任务。"
+            )
+            logger.warning(error_message)
+            return error_message, True, error_message
+
         # 记录执行前的图片文件
         images_before = set(self._list_images())
 
@@ -199,6 +211,34 @@ except Exception:
         for pat in patterns:
             images.extend(glob.glob(os.path.join(self.work_dir, pat)))
         return [os.path.basename(p) for p in images]
+
+    @staticmethod
+    def _find_unavailable_imports(code: str) -> list[str]:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return []
+
+        imports: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top_level = alias.name.split(".", 1)[0]
+                    if top_level:
+                        imports.add(top_level)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level and node.level > 0:
+                    continue
+                if node.module:
+                    top_level = node.module.split(".", 1)[0]
+                    if top_level:
+                        imports.add(top_level)
+
+        unavailable = []
+        for module_name in sorted(imports):
+            if importlib.util.find_spec(module_name) is None:
+                unavailable.append(module_name)
+        return unavailable
 
     async def get_created_images(self, section: str = "") -> list[str]:
         """返回当前 work_dir 中的图片文件名列表"""

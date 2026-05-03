@@ -8,6 +8,51 @@ from pathlib import Path
 from typing import Optional
 
 
+def _resolve_markdown_image_path(md_path: str, image_target: str) -> Path | None:
+    target = (image_target or "").strip().strip("<>").strip()
+    if not target or re.match(r"^[a-zA-Z]+://", target):
+        return None
+
+    if " \"" in target:
+        target = target.split(' "', 1)[0].strip()
+
+    md_dir = Path(md_path).parent
+    raw_candidate = Path(target)
+
+    search_candidates: list[Path] = []
+    if raw_candidate.is_absolute():
+        search_candidates.append(raw_candidate)
+    else:
+        search_candidates.extend(
+            [
+                md_dir / raw_candidate,
+                md_dir / raw_candidate.name,
+                md_dir / "charts" / raw_candidate.name,
+                md_dir / "images" / raw_candidate.name,
+                md_dir / "figures" / raw_candidate.name,
+            ]
+        )
+
+    for candidate in search_candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate.absolute()
+        if resolved.exists() and resolved.is_file():
+            return resolved
+
+    if not raw_candidate.is_absolute() and raw_candidate.name:
+        for folder_name in ["charts", "images", "figures"]:
+            folder = md_dir / folder_name
+            if not folder.exists() or not folder.is_dir():
+                continue
+            matches = list(folder.rglob(raw_candidate.name))
+            if matches:
+                return matches[0]
+
+    return None
+
+
 def get_current_files(work_dir: str, sub_dir: str = "") -> str:
     """获取当前工作目录下的文件列表"""
     path = Path(work_dir)
@@ -112,7 +157,14 @@ def md_to_docx(md_path: str, docx_path: str) -> bool:
     try:
         import pypandoc
 
-        pypandoc.convert_file(md_path, "docx", outputfile=docx_path)
+        pypandoc.convert_file(
+            md_path,
+            "docx",
+            outputfile=docx_path,
+            extra_args=[
+                f"--resource-path={Path(md_path).parent}{os.pathsep}{Path(md_path).parent / 'charts'}"
+            ],
+        )
         # pypandoc 在 outputfile 模式下通常返回空字符串
         return os.path.exists(docx_path)
     except Exception:
@@ -120,6 +172,7 @@ def md_to_docx(md_path: str, docx_path: str) -> bool:
 
     try:
         from docx import Document
+        from docx.shared import Inches
         from docx.shared import Pt
     except Exception:
         return False
@@ -216,7 +269,19 @@ def md_to_docx(md_path: str, docx_path: str) -> bool:
         if image_match:
             alt_text = image_match.group(1).strip() or "图片"
             path_text = image_match.group(2).strip()
-            document.add_paragraph(f"[图片] {alt_text}: {path_text}")
+            image_path = _resolve_markdown_image_path(md_path, path_text)
+            if image_path:
+                picture_paragraph = document.add_paragraph()
+                picture_paragraph.alignment = 1
+                try:
+                    picture_paragraph.add_run().add_picture(str(image_path), width=Inches(6))
+                except Exception:
+                    picture_paragraph.add_run().add_picture(str(image_path))
+
+                caption = document.add_paragraph(alt_text)
+                caption.alignment = 1
+            else:
+                document.add_paragraph(f"[图片缺失] {alt_text}: {path_text}")
             continue
 
         document.add_paragraph(stripped)
