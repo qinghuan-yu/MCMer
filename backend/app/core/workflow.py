@@ -15,7 +15,7 @@ from app.services.task_service import task_manager
 from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.tools.local_interpreter import LocalCodeInterpreter
 from app.tools.openalex_scholar import OpenAlexScholar
-from app.utils.common_utils import get_current_files, md_to_docx, save_json
+from app.utils.common_utils import get_current_files, md_to_docx, normalize_math_markdown, save_json
 from app.utils.log_util import logger
 
 
@@ -118,13 +118,15 @@ async def _finalize_outputs(
     if code_interpreter is not None:
         await code_interpreter.save_notebook(notebook_path)
 
+    normalized_paper = normalize_math_markdown(paper_content)
+
     paper_path = os.path.join(work_dir, "res.md")
     with open(paper_path, "w", encoding="utf-8") as f:
-        f.write(paper_content)
+        f.write(normalized_paper)
 
     result_payload["task_id"] = task_id
     result_payload["task_type"] = task_type
-    result_payload["paper"] = paper_content
+    result_payload["paper"] = normalized_paper
     save_json(result_payload, os.path.join(work_dir, "res.json"))
 
     docx_path = os.path.join(work_dir, "res.docx")

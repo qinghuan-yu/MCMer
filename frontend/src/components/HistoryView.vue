@@ -38,9 +38,6 @@
             <span v-if="task.is_revision" class="revision-badge">修订</span>
             <span class="task-title">{{ getProjectTitle(task) }}</span>
           </div>
-          <span class="task-status" :class="task.status">
-            {{ statusMap[task.status] || task.status }}
-          </span>
         </div>
 
         <div class="task-question" v-if="task.question">
@@ -73,14 +70,14 @@
             class="btn-view"
             @click.stop="$emit('viewPaper', task.task_id)"
           >
-            📄 查看论文
+            查看论文
           </button>
           <button
             v-if="task.has_paper"
             class="btn-revise"
             @click.stop="startRevise(task)"
           >
-            ✏️ 修订论文
+            修订论文
           </button>
           <button
             v-if="task.status !== 'running' && task.status !== 'pending'"
@@ -88,7 +85,7 @@
             :disabled="deletingTaskId === task.task_id"
             @click.stop="deleteTask(task)"
           >
-            {{ deletingTaskId === task.task_id ? '删除中...' : '🗑️ 删除项目' }}
+            {{ deletingTaskId === task.task_id ? '删除中...' : '删除项目' }}
           </button>
           <span v-if="!task.has_paper && task.status === 'failed'" class="hint-text">
             任务未完成，无可用论文
@@ -100,7 +97,7 @@
     <!-- 修订对话框 -->
     <div v-if="showReviseDialog" class="dialog-overlay" @click.self="closeReviseDialog">
       <div class="dialog-card">
-        <h3>✏️ 修订论文</h3>
+        <h3>修订论文</h3>
         <p class="dialog-subtitle">
           对当前项目的论文提出修改建议
         </p>
@@ -126,7 +123,7 @@
             :disabled="!reviseFeedback.trim()"
             @click="submitRevise"
           >
-            🚀 提交修订
+            提交修订
           </button>
         </div>
       </div>
@@ -411,6 +408,7 @@ onMounted(async () => {
   margin-bottom: 10px;
   line-height: 1.5;
   display: -webkit-box;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
@@ -441,9 +439,10 @@ onMounted(async () => {
 
 .btn-open,
 .btn-view,
-.btn-revise {
+.btn-revise,
+.btn-delete {
   padding: 6px 16px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 6px;
   font-size: 0.85rem;
   font-weight: 500;
@@ -470,19 +469,24 @@ onMounted(async () => {
 }
 
 .btn-revise {
-  background: linear-gradient(135deg, var(--primary), #a855f7);
-  color: white;
+  background: rgba(245, 158, 11, 0.12);
+  color: #c2410c;
+  border-color: rgba(245, 158, 11, 0.24);
 }
 
 .btn-revise:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+  background: rgba(245, 158, 11, 0.18);
 }
 
 .btn-delete {
-  background: rgba(254, 242, 242, 0.96);
-  color: #991b1b;
-  border: 1px solid rgba(185, 28, 28, 0.16);
+  background: #dc2626;
+  color: #fff;
+  border: 1px solid #dc2626;
+}
+
+.btn-delete:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
 }
 
 .btn-delete:disabled {
@@ -563,30 +567,38 @@ onMounted(async () => {
 
 .btn-cancel, .btn-submit {
   padding: 8px 24px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 8px;
   font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .btn-cancel {
-  background: var(--bg-input);
+  background: #ffffff;
   color: var(--text);
+  border-color: var(--border);
 }
 
 .btn-submit {
-  background: linear-gradient(135deg, var(--primary), #a855f7);
-  color: white;
+  background: var(--blue);
+  color: #ffffff;
+  border-color: var(--blue);
 }
 
 .btn-submit:disabled {
-  opacity: 0.5;
+  background: rgba(36, 78, 168, 0.28);
+  border-color: rgba(36, 78, 168, 0.18);
+  color: rgba(255, 255, 255, 0.9);
   cursor: not-allowed;
+  opacity: 1;
 }
 
 .btn-submit:hover:not(:disabled) {
   transform: translateY(-1px);
+  background: var(--blue-dark);
+  border-color: var(--blue-dark);
 }
 
 .action-btn {

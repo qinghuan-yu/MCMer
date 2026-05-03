@@ -53,8 +53,62 @@ def load_json(filepath: str) -> Optional[dict]:
         return None
 
 
+def normalize_math_markdown(markdown_text: str) -> str:
+    """规范化 Markdown 中的 LaTeX 公式分隔符，便于前端渲染与 DOCX 导出。"""
+    if not markdown_text:
+        return markdown_text
+
+    def normalize_math_body(math_body: str) -> str:
+        body = math_body.strip()
+        body = re.sub(r"\\\\(?=[A-Za-z])", r"\\", body)
+        return body
+
+    code_fence_pattern = re.compile(r"(```[\s\S]*?```)")
+    segments = code_fence_pattern.split(markdown_text.replace("\r\n", "\n"))
+    normalized_segments: list[str] = []
+
+    for segment in segments:
+        if segment.startswith("```"):
+            normalized_segments.append(segment)
+            continue
+
+        segment = (
+            segment
+            .replace("\\\\[", "\\[")
+            .replace("\\\\]", "\\]")
+            .replace("\\\\(", "\\(")
+            .replace("\\\\)", "\\)")
+        )
+
+        segment = re.sub(
+            r"\\\[\s*([\s\S]*?)\s*\\\]",
+            lambda m: f"\n$$\n{normalize_math_body(m.group(1))}\n$$\n",
+            segment,
+        )
+        segment = re.sub(
+            r"\\\(\s*([\s\S]*?)\s*\\\)",
+            lambda m: f"${normalize_math_body(m.group(1))}$",
+            segment,
+        )
+        segment = re.sub(
+            r"\$\$\s*([\s\S]*?)\s*\$\$",
+            lambda m: f"$$\n{normalize_math_body(m.group(1))}\n$$",
+            segment,
+        )
+        segment = re.sub(
+            r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)",
+            lambda m: f"${normalize_math_body(m.group(1))}$",
+            segment,
+            flags=re.S,
+        )
+        segment = re.sub(r"\n{3,}", "\n\n", segment)
+        normalized_segments.append(segment)
+
+    return "".join(normalized_segments).strip() + "\n"
+
+
 def md_to_docx(md_path: str, docx_path: str) -> bool:
-    """尝试将 markdown 转为 docx，失败时返回 False。"""
+    """尝试将 markdown 转为 docx，优先保留 LaTeX 公式为 Word 数学对象。"""
     try:
         import pypandoc
 
@@ -71,7 +125,7 @@ def md_to_docx(md_path: str, docx_path: str) -> bool:
         return False
 
     try:
-        markdown = Path(md_path).read_text(encoding="utf-8")
+        markdown = normalize_math_markdown(Path(md_path).read_text(encoding="utf-8"))
     except Exception:
         return False
 

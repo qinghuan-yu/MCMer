@@ -23,9 +23,6 @@
         <a class="nav-item" :class="{ active: currentView === 'history' || currentView === 'paper' || currentView === 'running' }" @click="switchView('history')">项目</a>
         <a class="nav-item" :class="{ active: currentView === 'settings' }" @click="switchView('settings')">设置</a>
       </nav>
-      <div class="header-right">
-        <span class="status-badge" :class="taskStatus">{{ statusText }}</span>
-      </div>
     </header>
 
     <main class="view-shell">
@@ -897,24 +894,6 @@ onBeforeUnmount(() => {
   background: var(--blue);
   border-radius: 99px;
 }
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.status-badge {
-  padding: 6px 18px;
-  border-radius: 20px;
-  font-size: 13px;
-  font-weight: 600;
-  background: rgba(20,28,45,0.06);
-  color: var(--muted);
-}
-.status-badge.running { background: rgba(36,78,168,0.1); color: var(--blue); }
-.status-badge.completed { background: rgba(22,163,74,0.1); color: var(--success); }
-.status-badge.failed { background: rgba(220,38,38,0.1); color: var(--error); }
 
 /* ---- Hero ---- */
 .hero {

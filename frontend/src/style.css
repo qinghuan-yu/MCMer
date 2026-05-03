@@ -16,6 +16,8 @@
   --panel: rgba(255, 255, 255, 0.72);
   --bg: #f8f8f6;
   --bg-white: #ffffff;
+  --bg-card: rgba(255, 255, 255, 0.96);
+  --bg-input: rgba(255, 255, 255, 0.88);
   --border: rgba(20, 28, 45, 0.15);
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
   --shadow-md: 0 8px 24px rgba(18, 31, 58, 0.06);

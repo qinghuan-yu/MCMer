@@ -97,7 +97,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { marked } from 'marked'
+import { Marked } from 'marked'
+import markedKatex from 'marked-katex-extension'
+import 'katex/dist/katex.min.css'
 
 const props = defineProps<{
   taskId: string
@@ -128,12 +130,18 @@ const versions = computed(() => {
   return v
 })
 const selectedVersion = ref(1)
+const markdownRenderer = new Marked(
+  markedKatex({
+    nonStandard: true,
+    throwOnError: false,
+  })
+)
 
 // 渲染 Markdown
 const renderedPaper = computed(() => {
   if (!paperContent.value) return '<p><em>暂无内容</em></p>'
   try {
-    return marked(paperContent.value) as string
+    return markdownRenderer.parse(paperContent.value) as string
   } catch {
     return `<pre>${escapeHtml(paperContent.value)}</pre>`
   }
@@ -352,6 +360,8 @@ onMounted(() => {
 .markdown-body :deep(th), .markdown-body :deep(td) { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
 .markdown-body :deep(th) { background: var(--bg-input); }
 .markdown-body :deep(img) { max-width: 100%; border-radius: 8px; margin: 10px 0; }
+.markdown-body :deep(.katex-display) { overflow-x: auto; overflow-y: hidden; padding: 8px 0; }
+.markdown-body :deep(.katex) { font-size: 1.05em; }
 
 /* 修订面板 */
 .revise-panel {
