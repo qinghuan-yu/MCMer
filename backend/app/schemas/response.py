@@ -45,6 +45,7 @@ class TaskResult(BaseModel):
     status: str
     task_type: str = "writing"
     paper_path: str = ""
+    docx_path: str = ""
     notebook_path: str = ""
     work_dir: str = ""
     error_message: str = ""

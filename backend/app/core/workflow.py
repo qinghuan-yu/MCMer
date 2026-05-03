@@ -113,7 +113,7 @@ async def _finalize_outputs(
     paper_content: str,
     result_payload: dict,
     code_interpreter,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     notebook_path = os.path.join(work_dir, "notebook.ipynb")
     if code_interpreter is not None:
         await code_interpreter.save_notebook(notebook_path)
@@ -128,8 +128,8 @@ async def _finalize_outputs(
     save_json(result_payload, os.path.join(work_dir, "res.json"))
 
     docx_path = os.path.join(work_dir, "res.docx")
-    md_to_docx(paper_path, docx_path)
-    return paper_path, notebook_path
+    docx_generated = md_to_docx(paper_path, docx_path)
+    return paper_path, docx_path if docx_generated else "", notebook_path
 
 
 async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, None]:
@@ -319,7 +319,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs["writing_revision"] = final_paper
             yield _message("writing", _preview(final_paper), section="审查后修订")
 
-        paper_path, notebook_path = await _finalize_outputs(
+        paper_path, docx_path, notebook_path = await _finalize_outputs(
             task_id=task_id,
             task_type="writing",
             work_dir=work_dir,
@@ -340,6 +340,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 status="completed",
                 task_type="writing",
                 paper_path=paper_path,
+                docx_path=docx_path,
                 notebook_path=notebook_path,
                 work_dir=work_dir,
             ).model_dump(),
@@ -500,7 +501,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         stage_outputs["wording"] = final_paper
         yield _message("wording", _preview(final_paper), section="论文措辞修订")
 
-        paper_path, notebook_path = await _finalize_outputs(
+        paper_path, docx_path, notebook_path = await _finalize_outputs(
             task_id=task_id,
             task_type="polish",
             work_dir=work_dir,
@@ -523,6 +524,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
                 status="completed",
                 task_type="polish",
                 paper_path=paper_path,
+                docx_path=docx_path,
                 notebook_path=notebook_path,
                 work_dir=work_dir,
             ).model_dump(),

@@ -37,6 +37,9 @@
             <a v-if="result.paper_path" :href="getFileUrl(result.paper_path)" target="_blank" class="file-link">
               📄 查看论文
             </a>
+            <a v-if="result.docx_path" :href="getFileUrl(result.docx_path)" target="_blank" class="file-link">
+              🧾 下载 DOCX
+            </a>
             <a v-if="result.notebook_path" :href="getFileUrl(result.notebook_path)" target="_blank" class="file-link">
               📓 查看 Notebook
             </a>
@@ -78,7 +81,6 @@
           >
             <span class="agent-card-title">{{ agentCard.icon }} {{ agentCard.label }}</span>
             <span class="agent-card-count">{{ agentCard.count }} 条</span>
-            <span class="agent-card-text">{{ agentCard.preview }}</span>
           </button>
         </div>
 
@@ -124,6 +126,7 @@ interface RuntimeMessage {
     progress?: number
     current_subtask?: string
     paper_path?: string
+    docx_path?: string
     notebook_path?: string
     work_dir?: string
     error_message?: string
