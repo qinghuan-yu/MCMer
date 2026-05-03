@@ -27,13 +27,13 @@
               ref="fileInput"
               type="file"
               multiple
-              accept=".csv,.xlsx,.xls,.json,.txt,.dat,.tsv,.md"
+              accept=".csv,.xlsx,.xls,.json,.txt,.dat,.tsv,.md,.pdf,.docx,.png,.jpg,.jpeg,.svg,.webp"
               class="file-input-hidden"
               @change="handleFileSelect"
             />
             <div v-if="uploadedFiles.length === 0">
-              <p>拖拽文件到此处，或点击上传</p>
-              <span>支持 CSV / Excel / JSON / TXT / Markdown</span>
+              <p>拖拽原题文档或数据文件到此处，或点击上传</p>
+              <span>支持 PDF / DOCX / CSV / Excel / JSON / TXT / Markdown</span>
             </div>
             <div v-else class="file-list">
               <div v-for="(f, i) in uploadedFiles" :key="i" class="file-item">
@@ -91,13 +91,13 @@
               ref="fileInput"
               type="file"
               multiple
-              accept=".csv,.xlsx,.xls,.json,.txt,.dat,.tsv,.md"
+              accept=".zip,.md,.pdf,.docx,.csv,.xlsx,.xls,.json,.txt,.dat,.tsv,.png,.jpg,.jpeg,.svg,.webp"
               class="file-input-hidden"
               @change="handleFileSelect"
             />
             <div v-if="uploadedFiles.length === 0">
-              <p>上传表格、原始结果或补充说明</p>
-              <span>支持 CSV / Excel / JSON / TXT / Markdown</span>
+              <p>上传论文包、Markdown、原文档或补充数据</p>
+              <span>支持 ZIP / Markdown / PDF / DOCX / CSV / Excel / JSON</span>
             </div>
             <div v-else class="file-list">
               <div v-for="(f, i) in uploadedFiles" :key="i" class="file-item">
@@ -150,11 +150,15 @@ const uploadedFiles = ref<File[]>([])
 const isDragging = ref(false)
 const fileInput = ref<HTMLInputElement>()
 
+const writingSourceExtensions = ['.pdf', '.docx', '.txt', '.md']
+const polishSourceExtensions = ['.zip', '.md', '.docx', '.pdf']
+const commonDataExtensions = ['.csv', '.xlsx', '.xls', '.json', '.txt', '.dat', '.tsv', '.md', '.png', '.jpg', '.jpeg', '.svg', '.webp']
+
 const canSubmit = computed(() => {
   if (props.mode === 'writing') {
-    return Boolean(question.value.trim())
+    return Boolean(question.value.trim()) || uploadedFiles.value.some(isWritingSourceFile)
   }
-  return Boolean(paperContent.value.trim())
+  return Boolean(paperContent.value.trim()) || uploadedFiles.value.some(isPolishSourceFile)
 })
 
 const submitLabel = computed(() => props.mode === 'writing' ? '开始写作' : '开始润色')
@@ -185,11 +189,23 @@ function handleFileSelect(e: Event) {
 function addFiles(newFiles: File[]) {
   for (const f of newFiles) {
     const ext = '.' + (f.name.split('.').pop()?.toLowerCase() || '')
-    const allowed = ['.csv', '.xlsx', '.xls', '.json', '.txt', '.dat', '.tsv', '.md']
+    const allowed = props.mode === 'writing'
+      ? Array.from(new Set([...commonDataExtensions, ...writingSourceExtensions]))
+      : Array.from(new Set([...commonDataExtensions, ...polishSourceExtensions]))
     if (allowed.includes(ext) && !uploadedFiles.value.some(uf => uf.name === f.name)) {
       uploadedFiles.value.push(f)
     }
   }
+}
+
+function isWritingSourceFile(file: File) {
+  const ext = '.' + (file.name.split('.').pop()?.toLowerCase() || '')
+  return writingSourceExtensions.includes(ext)
+}
+
+function isPolishSourceFile(file: File) {
+  const ext = '.' + (file.name.split('.').pop()?.toLowerCase() || '')
+  return polishSourceExtensions.includes(ext)
 }
 
 function removeFile(index: number) {

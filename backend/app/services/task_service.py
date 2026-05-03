@@ -41,6 +41,7 @@ class TaskManager:
         work_dir = os.path.join(settings.WORK_DIR, task_id)
         os.makedirs(work_dir, exist_ok=True)
         os.makedirs(os.path.join(work_dir, "data"), exist_ok=True)
+        os.makedirs(os.path.join(work_dir, "inputs"), exist_ok=True)
 
         task_info = {
             "task_id": task_id,
@@ -57,6 +58,12 @@ class TaskManager:
             "source_question": source_question,
             "paper_content": paper_content,
             "polishing_requirements": polishing_requirements,
+            "source_question_text": "",
+            "source_question_file": "",
+            "source_paper_file": "",
+            "source_bundle_dir": "",
+            "source_markdown_file": "",
+            "source_image_manifest": [],
         }
         self._active_tasks[task_id] = task_info
 
@@ -105,6 +112,21 @@ class TaskManager:
             self._save_task_info(task_id, task)
 
         logger.info(f"任务 {task_id} 状态更新: {status.value}")
+
+    def update_task_fields(self, task_id: str, **fields) -> Optional[dict]:
+        """更新任务附加字段并持久化。"""
+        task = self.get_task(task_id)
+        if not task:
+            return None
+
+        task.update(fields)
+        if task_id in self._active_tasks:
+            self._active_tasks[task_id].update(fields)
+            self._save_task_info(task_id, self._active_tasks[task_id])
+            return self._active_tasks[task_id]
+
+        self._save_task_info(task_id, task)
+        return task
 
     def register_workflow_task(self, task_id: str, workflow_task: asyncio.Task) -> None:
         """登记运行中的工作流任务，便于后续取消。"""

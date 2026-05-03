@@ -192,6 +192,7 @@ const agentMetaByTaskType: Record<TaskType, AgentMeta[]> = {
     { id: 'analysis', label: '结果验证', icon: '📈', color: 'rgba(5, 150, 105, 0.22)' },
     { id: 'charts', label: '图表一致性', icon: '📊', color: 'rgba(124, 58, 237, 0.18)' },
     { id: 'writing', label: '论文组织', icon: '📝', color: 'rgba(22, 163, 74, 0.18)' },
+    { id: 'final_audit', label: '最终审查', icon: '🛡️', color: 'rgba(99, 102, 241, 0.18)' },
   ],
   polish: [
     { id: 'breakdown', label: '题目拆解', icon: '🧭', color: 'rgba(15, 118, 110, 0.22)' },

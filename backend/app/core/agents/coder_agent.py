@@ -31,6 +31,8 @@ class CoderAgent(Agent):
         self.is_first_run = True
         self.system_prompt = CODER_PROMPT
         self.code_interpreter = code_interpreter
+        self.last_executed_code = ""
+        self.same_code_repeat_count = 0
 
     async def _soft_reset_retry_limit(self, last_error_message: str):
         logger.warning(f"达到最大尝试次数，重置计数并继续: {self.max_retries}")
@@ -45,8 +47,9 @@ class CoderAgent(Agent):
             {
                 "role": "user",
                 "content": (
-                    "你已经多次因为同一类错误反复失败。不要终止当前子任务，也不要重复之前的失败方案。"
+                    "你已经多次因为同一类错误反复失败。不要重复之前的失败方案。"
                     "请基于现有上下文继续完成当前子任务，优先采用更稳健、更简化、更少依赖的实现路径。"
+                    "如果已经获得足够结果，请停止调用工具，直接输出最终结论。"
                     f"最后一次错误信息如下：{last_error_message}"
                 ),
             }
@@ -65,12 +68,46 @@ class CoderAgent(Agent):
             {
                 "role": "user",
                 "content": (
-                    "你已经进行了很多轮对话。不要终止当前子任务。"
+                    "你已经进行了很多轮对话。"
                     "请停止重复尝试，基于当前已有结果收敛到一个可执行且可交付的方案，"
-                    "必要时采用更简单的近似、降级实现或分步完成策略，但必须继续推进当前子任务直到完成。"
+                    "必要时采用更简单的近似、降级实现或分步完成策略。"
+                    "如果当前子任务实际上已经完成，请直接输出最终结果，不要继续调用工具。"
                 ),
             }
         )
+
+    async def _handle_repeated_code(self, code: str, subtask_title: str) -> bool:
+        """连续重复执行同一段代码时，强制模型收敛而不是无休止重跑。"""
+        if code == self.last_executed_code:
+            self.same_code_repeat_count += 1
+        else:
+            self.last_executed_code = code
+            self.same_code_repeat_count = 1
+
+        if self.same_code_repeat_count < 3:
+            return False
+
+        logger.warning("检测到相同代码被连续重复执行，要求模型直接收口输出")
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content="检测到代码手重复执行相同代码，已要求其停止重跑并直接总结结果",
+                type="warning",
+                agent="coder",
+            ),
+        )
+        await self.append_chat_history(
+            {
+                "role": "user",
+                "content": (
+                    f"你刚刚已经连续多次执行完全相同的代码。不要再次执行这段代码。"
+                    f"请基于现有输出判断{subtask_title}是否已经完成："
+                    "若已完成，直接输出最终结果摘要、关键结论、生成文件和后续建议；"
+                    "若未完成，只允许提出下一步与当前代码不同的必要动作。"
+                ),
+            }
+        )
+        return True
 
     async def run(self, prompt: str, subtask_title: str) -> CoderToWriter:
         logger.info(f"{self.__class__.__name__}:开始:执行子任务: {subtask_title}")
@@ -144,6 +181,9 @@ class CoderAgent(Agent):
 
                         code = json.loads(tool_call.function.arguments)["code"]
 
+                        if await self._handle_repeated_code(code, subtask_title):
+                            continue
+
                         await redis_manager.publish_message(
                             self.task_id,
                             InterpreterMessage(
@@ -204,6 +244,24 @@ class CoderAgent(Agent):
                                     "tool_call_id": tool_id,
                                     "name": "execute_code",
                                     "content": text_to_gpt,
+                                }
+                            )
+                            await redis_manager.publish_message(
+                                self.task_id,
+                                InterpreterMessage(
+                                    type="result",
+                                    content=text_to_gpt,
+                                    section=subtask_title,
+                                ),
+                            )
+                            await self.append_chat_history(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "上一步代码已成功执行。"
+                                        "如果当前子任务已经完成，请直接输出最终结果，不要继续调用工具；"
+                                        "只有在确实需要新的、不同的计算或文件操作时，才继续调用工具。"
+                                    ),
                                 }
                             )
                             # 成功执行后继续循环，等待下一步指令

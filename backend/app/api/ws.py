@@ -58,6 +58,7 @@ async def _safe_send_json(websocket: WebSocket, message: dict) -> bool:
         return False
 
 
+@router.websocket("/{task_id}")
 @router.websocket("/ws/{task_id}")
 async def websocket_endpoint(websocket: WebSocket, task_id: str):
     """WebSocket 连接 - 实时推送任务进度"""

@@ -9,6 +9,15 @@ from pydantic import BaseModel
 from app.services.task_service import task_manager
 from app.services.config_manager import config_manager
 from app.services.redis_manager import redis_manager
+from app.services.source_ingest import (
+    PAPER_SOURCE_EXTENSIONS,
+    QUESTION_SOURCE_EXTENSIONS,
+    SUPPLEMENTARY_EXTENSIONS,
+    SourceIngestError,
+    ingest_paper_source,
+    ingest_question_source,
+    purpose_for_upload,
+)
 from app.core.workflow import run_workflow
 from app.schemas.enums import TaskStatus
 from app.schemas.response import (
@@ -27,6 +36,7 @@ class CreateTaskRequest(BaseModel):
     source_question: str = ""
     paper_content: str = ""
     polishing_requirements: str = ""
+    expect_files: bool = False
 
 
 class TaskResponse(BaseModel):
@@ -36,7 +46,7 @@ class TaskResponse(BaseModel):
     work_dir: str = ""
 
 
-ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".json", ".txt", ".dat", ".tsv"}
+ALLOWED_EXTENSIONS = SUPPLEMENTARY_EXTENSIONS | QUESTION_SOURCE_EXTENSIONS | PAPER_SOURCE_EXTENSIONS
 
 
 class ModelingCompatResponse(BaseModel):
@@ -82,10 +92,10 @@ async def create_task(req: CreateTaskRequest):
     if task_type not in {"writing", "polish"}:
         raise HTTPException(status_code=400, detail="不支持的任务类型")
 
-    if task_type == "writing" and not req.question.strip():
+    if task_type == "writing" and not req.question.strip() and not req.expect_files:
         raise HTTPException(status_code=400, detail="问题不能为空")
 
-    if task_type == "polish" and not req.paper_content.strip():
+    if task_type == "polish" and not req.paper_content.strip() and not req.expect_files:
         raise HTTPException(status_code=400, detail="润色任务需要提供论文内容")
 
     task_id = task_manager.create_task(
@@ -320,8 +330,12 @@ async def revise_paper(task_id: str, req: RevisionRequest):
 # ============================================================
 
 @router.post("/tasks/{task_id}/upload")
-async def upload_dataset(task_id: str, file: UploadFile = File(...)):
-    """上传数据集文件到任务的数据目录"""
+async def upload_dataset(
+    task_id: str,
+    file: UploadFile = File(...),
+    purpose: str = Form(default="auto"),
+):
+    """上传任务相关文件，并在需要时解析题目或论文源材料。"""
     task = task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -333,10 +347,17 @@ async def upload_dataset(task_id: str, file: UploadFile = File(...)):
             detail=f"不支持的文件类型: {ext}。支持: {', '.join(ALLOWED_EXTENSIONS)}",
         )
 
-    data_dir = os.path.join(task["work_dir"], "data")
-    os.makedirs(data_dir, exist_ok=True)
+    upload_purpose = purpose_for_upload(task.get("task_type", "writing"), file.filename or "", purpose)
+    if upload_purpose == "question_source":
+        target_dir = os.path.join(task["work_dir"], "inputs", "question")
+    elif upload_purpose == "paper_source":
+        target_dir = os.path.join(task["work_dir"], "inputs", "paper")
+    else:
+        target_dir = os.path.join(task["work_dir"], "data")
 
-    filepath = os.path.join(data_dir, file.filename or "dataset" + ext)
+    os.makedirs(target_dir, exist_ok=True)
+
+    filepath = os.path.join(target_dir, file.filename or ("upload" + ext))
     try:
         with open(filepath, "wb") as f:
             content = await file.read()
@@ -346,13 +367,31 @@ async def upload_dataset(task_id: str, file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"文件保存失败: {e}")
 
+    task_updates = {}
+    if upload_purpose == "question_source":
+        try:
+            task_updates = ingest_question_source(filepath, task)
+        except SourceIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif upload_purpose == "paper_source":
+        try:
+            task_updates = ingest_paper_source(filepath, task)
+        except SourceIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if task_updates:
+        task = task_manager.update_task_fields(task_id, **task_updates) or task
+
     # 列出当前所有数据文件
-    files = os.listdir(data_dir)
+    data_dir = os.path.join(task["work_dir"], "data")
+    files = os.listdir(data_dir) if os.path.exists(data_dir) else []
     return {
         "message": f"文件 {file.filename} 上传成功",
         "filename": file.filename,
         "path": filepath,
         "size_kb": round(file_size_kb, 1),
+        "purpose": upload_purpose,
+        "task_updates": task_updates,
         "data_files": files,
     }
 

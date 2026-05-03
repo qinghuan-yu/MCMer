@@ -220,7 +220,20 @@ function submitRevise() {
 
 async function loadHistory() {
   const res = await fetch('/api/history')
-  const data = await res.json()
+  const text = await res.text()
+  let data: any = {}
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = {}
+    }
+  }
+
+  if (!res.ok) {
+    throw new Error(data.detail || data.message || text || `加载历史失败 (HTTP ${res.status})`)
+  }
+
   tasks.value = data.tasks || []
 }
 

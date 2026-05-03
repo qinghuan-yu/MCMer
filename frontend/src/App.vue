@@ -73,7 +73,7 @@
                 <strong>建模</strong>
               </div>
               <div class="divider"></div>
-              <div class="step" :class="{ 'active-step': currentStage === 'solve' || currentStage === 'analysis' || currentStage === 'charts' || currentStage === 'writing' || currentStage === 'recalculation' || currentStage === 'chart_consistency' || currentStage === 'wording' }">
+              <div class="step" :class="{ 'active-step': currentStage === 'solve' || currentStage === 'analysis' || currentStage === 'charts' || currentStage === 'writing' || currentStage === 'final_audit' || currentStage === 'recalculation' || currentStage === 'chart_consistency' || currentStage === 'wording' }">
                 <span>03</span>
                 <strong>写作</strong>
               </div>
@@ -232,9 +232,9 @@ const pageClass = computed(() => `view-${currentView.value}`)
 const entryOptions = [
   {
     id: 'writing' as TaskType,
-    kicker: '7 AGENTS',
+    kicker: '8 AGENTS',
     title: '写作功能',
-    description: '题目拆解、建模、审查、求解、验证、图表、成文。',
+    description: '题目拆解、建模、审查、求解、验证、图表、成文与最终审查。',
   },
   {
     id: 'polish' as TaskType,
@@ -245,6 +245,17 @@ const entryOptions = [
 ]
 function switchView(view: ViewState) {
   currentView.value = view
+}
+
+function uploadPurposeForFile(taskType: TaskType, file: File) {
+  const ext = `.${file.name.split('.').pop()?.toLowerCase() || ''}`
+  if (taskType === 'writing' && ['.pdf', '.docx', '.txt', '.md'].includes(ext)) {
+    return 'question_source'
+  }
+  if (taskType === 'polish' && ['.zip', '.md', '.pdf', '.docx'].includes(ext)) {
+    return 'paper_source'
+  }
+  return 'supplementary_data'
 }
 
 function resetRuntimeState() {
@@ -377,6 +388,15 @@ function hydrateRuntimeState(runtimeMessages: RuntimeMessage[]) {
 async function syncTaskMessages(taskId: string) {
   const res = await fetch(`/api/tasks/${taskId}/messages`)
   if (!res.ok) {
+    if (res.status === 404 && currentTaskId.value === taskId) {
+      stopRuntimeTracking()
+      taskStatus.value = 'cancelled'
+      isRunning.value = false
+      currentStage.value = 'done'
+      progress.value = 1
+      return
+    }
+
     if (currentTaskId.value === taskId && taskStatus.value === 'running' && !activeSocket) {
       void recoverRunningTask(taskId, isRevision.value, runtimeSourceView.value)
     } else {
@@ -431,6 +451,7 @@ async function handleSubmit(payload: TaskDraftPayload) {
         source_question: payload.sourceQuestion,
         paper_content: payload.paperContent,
         polishing_requirements: payload.polishingRequirements,
+        expect_files: payload.files.length > 0,
       }),
     })
     if (!createRes.ok) {
@@ -444,13 +465,19 @@ async function handleSubmit(payload: TaskDraftPayload) {
       for (const file of payload.files) {
         const formData = new FormData()
         formData.append('file', file)
+        formData.append('purpose', uploadPurposeForFile(payload.taskType, file))
         try {
-          await fetch(`/api/tasks/${taskId}/upload`, {
+          const uploadRes = await fetch(`/api/tasks/${taskId}/upload`, {
             method: 'POST',
             body: formData,
           })
+          if (!uploadRes.ok) {
+            const data = await uploadRes.json().catch(() => ({}))
+            throw new Error(data.detail || `上传文件 ${file.name} 失败`)
+          }
         } catch (e) {
           console.error(`上传文件 ${file.name} 失败:`, e)
+          throw e
         }
       }
     }
@@ -546,7 +573,7 @@ function startWebSocket(
   startMessagePolling(taskId)
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${protocol}//${window.location.host}/ws/ws/${taskId}`
+  const wsUrl = `${protocol}//${window.location.host}/ws/${taskId}`
   const ws = new WebSocket(wsUrl)
   activeSocket = ws
 
@@ -640,7 +667,19 @@ async function handleStopTask(taskId: string) {
     const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
-      throw new Error(data.detail || '停止任务失败')
+      const detail = data.detail || '停止任务失败'
+      if (
+        (res.status === 400 && String(detail).includes('任务当前不在运行中')) ||
+        res.status === 404
+      ) {
+        taskStatus.value = 'cancelled'
+        isRunning.value = false
+        progress.value = 1
+        currentStage.value = 'done'
+        stopRuntimeTracking()
+        return
+      }
+      throw new Error(detail)
     }
 
     taskStatus.value = 'cancelled'

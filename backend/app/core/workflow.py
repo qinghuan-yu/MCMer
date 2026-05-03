@@ -7,6 +7,7 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.llm.llm import LLM
+from app.core.prompts import POLISH_STAGE_SYSTEM_PROMPTS, WRITING_STAGE_SYSTEM_PROMPTS
 from app.schemas.enums import FormatOutPut, TaskStatus
 from app.schemas.response import TaskProgress, TaskResult
 from app.services.config_manager import config_manager
@@ -16,75 +17,6 @@ from app.tools.local_interpreter import LocalCodeInterpreter
 from app.tools.openalex_scholar import OpenAlexScholar
 from app.utils.common_utils import get_current_files, md_to_docx, save_json
 from app.utils.log_util import logger
-
-WRITING_STAGE_SYSTEM_PROMPTS = {
-    "breakdown": """你是一个数学建模题目拆解专家。你的任务是深度理解用户提供的数学建模竞赛题目，并输出结构化的题目拆解。
-
-请完成以下分析：
-1. 用简洁语言总结问题背景与实际意义。
-2. 精确提取题目中要求的目标（优化、预测、分类、评估等）。
-3. 列出所有已知条件、参数、数据及其格式。
-4. 指出题目隐含的约束与合理的假设空间。
-5. 将总问题拆解为若干个可逐步解决的子问题或关键步骤。
-6. 给出可能需要的数据来源、理论工具或求解方向提示（只提示，不建模）。
-
-输出格式：使用 Markdown 分节，确保层次清晰，便于后续 Agent 使用。""",
-    "modeling": """你是一位数学建模专家，负责根据问题拆解结果建立严谨的数学模型。
-
-你将收到题目拆解结果。请完成：
-1. 提出一组合理且必要的简化假设，并说明每条假设的理由和可能影响。
-2. 定义所有变量和参数的符号，生成符号说明表（符号、含义、单位）。
-3. 针对各子问题逐一构建数学模型，写出数学表达式（目标函数、约束、方程等），并用 LaTeX 格式呈现。
-4. 解释每个模型的机制，保证模型内部逻辑一致且与假设相符。
-
-输出结构：假设列表、符号说明表、模型公式与解释。确保专业、自洽，可直接供审查。""",
-    "review": """你是一位极其严谨的数学建模审查员，专门独立检查模型的正确性、一致性和可行性。
-
-你将收到题目拆解结果与建模结果。请执行以下审查：
-1. 检查每条假设是否与问题目标一致，是否有矛盾、过度简化或与已知条件冲突。
-2. 验证符号定义是否清晰且无歧义，所有公式中的符号是否前后一致。
-3. 审查数学模型的合理性：结构是否正确、是否可解、是否存在逻辑漏洞或隐藏错误。
-4. 指出可能被遗漏的关键因素，或更优的替代假设及建模思路。
-5. 给出整体评审意见（优点、缺陷、风险），并对模型整体可靠性进行 1~10 分评分。
-
-请以评审报告形式输出，语气客观专业，不修改模型，只给出批判性意见。""",
-    "analysis": """你是一位数据分析和模型验证专家，负责对求解结果进行深度分析和复核。
-
-你将接收求解输出、原模型信息以及问题背景。请执行：
-1. 对计算结果进行合理性检查（量纲、数量级、极端情况验证），必要时提出复核验算手段。
-2. 进行灵敏度分析建议或基于现有结果给出稳健性判断。
-3. 进行误差分析，明确误差来源并估计影响。
-4. 用清晰自然语言解释结果，回答原始问题，得出有洞察的结论。
-5. 总结模型的优缺点、适用性及未来改进方向，并给出需要绘制的图表建议（图类型、数据列）。
-
-输出为一份结构化的结果分析与验证报告。""",
-    "final_writer": """你是一位经验丰富的数学建模论文撰写专家，负责将全部建模成果整合为一篇完整、流畅、专业的学术论文。
-
-你将接收前序所有 Agent 的输出。请完成：
-1. 按照标准结构撰写论文：摘要、问题重述、模型假设与符号说明、模型建立与求解、结果分析与模型检验、结论与建议、参考文献。
-2. 全文逻辑链条严密，从问题驱动到建模再到结论，自然过渡，无逻辑断裂。
-3. 所有数学公式使用 LaTeX 格式，正确引用图表编号，并在正文中合理穿插图表。
-4. 语言风格严谨、客观、简洁，符合学术规范，杜绝口语化表达。
-5. 主动检测并修正前后不一致之处（符号、数据、论点），必要时在输出中标明存疑点。
-6. 最终输出完整的 Markdown 论文全文，可直接用于提交或排版。
-
-只输出论文正文，不要再附加说明。""",
-}
-
-POLISH_STAGE_SYSTEM_PROMPTS = {
-    "breakdown": """你是一个论文润色任务的题目拆解 Agent。你的任务是把题目转成人话，列出每问输入、输出、约束、目标，并指出论文当前需要回应的关键检查点。
-
-请以 Markdown 分节输出，语言简洁明确。""",
-    "consistency": """你是模型一致性审查 Agent。请检查公式、变量、假设、结论是否前后一致，指出不一致、缺失或逻辑跳跃之处，并输出结构化审查报告。""",
-    "chart_review": """你是图文一致性审查 Agent。请检查文字所说的线性、最优、增长、趋势等表述，是否被图表和数据支持；若证据不足，请明确指出。输出图文一致性报告。""",
-    "wording": """你是论文措辞修订 Agent。请把虚的、夸大的、没证据的句子改成竞赛论文风格，并基于已有审查意见输出一篇更严谨的完整 Markdown 论文。
-
-要求：
-1. 保留原文结构中有效内容。
-2. 修正不一致、缺证据、过度表述的问题。
-3. 对无法确认的数据或结论使用审慎措辞。
-4. 只输出润色后的完整论文正文。""",
-}
 
 
 def _preview(text: str, limit: int = 320) -> str:
@@ -99,6 +31,29 @@ def _message(agent: str, content: str, msg_type: str = "success", section: str =
     if section:
         payload["section"] = section
     return payload
+
+
+def _resolve_question(task: dict) -> str:
+    question = (task.get("question") or "").strip()
+    source_text = (task.get("source_question_text") or "").strip()
+
+    if source_text and question and source_text != question:
+        return f"{question}\n\n# 附件原题文本\n{source_text}"
+    if source_text:
+        return source_text
+    return question
+
+
+def _image_manifest_text(image_manifest: list[dict] | None) -> str:
+    if not image_manifest:
+        return "未提供图片资源"
+
+    rows = ["| 图片路径 | 是否被 Markdown 引用 | 大小(KB) |", "| --- | --- | ---: |"]
+    for item in image_manifest:
+        rows.append(
+            f"| {item.get('path', '')} | {'是' if item.get('referenced') else '否'} | {item.get('size_kb', 0)} |"
+        )
+    return "\n".join(rows)
 
 
 def _progress(
@@ -178,9 +133,12 @@ async def _finalize_outputs(
 
 
 async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, None]:
-    question = task.get("question", "")
+    question = _resolve_question(task)
     work_dir = task["work_dir"]
     task_manager.update_status(task_id, TaskStatus.RUNNING)
+
+    if not question.strip():
+        raise ValueError("写作任务缺少原始题目内容，请输入题目或上传 docx/pdf 原题文件")
 
     models = _build_models()
     code_interpreter = _build_code_interpreter(work_dir)
@@ -265,7 +223,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 模型方案\n{stage_outputs['modeling']}\n\n"
             f"# 审查报告\n{stage_outputs['review']}\n\n"
             f"# 求解输出\n{solver_result.coder_response}\n\n"
-            "请形成结构化的结果分析与验证报告，并列出需要绘制的图表建议。"
+            "请按系统提示中的固定结构输出结果分析与验证报告，并把每个关键结论回链到证据。"
         )
         stage_outputs["analysis"] = await _run_text_agent(
             task_id,
@@ -303,6 +261,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             format_output=FormatOutPut.Markdown,
             scholar=scholar,
         )
+        writer.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["final_writer"]
         final_prompt = (
             f"# 原题\n{question}\n\n"
             f"# 题目拆解\n{stage_outputs['breakdown']}\n\n"
@@ -320,6 +279,43 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
         final_paper = final_writer_result.response_content
         yield _message("writing", _preview(final_paper), section="论文组织与润色")
+
+        yield _progress(task_id, "final_audit", 0.96, "最终审查 Agent 正在核对审查意见是否被落实", current_subtask="最终审查")
+        audit_prompt = (
+            f"# 原题\n{question}\n\n"
+            f"# 模型审查报告\n{stage_outputs['review']}\n\n"
+            f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
+            f"# 图表一致性结果\n{chart_result.coder_response}\n\n"
+            f"# 最终论文\n{final_paper}\n\n"
+            "请检查最终论文是否完整吸收前序审查意见，是否仍存在无证据结论、符号不一致、图文不一致或无法验证的断言。"
+        )
+        audit_report = await _run_text_agent(
+            task_id,
+            models["review"],
+            WRITING_STAGE_SYSTEM_PROMPTS["final_audit"],
+            audit_prompt,
+            "最终审查",
+        )
+        stage_outputs["final_audit"] = audit_report
+        yield _message("final_audit", _preview(audit_report), section="最终审查")
+
+        audit_first_line = audit_report.splitlines()[0].upper() if audit_report.splitlines() else ""
+        if "审计结论：BLOCK" in audit_report or "AUDIT结论：BLOCK" in audit_report or "BLOCK" in audit_first_line:
+            yield _progress(task_id, "writing", 0.985, "论文组织与润色 Agent 正在根据最终审查修订全文", current_subtask="审查后修订")
+            revision_prompt = (
+                f"# 原题\n{question}\n\n"
+                f"# 已生成论文\n{final_paper}\n\n"
+                f"# 最终审查报告\n{audit_report}\n\n"
+                "请严格根据最终审查报告修订全文。若某问题仍无法修正，必须在正文中降级措辞，不得忽略。"
+            )
+            revised_writer_result = await writer.run(
+                prompt=revision_prompt,
+                available_images=solver_images + chart_images,
+                sub_title="审查后修订",
+            )
+            final_paper = revised_writer_result.response_content
+            stage_outputs["writing_revision"] = final_paper
+            yield _message("writing", _preview(final_paper), section="审查后修订")
 
         paper_path, notebook_path = await _finalize_outputs(
             task_id=task_id,
@@ -370,12 +366,17 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
     work_dir = task["work_dir"]
     task_manager.update_status(task_id, TaskStatus.RUNNING)
 
-    question = task.get("source_question", "") or task.get("question", "")
+    question = (task.get("source_question") or _resolve_question(task) or task.get("question", ""))
     paper_content = task.get("paper_content", "")
     if not paper_content and task.get("parent_task_id"):
         paper_content = task_manager.load_paper(task.get("parent_task_id", "")) or ""
     requirements = task.get("polishing_requirements", "") or task.get("feedback", "")
     data_context = get_current_files(work_dir, "data")
+    image_manifest = task.get("source_image_manifest", [])
+    image_manifest_text = _image_manifest_text(image_manifest)
+
+    if not paper_content.strip():
+        raise ValueError("润色任务缺少论文正文，请粘贴 Markdown 内容或上传 zip/docx/pdf 论文源文件")
 
     models = _build_models()
     code_interpreter = _build_code_interpreter(work_dir)
@@ -392,6 +393,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         breakdown_prompt = (
             f"# 原始题目\n{question or '未提供'}\n\n"
             f"# 用户润色要求\n{requirements or '请自动识别论文中的逻辑与措辞问题'}\n\n"
+            f"# 图片资源清单\n{image_manifest_text}\n\n"
             f"# 原论文\n{paper_content}\n\n"
             "请输出本次润色任务的结构化拆解。"
         )
@@ -408,6 +410,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         consistency_prompt = (
             f"# 原始题目\n{question or '未提供'}\n\n"
             f"# 任务拆解\n{stage_outputs['breakdown']}\n\n"
+            f"# 图片资源清单\n{image_manifest_text}\n\n"
             f"# 原论文\n{paper_content}\n\n"
             "请给出结构化的一致性审查报告。"
         )
@@ -429,13 +432,15 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             max_retries=settings.MAX_RETRIES,
             code_interpreter=code_interpreter,
         )
+        recalculation_agent.system_prompt = POLISH_STAGE_SYSTEM_PROMPTS["recalculation"]
         recalculation_prompt = (
             f"## 原始题目\n{question or '未提供'}\n\n"
             f"## 用户要求\n{requirements or '请自动完成论文复核'}\n\n"
             f"## 原论文\n{paper_content}\n\n"
             f"## 一致性问题\n{stage_outputs['consistency']}\n\n"
             f"## 可用数据文件\n{data_context}\n\n"
-            "请重新跑表格、拟合、图像或关键数值；若缺少数据，请明确说明无法复核的部分，并给出保守判断。"
+            f"## 图片资源清单\n{image_manifest_text}\n\n"
+            "请重新跑表格、拟合、图像或关键数值；若图片异常且可重绘，请直接生成替代图并说明替换建议。输出必须遵守系统提示中的固定结构。"
         )
         recalculation_result = await recalculation_agent.run(
             prompt=recalculation_prompt,
@@ -450,7 +455,8 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             f"# 任务拆解\n{stage_outputs['breakdown']}\n\n"
             f"# 一致性审查\n{stage_outputs['consistency']}\n\n"
             f"# 数据复核结果\n{recalculation_result.coder_response}\n\n"
-            "请输出图文一致性审查报告，指出哪些表述被数据支持，哪些需要降级措辞。"
+            f"# 图片资源清单\n{image_manifest_text}\n\n"
+            "请输出图文一致性审查报告，逐条判断表述是否被图像、公式、表格或复核结果支持，并识别需要重绘或替换的图片。"
         )
         stage_outputs["chart_consistency"] = await _run_text_agent(
             task_id,
@@ -468,6 +474,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             format_output=FormatOutPut.Markdown,
             scholar=scholar,
         )
+        writer.system_prompt = POLISH_STAGE_SYSTEM_PROMPTS["wording"]
         wording_prompt = (
             f"# 原始题目\n{question or '未提供'}\n\n"
             f"# 原论文\n{paper_content}\n\n"
@@ -476,7 +483,9 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             f"# 模型一致性审查\n{stage_outputs['consistency']}\n\n"
             f"# 数据计算复核\n{recalculation_result.coder_response}\n\n"
             f"# 图文一致性审查\n{stage_outputs['chart_consistency']}\n\n"
-            "请输出修订后的完整 Markdown 论文。"
+            f"# 图片资源清单\n{image_manifest_text}\n\n"
+            f"# 可用替代图片\n{', '.join(recalculation_result.created_images) if recalculation_result.created_images else '无'}\n\n"
+            "请输出修订后的完整 Markdown 论文；若需要替换图片，请同步更新 Markdown 图片路径。"
         )
         wording_result = await writer.run(
             prompt=wording_prompt,

@@ -5,7 +5,6 @@
 import os
 import glob
 import asyncio
-import uuid
 from typing import Optional
 
 import nbformat
@@ -27,6 +26,63 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self.current_section = ""
         self._initialized = False
 
+    @staticmethod
+    def _kernel_bootstrap_code(work_dir: str) -> str:
+        return f"""
+import os
+os.chdir(r'''{work_dir}''')
+
+try:
+    import matplotlib
+    matplotlib.rcParams['font.sans-serif'] = [
+        'Microsoft YaHei',
+        'SimHei',
+        'Noto Sans CJK SC',
+        'PingFang SC',
+        'WenQuanYi Zen Hei',
+        'Arial Unicode MS',
+        'DejaVu Sans',
+    ]
+    matplotlib.rcParams['axes.unicode_minus'] = False
+except Exception:
+    pass
+""".strip()
+
+    async def _run_kernel_code(self, code: str, timeout: int = 30) -> tuple[str, bool, str]:
+        """在已启动的 kernel 中直接执行代码，避免初始化阶段递归进入 execute_code。"""
+        msg_id = self.kernel_client.execute(code)
+
+        outputs: list[str] = []
+        error_occurred = False
+        error_message = ""
+
+        while True:
+          try:
+              msg = await asyncio.wait_for(
+                  self.kernel_client.get_iopub_msg(), timeout=timeout
+              )
+          except asyncio.TimeoutError:
+              return "\n".join(outputs), True, "代码执行超时"
+
+          if msg.get("parent_header", {}).get("msg_id") != msg_id:
+              continue
+
+          msg_type = msg["header"]["msg_type"]
+          content = msg["content"]
+
+          if msg_type == "stream":
+              outputs.append(content.get("text", ""))
+          elif msg_type == "execute_result":
+              outputs.append(content.get("data", {}).get("text/plain", ""))
+          elif msg_type == "error":
+              outputs.append("\n".join(content.get("traceback", [])))
+              error_occurred = True
+              error_message = f"{content.get('ename', 'Error')}: {content.get('evalue', '')}"
+          elif msg_type == "status" and content.get("execution_state") == "idle":
+              break
+
+        return "\n".join(outputs), error_occurred, error_message
+
     async def _ensure_kernel(self):
         """确保 Kernel 已启动"""
         if self._initialized:
@@ -37,10 +93,15 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self.kernel_client = self.kernel_manager.client()
         self.kernel_client.start_channels()
         await self.kernel_client.wait_for_ready()
-
-        # 设置工作目录
-        await self.execute(f"import os; os.chdir(r'{self.work_dir}')", "init")
         self._initialized = True
+
+        # 设置工作目录并补齐 Matplotlib 中文字体配置
+        init_result, init_error, init_error_message = await self._run_kernel_code(
+            self._kernel_bootstrap_code(self.work_dir)
+        )
+        if init_error:
+            self._initialized = False
+            raise RuntimeError(init_error_message or init_result or "Kernel 初始化失败")
         logger.info("Jupyter Kernel 已启动")
 
     def add_section(self, title: str) -> None:
@@ -83,6 +144,9 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 except asyncio.TimeoutError:
                     outputs.append("[超时] 代码执行超过30秒")
                     return "\n".join(outputs), True, "代码执行超时"
+
+                if msg.get("parent_header", {}).get("msg_id") != msg_id:
+                    continue
 
                 msg_type = msg["header"]["msg_type"]
                 content = msg["content"]
