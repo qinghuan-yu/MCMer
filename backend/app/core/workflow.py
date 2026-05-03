@@ -278,6 +278,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             sub_title="论文组织与润色",
         )
         final_paper = final_writer_result.response_content
+        if not final_paper.strip():
+            raise ValueError("最终写作阶段返回空内容")
         yield _message("writing", _preview(final_paper), section="论文组织与润色")
 
         yield _progress(task_id, "final_audit", 0.96, "最终审查 Agent 正在核对审查意见是否被落实", current_subtask="最终审查")
@@ -493,6 +495,8 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             sub_title="论文措辞修订",
         )
         final_paper = wording_result.response_content
+        if not final_paper.strip():
+            raise ValueError("论文措辞修订阶段返回空内容")
         stage_outputs["wording"] = final_paper
         yield _message("wording", _preview(final_paper), section="论文措辞修订")
 

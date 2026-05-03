@@ -34,6 +34,53 @@ class WriterAgent(Agent):
         self.system_prompt = get_writer_prompt(format_output)
         self.available_images: list[str] = []
 
+    async def _run_search_papers_tool(self, tool_call, sub_title: str) -> None:
+        tool_id = tool_call.id
+        query = json.loads(tool_call.function.arguments)["query"]
+
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content=f"写作手调用{tool_call.function.name}工具",
+                agent="writer",
+            ),
+        )
+
+        await redis_manager.publish_message(
+            self.task_id,
+            WriterMessage(
+                type="text",
+                content=f"搜索文献: {query}",
+                section=sub_title,
+            ),
+        )
+
+        try:
+            papers = await self.scholar.search_papers(query)
+        except Exception as e:
+            error_msg = f"搜索文献失败: {str(e)}"
+            logger.error(error_msg)
+            await self.append_chat_history(
+                {
+                    "role": "tool",
+                    "content": error_msg,
+                    "tool_call_id": tool_id,
+                    "name": "search_papers",
+                }
+            )
+            return
+
+        papers_str = self.scholar.papers_to_str(papers)
+        logger.info(f"搜索文献结果\n{papers_str}")
+        await self.append_chat_history(
+            {
+                "role": "tool",
+                "content": papers_str,
+                "tool_call_id": tool_id,
+                "name": "search_papers",
+            }
+        )
+
     async def run(
         self,
         prompt: str,
@@ -74,77 +121,46 @@ class WriterAgent(Agent):
 
         await self.append_chat_history({"role": "user", "content": prompt})
 
-        # 获取历史消息用于本次对话
-        response = await self.model.chat(
-            history=self.chat_history,
-            tools=writer_tools,
-            tool_choice="auto",
-            agent_name=self.__class__.__name__,
-            sub_title=sub_title,
-        )
-
         footnotes = []
 
-        if (
-            hasattr(response.choices[0].message, "tool_calls")
-            and response.choices[0].message.tool_calls
-        ):
-            logger.info("检测到工具调用")
-            tool_call = response.choices[0].message.tool_calls[0]
-            tool_id = tool_call.id
-            if tool_call.function.name == "search_papers":
-                logger.info("调用工具: search_papers")
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(
-                        content=f"写作手调用{tool_call.function.name}工具",
-                        agent="writer",
+        response_content = ""
+        for _ in range(self.max_chat_turns):
+            response = await self.model.chat(
+                history=self.chat_history,
+                tools=writer_tools,
+                tool_choice="auto",
+                agent_name=self.__class__.__name__,
+                sub_title=sub_title,
+            )
+            message = response.choices[0].message
+
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                logger.info("检测到工具调用")
+                await self.append_chat_history(message.model_dump())
+                ic(message.model_dump())
+                for tool_call in message.tool_calls:
+                    if tool_call.function.name == "search_papers":
+                        logger.info("调用工具: search_papers")
+                        await self._run_search_papers_tool(tool_call, sub_title)
+                continue
+
+            response_content = (message.content or "").strip()
+            if response_content:
+                break
+
+            await self.append_chat_history(
+                {
+                    "role": "user",
+                    "content": (
+                        "你上一轮返回了空内容。"
+                        "请直接输出完整正文，不要只返回空字符串，也不要省略正文。"
                     ),
-                )
+                }
+            )
 
-                query = json.loads(tool_call.function.arguments)["query"]
+        if not response_content:
+            raise RuntimeError(f"{sub_title or '写作任务'} 返回空内容")
 
-                await redis_manager.publish_message(
-                    self.task_id,
-                    WriterMessage(
-                        type="text",
-                        content=f"搜索文献: {query}",
-                        section=sub_title,
-                    ),
-                )
-
-                # 更新对话历史 - 添加助手的响应
-                await self.append_chat_history(response.choices[0].message.model_dump())
-                ic(response.choices[0].message.model_dump())
-
-                try:
-                    papers = await self.scholar.search_papers(query)
-                except Exception as e:
-                    error_msg = f"搜索文献失败: {str(e)}"
-                    logger.error(error_msg)
-                    return WriterResponse(
-                        response_content=error_msg, footnotes=footnotes
-                    )
-                papers_str = self.scholar.papers_to_str(papers)
-                logger.info(f"搜索文献结果\n{papers_str}")
-                await self.append_chat_history(
-                    {
-                        "role": "tool",
-                        "content": papers_str,
-                        "tool_call_id": tool_id,
-                        "name": "search_papers",
-                    }
-                )
-                next_response = await self.model.chat(
-                    history=self.chat_history,
-                    tools=writer_tools,
-                    tool_choice="auto",
-                    agent_name=self.__class__.__name__,
-                    sub_title=sub_title,
-                )
-                response_content = next_response.choices[0].message.content
-        else:
-            response_content = response.choices[0].message.content
         await redis_manager.publish_message(
             self.task_id,
             WriterMessage(

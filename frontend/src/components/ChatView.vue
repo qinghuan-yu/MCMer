@@ -82,18 +82,6 @@
           </button>
         </div>
 
-        <div class="agent-tabs">
-          <button
-            v-for="tab in agentTabs"
-            :key="tab.id"
-            class="agent-tab"
-            :class="{ active: selectedAgent === tab.id }"
-            @click="selectedAgent = tab.id"
-          >
-            {{ tab.icon }} {{ tab.label }}
-          </button>
-        </div>
-
         <div class="timeline-title">{{ selectedAgentTitle }}</div>
         <div class="timeline-list">
           <div v-for="item in filteredAgentMessages" :key="`${item.id}-${selectedAgent}`" class="timeline-item">
@@ -226,10 +214,10 @@ const filteredAgentMessages = computed(() => {
 })
 
 const agentCards = computed(() => {
-  return agentTabs.value
-    .filter((tab) => tab.id !== 'all')
-    .map((tab) => {
-      const list = normalizedMessages.value.filter((item) => item.agent === tab.id)
+  return agentTabs.value.map((tab) => {
+      const list = tab.id === 'all'
+        ? normalizedMessages.value
+        : normalizedMessages.value.filter((item) => item.agent === tab.id)
       const last = list[list.length - 1]
       return {
         ...tab,
@@ -465,12 +453,13 @@ watch(
 
 .monitor-panel {
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-card);
   display: flex;
   flex-direction: column;
+  scrollbar-gutter: stable;
 }
 
 .monitor-title,
@@ -555,35 +544,11 @@ watch(
   overflow: hidden;
 }
 
-.agent-tabs {
-  padding: 12px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.agent-tab {
-  border: 1px solid var(--border);
-  background: transparent;
-  border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.agent-tab.active {
-  background: rgba(36, 78, 168, 0.1);
-  border-color: rgba(36, 78, 168, 0.32);
-  color: var(--blue);
-}
-
 .timeline-list {
   padding: 10px 12px;
-  overflow-y: auto;
+  overflow: visible;
   min-height: 0;
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
