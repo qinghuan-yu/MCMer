@@ -3,6 +3,8 @@
    Minimal Design System
    ============================================ */
 
+@import '@fontsource-variable/inter';
+
 :root {
   --blue: #244ea8;
   --blue-dark: #1f4393;
@@ -35,7 +37,7 @@ html {
 }
 
 body {
-  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  font-family: 'Inter Variable', 'Inter', 'SF Pro Display', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
