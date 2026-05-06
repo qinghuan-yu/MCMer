@@ -77,7 +77,7 @@
             </section>
           </template>
 
-          <section v-else-if="currentView === 'history'" class="content-area" data-layout-anchor="history-content">
+          <section v-else-if="currentView === 'history'" class="content-area history-content-area" data-layout-anchor="history-content">
             <HistoryView
               @open-project="handleOpenProject"
               @view-paper="handleViewPaper"
@@ -843,11 +843,6 @@ onBeforeUnmount(() => {
   transition: opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.view-fade-leave-active {
-  position: absolute;
-  inset: 0;
-}
-
 .view-fade-enter-from,
 .view-fade-leave-to {
   opacity: 0;
@@ -1055,6 +1050,13 @@ onBeforeUnmount(() => {
   margin: 0 auto;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.history-content-area {
+  height: auto;
+  min-height: calc(100vh - 112px);
+  overflow: visible;
+  padding-bottom: 56px;
 }
 
 /* ---- Steps ---- */

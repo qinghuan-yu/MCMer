@@ -8,6 +8,762 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+PLACEHOLDER_PATTERNS = [
+    "张三", "李四", "王五", "赵六", "陈七", "刘八",
+    "某某", "xxx", "xx", "todo", "tbd", "待补充", "参考文献待完善", "作者待补", "年份待补",
+]
+
+BAD_MATH_PATTERNS = [
+    r"=\s*$",
+    r"\(\s*\)",
+    r"\[\s*\]",
+    r"\$\$\s*\$\$",
+    r"其中，\s*为",
+]
+
+UNIT_RULES = {
+    "MPa": "N/mm^2",
+    "kN*mm": "N*m",
+    "GPa_to_MPa": 1000,
+    "P_kN_to_N": 1000,
+}
+
+STRONG_RESULT_KEYS = {
+    "id",
+    "name",
+    "value",
+    "computed_value",
+    "paper_value",
+    "verified",
+    "status",
+    "formula",
+    "inputs",
+    "source_data",
+    "code_cell",
+}
+
+BLOCKED_STATUS_HINTS = {"blocked", "failed", "mismatch", "unverified", "阻断", "失败", "不通过"}
+
+
+def _slugify_identifier(text: str, fallback: str = "item") -> str:
+    value = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_]+", "_", (text or "").strip())
+    value = re.sub(r"_+", "_", value).strip("_")
+    return value or fallback
+
+
+def _parse_numeric_value(raw_value: Any) -> float | None:
+    if isinstance(raw_value, (int, float)):
+        return float(raw_value)
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip().replace(",", "")
+    if not text:
+        return None
+    suffix = 0.01 if text.endswith("%") else 1.0
+    if suffix != 1.0:
+        text = text[:-1]
+    try:
+        return float(text) * suffix
+    except Exception:
+        return None
+
+
+def _deduplicate_dict_rows(rows: list[dict[str, Any]], keys: list[str]) -> list[dict[str, Any]]:
+    unique_rows: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in rows:
+        marker = tuple(row.get(key) for key in keys)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique_rows.append(row)
+    return unique_rows
+
+
+def extract_symbol_assignments(text: str) -> dict[str, dict[str, Any]]:
+    assignments: dict[str, dict[str, Any]] = {}
+    pattern = re.compile(
+        r"(?P<name>[A-Za-zΑ-Ωα-ω_][A-Za-z0-9_Α-Ωα-ω]*)\s*(?:=|：|:)\s*(?P<value>[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?%?)(?:\s*(?P<unit>[A-Za-z%°/·*^\-\d\.]+))?"
+    )
+
+    for line_number, raw_line in enumerate((text or "").splitlines(), start=1):
+        for match in pattern.finditer(raw_line):
+            name = match.group("name")
+            assignments[name] = {
+                "name": name,
+                "value": match.group("value"),
+                "numeric_value": _parse_numeric_value(match.group("value")),
+                "unit": (match.group("unit") or "").strip(),
+                "line": line_number,
+                "source": raw_line.strip(),
+            }
+    return assignments
+
+
+def extract_locked_parameters(question_text: str) -> dict[str, dict[str, Any]]:
+    locked = extract_symbol_assignments(question_text)
+    for item in locked.values():
+        item["can_override"] = False
+    return locked
+
+
+def infer_problem_categories(question_text: str, breakdown_text: str = "") -> list[str]:
+    text = f"{question_text}\n{breakdown_text}".lower()
+    category_rules = [
+        ("数据拟合型", ["拟合", "回归", "curve fit", "regression"]),
+        ("优化决策型", ["最优", "优化", "决策", "规划"]),
+        ("物理机理型", ["力", "力矩", "应力", "应变", "物理", "机理", "锚杆", "围岩"]),
+        ("评价决策型", ["评价", "评分", "指标体系", "层次分析"]),
+        ("预测型", ["预测", "forecast", "时间序列"]),
+        ("图论/路径型", ["路径", "最短路", "网络", "图论"]),
+        ("微分方程型", ["微分方程", "偏微分", "ode", "pde"]),
+        ("多目标规划型", ["多目标", "pareto", "权衡"]),
+        ("参数敏感性分析型", ["敏感性", "灵敏度", "扰动分析"]),
+    ]
+    categories = [name for name, keywords in category_rules if any(keyword in text for keyword in keywords)]
+    return categories or ["通用建模型"]
+
+
+def extract_breakdown_tasks(breakdown_text: str) -> list[dict[str, Any]]:
+    tasks: list[dict[str, Any]] = []
+    for line in (breakdown_text or "").splitlines():
+        stripped = line.strip()
+        if re.match(r"^(\d+\.|[-*])\s+", stripped):
+            tasks.append({"text": re.sub(r"^(\d+\.|[-*])\s+", "", stripped), "source": stripped})
+    return tasks[:12]
+
+
+def build_problem_facts(question_text: str, breakdown_text: str) -> dict[str, Any]:
+    locked_parameters = extract_locked_parameters(question_text)
+    parameter_lines = extract_problem_parameters(question_text)
+    data_tables = []
+    for line in (question_text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if any(keyword in stripped for keyword in ["表", "数据", "附件", "附录"]):
+            data_tables.append({"text": stripped})
+
+    given_formulas = extract_markdown_formulas(question_text)
+    tasks = extract_breakdown_tasks(breakdown_text)
+    problem_types = infer_problem_categories(question_text, breakdown_text)
+
+    return {
+        "problem_types": problem_types,
+        "constants": [
+            {
+                "name": name,
+                "value": item.get("value", ""),
+                "unit": item.get("unit", ""),
+                "source": item.get("source", ""),
+                "can_override": False,
+            }
+            for name, item in locked_parameters.items()
+        ],
+        "given_formulas": given_formulas,
+        "data_tables": data_tables,
+        "tasks": tasks,
+        "forbidden_changes": [
+            {
+                "name": name,
+                "locked_value": item.get("value", ""),
+                "unit": item.get("unit", ""),
+                "reason": "题设显式给定，后续阶段不得擅自修改",
+            }
+            for name, item in locked_parameters.items()
+        ],
+        "locked_parameters": locked_parameters,
+        "parameter_lines": parameter_lines,
+    }
+
+
+def _normalize_result_warnings(raw_warnings: Any) -> list[str]:
+    if isinstance(raw_warnings, list):
+        return [str(item).strip() for item in raw_warnings if str(item).strip()]
+    if raw_warnings is None:
+        return []
+    text = str(raw_warnings).strip()
+    return [text] if text else []
+
+
+def _looks_like_strong_result_entry(entry: Any) -> bool:
+    return isinstance(entry, dict) and any(key in entry for key in STRONG_RESULT_KEYS)
+
+
+def _normalize_legacy_scalar_result(
+    *,
+    section: str,
+    source_file: str,
+    path_parts: list[str],
+    raw_value: Any,
+    unit: str = "",
+    status: str = "unverified",
+    verified: bool = False,
+    warnings: list[str] | None = None,
+    source: str = "legacy_nested_results",
+) -> dict[str, Any]:
+    label = " / ".join(part for part in path_parts if part)
+    text_value = str(raw_value).strip() if raw_value is not None else ""
+    numeric_value = _parse_numeric_value(raw_value)
+    return {
+        "id": _slugify_identifier(f"{section}_{label}", "result"),
+        "name": label or f"{section}_result",
+        "section": section,
+        "value": numeric_value if numeric_value is not None else text_value,
+        "paper_value": text_value,
+        "unit": unit,
+        "formula": "",
+        "formula_id": "",
+        "inputs": {},
+        "unit_conversion": "",
+        "source_data": [],
+        "code_cell": "",
+        "evidence": f"{label}: {text_value}" if label else text_value,
+        "source": source,
+        "source_file": source_file,
+        "generated_files": [],
+        "status": status,
+        "verified": verified,
+        "warnings": warnings or [],
+    }
+
+
+def _collect_legacy_results_from_mapping(
+    node: Any,
+    *,
+    section: str,
+    source_file: str,
+    path_parts: list[str],
+    inherited_unit: str = "",
+    status: str = "unverified",
+    verified: bool = False,
+    warnings: list[str] | None = None,
+    source: str = "legacy_nested_results",
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+
+    if isinstance(node, dict):
+        local_unit = inherited_unit
+        if isinstance(node.get("unit"), (str, int, float)):
+            local_unit = str(node.get("unit") or "").strip()
+
+        for key, value in node.items():
+            if key in {"unit", "description", "conclusion", "limitations", "applicability", "method"}:
+                continue
+            entries.extend(
+                _collect_legacy_results_from_mapping(
+                    value,
+                    section=section,
+                    source_file=source_file,
+                    path_parts=path_parts + [str(key)],
+                    inherited_unit=local_unit,
+                    status=status,
+                    verified=verified,
+                    warnings=warnings,
+                    source=source,
+                )
+            )
+        return entries
+
+    if isinstance(node, list):
+        for index, item in enumerate(node, start=1):
+            if isinstance(item, (dict, list)):
+                entries.extend(
+                    _collect_legacy_results_from_mapping(
+                        item,
+                        section=section,
+                        source_file=source_file,
+                        path_parts=path_parts + [str(index)],
+                        inherited_unit=inherited_unit,
+                        status=status,
+                        verified=verified,
+                        warnings=warnings,
+                        source=source,
+                    )
+                )
+                continue
+            text = str(item).strip()
+            if not text:
+                continue
+            entries.append(
+                _normalize_legacy_scalar_result(
+                    section=section,
+                    source_file=source_file,
+                    path_parts=path_parts + [str(index)],
+                    raw_value=text,
+                    unit=inherited_unit,
+                    status=status,
+                    verified=verified,
+                    warnings=warnings,
+                    source=source,
+                )
+            )
+        return entries
+
+    if node is None:
+        return entries
+
+    text = str(node).strip()
+    if not text:
+        return entries
+    entries.append(
+        _normalize_legacy_scalar_result(
+            section=section,
+            source_file=source_file,
+            path_parts=path_parts,
+            raw_value=node,
+            unit=inherited_unit,
+            status=status,
+            verified=verified,
+            warnings=warnings,
+            source=source,
+        )
+    )
+    return entries
+
+
+def _extract_legacy_registry_entries(payload: dict[str, Any], section: str, source_file: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    verified_entries: list[dict[str, Any]] = []
+    blocked_entries: list[dict[str, Any]] = []
+
+    analysis_type = str(payload.get("analysis_type") or section)
+    is_verification_payload = "复核" in analysis_type or analysis_type.lower() == "verification"
+
+    problems = payload.get("problems")
+    if isinstance(problems, dict):
+        for problem_key, problem_payload in problems.items():
+            if not isinstance(problem_payload, dict):
+                continue
+            problem_title = str(problem_payload.get("title") or problem_key)
+            if isinstance(problem_payload.get("results"), dict):
+                blocked_entries.extend(
+                    _collect_legacy_results_from_mapping(
+                        problem_payload.get("results"),
+                        section=section,
+                        source_file=source_file,
+                        path_parts=[problem_title],
+                        status="unverified",
+                        verified=False,
+                        warnings=["legacy_nested_result_requires_verification"],
+                    )
+                )
+            subproblems = problem_payload.get("subproblems")
+            if not isinstance(subproblems, dict):
+                continue
+            for sub_key, sub_payload in subproblems.items():
+                if not isinstance(sub_payload, dict) or not isinstance(sub_payload.get("results"), dict):
+                    continue
+                sub_title = str(sub_payload.get("title") or sub_key)
+                blocked_entries.extend(
+                    _collect_legacy_results_from_mapping(
+                        sub_payload.get("results"),
+                        section=section,
+                        source_file=source_file,
+                        path_parts=[problem_title, sub_title],
+                        status="unverified",
+                        verified=False,
+                        warnings=["legacy_nested_result_requires_verification"],
+                    )
+                )
+
+    for item in payload.get("key_results", []):
+        if _looks_like_strong_result_entry(item) or not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("problem_id") or f"{section}_review")
+        findings = item.get("main_findings")
+        if not isinstance(findings, list) or not findings:
+            continue
+        raw_status = str(item.get("verification_status") or payload.get("review_status") or "").strip().lower()
+        is_blocked = raw_status in BLOCKED_STATUS_HINTS
+        entry = _normalize_legacy_scalar_result(
+            section=section,
+            source_file=source_file,
+            path_parts=[title],
+            raw_value="；".join(str(finding).strip() for finding in findings if str(finding).strip()),
+            status="blocked" if is_blocked else ("verified" if is_verification_payload else "unverified"),
+            verified=(not is_blocked) and is_verification_payload,
+            warnings=["legacy_review_summary"],
+            source="legacy_review_key_results",
+        )
+        if is_blocked or not is_verification_payload:
+            blocked_entries.append(entry)
+        else:
+            verified_entries.append(entry)
+
+    for item in payload.get("blocking_items", []):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("item") or item.get("title") or "blocking_item")
+        reason = str(item.get("reason") or item.get("recommendation") or "阻断项")
+        blocked_entries.append(
+            _normalize_legacy_scalar_result(
+                section=section,
+                source_file=source_file,
+                path_parts=[label],
+                raw_value=reason,
+                status="blocked",
+                verified=False,
+                warnings=["blocking_item"],
+                source="verification_blocking_item",
+            )
+        )
+
+    for item in payload.get("prohibited_conclusions", []):
+        text = str(item).strip()
+        if not text:
+            continue
+        blocked_entries.append(
+            _normalize_legacy_scalar_result(
+                section=section,
+                source_file=source_file,
+                path_parts=["prohibited_conclusion"],
+                raw_value=text,
+                status="blocked",
+                verified=False,
+                warnings=["prohibited_conclusion"],
+                source="verification_prohibited_conclusion",
+            )
+        )
+
+    return verified_entries, blocked_entries
+
+
+def _normalize_legacy_result_text(entry: str, section: str, source_file: str) -> dict[str, Any]:
+    text = str(entry or "").strip()
+    value_match = re.search(r"(?P<value>[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*(?P<unit>[A-Za-z%°/·*^\-\d]+)?", text)
+    formula_match = re.search(r"(?P<formula>[A-Za-zΑ-Ωα-ωPTEKσδfMRTLde_0-9\s\-+*/^().]+=[^，。；;]+)", text)
+    blocked_hints = ["问题", "偏差", "不匹配", "无法", "失败", "警告", "风险", "待", "需", "需要", "谨慎"]
+    verified = not any(hint in text for hint in blocked_hints)
+    status = "verified" if verified else "blocked"
+    name = text[:60] or f"{section}_result"
+
+    return {
+        "id": _slugify_identifier(f"{section}_{name}", "result"),
+        "name": name,
+        "section": section,
+        "value": value_match.group("value") if value_match else "",
+        "paper_value": "",
+        "unit": (value_match.group("unit") or "").strip() if value_match else "",
+        "formula": (formula_match.group("formula") or "").strip() if formula_match else "",
+        "formula_id": "",
+        "inputs": {},
+        "unit_conversion": "",
+        "source_data": [],
+        "code_cell": "",
+        "evidence": text,
+        "source": "legacy_key_results",
+        "source_file": source_file,
+        "generated_files": [],
+        "status": status,
+        "verified": verified,
+        "warnings": ["legacy_unstructured_result"] if verified else ["legacy_unstructured_result", "requires_structured_evidence"],
+    }
+
+
+def _normalize_registry_warning_entry(entry: str, section: str, source_file: str) -> dict[str, Any]:
+    text = str(entry or "").strip()
+    name = text[:60] or f"{section}_warning"
+    return {
+        "id": _slugify_identifier(f"{section}_warning_{name}", "warning"),
+        "name": name,
+        "section": section,
+        "value": "",
+        "paper_value": "",
+        "unit": "",
+        "formula": "",
+        "formula_id": "",
+        "inputs": {},
+        "unit_conversion": "",
+        "source_data": [],
+        "code_cell": "",
+        "evidence": text,
+        "source": "structured_result_warning",
+        "source_file": source_file,
+        "generated_files": [],
+        "status": "blocked",
+        "verified": False,
+        "warnings": ["reported_by_stage"],
+    }
+
+
+def normalize_result_registry_entry(entry: Any, section: str, source_file: str) -> dict[str, Any]:
+    if isinstance(entry, str):
+        return _normalize_legacy_result_text(entry, section, source_file)
+
+    name = str(entry.get("name") or entry.get("id") or f"{section}_result").strip()
+    entry_id = str(entry.get("id") or _slugify_identifier(f"{section}_{name}", "result")).strip()
+    status = str(entry.get("status") or ("verified" if entry.get("verified", True) else "unverified")).strip().lower()
+    warnings = _normalize_result_warnings(entry.get("warnings"))
+    verified = bool(entry.get("verified", status not in {"mismatch", "blocked", "failed", "unverified"}))
+    if warnings:
+        verified = verified and all("无法确认" not in warning and "不可靠" not in warning for warning in warnings)
+
+    return {
+        "id": entry_id,
+        "name": name,
+        "section": section,
+        "value": entry.get("value", entry.get("computed_value", "")),
+        "paper_value": entry.get("paper_value", ""),
+        "unit": entry.get("unit", ""),
+        "formula": entry.get("formula", ""),
+        "formula_id": entry.get("formula_id", ""),
+        "inputs": entry.get("inputs", entry.get("input_values", {})) if isinstance(entry.get("inputs", entry.get("input_values", {})), dict) else {},
+        "unit_conversion": entry.get("unit_conversion", ""),
+        "source_data": entry.get("source_data", []),
+        "code_cell": entry.get("code_cell", ""),
+        "evidence": entry.get("evidence", ""),
+        "source": entry.get("source", ""),
+        "source_file": source_file,
+        "generated_files": entry.get("generated_files", []),
+        "status": status,
+        "verified": verified,
+        "warnings": warnings,
+    }
+
+
+def build_result_registry(work_dir: str, structured_result_files: list[str]) -> dict[str, Any]:
+    verified_results: list[dict[str, Any]] = []
+    blocked_results: list[dict[str, Any]] = []
+    source_files: list[str] = []
+
+    for filename in structured_result_files:
+        if not filename:
+            continue
+        path = Path(work_dir) / filename
+        payload = load_json(str(path))
+        if not isinstance(payload, dict):
+            continue
+        source_files.append(filename)
+        section = str(payload.get("section") or path.stem)
+        for raw_entry in payload.get("key_results", []):
+            if isinstance(raw_entry, dict) and not _looks_like_strong_result_entry(raw_entry):
+                continue
+            if not isinstance(raw_entry, (dict, str)):
+                continue
+            normalized = normalize_result_registry_entry(raw_entry, section, filename)
+            if normalized["verified"] and normalized["status"] not in {"mismatch", "blocked", "failed"}:
+                verified_results.append(normalized)
+            else:
+                blocked_results.append(normalized)
+        extra_verified, extra_blocked = _extract_legacy_registry_entries(payload, section, filename)
+        verified_results.extend(extra_verified)
+        blocked_results.extend(extra_blocked)
+        for warning in _normalize_result_warnings(payload.get("warnings")):
+            blocked_results.append(_normalize_registry_warning_entry(warning, section, filename))
+
+    verified_results = _deduplicate_dict_rows(verified_results, ["id", "source_file"])
+    blocked_results = _deduplicate_dict_rows(blocked_results, ["id", "source_file"])
+
+    return {
+        "registry_version": "0.2",
+        "source_files": source_files,
+        "verified_results": verified_results,
+        "blocked_results": blocked_results,
+        "summary": {
+            "verified_count": len(verified_results),
+            "blocked_count": len(blocked_results),
+        },
+    }
+
+
+def detect_placeholder_references(markdown_text: str, references: list[str]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    lowered_patterns = [pattern.lower() for pattern in PLACEHOLDER_PATTERNS]
+    for index, reference in enumerate(references, start=1):
+        lower_reference = reference.lower()
+        for pattern in lowered_patterns:
+            if pattern in lower_reference:
+                findings.append(
+                    {
+                        "type": "fake_reference",
+                        "location": f"参考文献[{index}]",
+                        "route": "writer",
+                        "severity": "critical",
+                        "fix": "删除或替换为真实检索得到的参考文献条目",
+                        "evidence": reference,
+                    }
+                )
+                break
+
+    if not references and re.search(r"^#{1,6}\s*(参考文献|references)\s*$", markdown_text or "", re.I | re.M):
+        findings.append(
+            {
+                "type": "fake_reference",
+                "location": "参考文献章节",
+                "route": "writer",
+                "severity": "major",
+                "fix": "若未使用外部文献，请删除参考文献章节或明确写未引入外部文献",
+                "evidence": "存在参考文献标题但未提供真实条目",
+            }
+        )
+
+    return findings
+
+
+def detect_bad_math_issues(markdown_text: str) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    text = markdown_text or ""
+    for pattern in BAD_MATH_PATTERNS:
+        for match in re.finditer(pattern, text, re.M):
+            line_number = text.count("\n", 0, match.start()) + 1
+            findings.append(
+                {
+                    "type": "formula_missing",
+                    "location": f"第{line_number}行附近",
+                    "route": "writer",
+                    "severity": "major",
+                    "fix": "补全缺失或残缺的公式表达，并核对公式编号与变量定义",
+                    "evidence": match.group(0),
+                }
+            )
+    return _deduplicate_dict_rows(findings, ["type", "location", "evidence"])
+
+
+def compare_locked_parameters(problem_facts: dict[str, Any], markdown_text: str) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    locked_parameters = (problem_facts or {}).get("locked_parameters", {})
+    paper_assignments = extract_symbol_assignments(markdown_text)
+
+    for name, locked in locked_parameters.items():
+        paper_item = paper_assignments.get(name)
+        if not paper_item:
+            continue
+        locked_value = locked.get("numeric_value")
+        paper_value = paper_item.get("numeric_value")
+        if locked_value is not None and paper_value is not None and abs(locked_value - paper_value) > 1e-9:
+            findings.append(
+                {
+                    "type": "parameter_changed",
+                    "location": f"参数 {name}",
+                    "route": "modeling",
+                    "severity": "critical",
+                    "fix": f"恢复题设锁定参数 {name}={locked.get('value')} {locked.get('unit', '')}".strip(),
+                    "evidence": f"题设为 {locked.get('value')}，论文中出现 {paper_item.get('value')}",
+                }
+            )
+        locked_unit = str(locked.get("unit") or "").strip()
+        paper_unit = str(paper_item.get("unit") or "").strip()
+        if locked_unit and paper_unit and locked_unit != paper_unit:
+            findings.append(
+                {
+                    "type": "unit_mismatch",
+                    "location": f"参数 {name}",
+                    "route": "modeling",
+                    "severity": "major",
+                    "fix": f"统一参数 {name} 的单位为 {locked_unit}",
+                    "evidence": f"题设单位为 {locked_unit}，论文中出现 {paper_unit}",
+                }
+            )
+
+    return _deduplicate_dict_rows(findings, ["type", "location", "evidence"])
+
+
+def build_unit_audit_findings(problem_facts: dict[str, Any], result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    locked_parameters = (problem_facts or {}).get("locked_parameters", {})
+    registry_results = (result_registry or {}).get("verified_results", []) + (result_registry or {}).get("blocked_results", [])
+
+    for entry in registry_results:
+        if not str(entry.get("unit") or "").strip():
+            findings.append(
+                {
+                    "type": "unit_missing",
+                    "location": entry.get("name") or entry.get("id") or "未命名结果",
+                    "route": "solver",
+                    "severity": "major",
+                    "fix": "为该结果补充明确单位，并在论文与表格中保持一致",
+                    "evidence": f"结果 {entry.get('id', '')} 缺少单位字段",
+                }
+            )
+
+        inputs = entry.get("inputs", {}) if isinstance(entry.get("inputs"), dict) else {}
+        for param_name, input_item in inputs.items():
+            if not isinstance(input_item, dict):
+                continue
+            locked = locked_parameters.get(param_name)
+            if not locked:
+                continue
+            locked_unit = str(locked.get("unit") or "").strip()
+            input_unit = str(input_item.get("unit") or "").strip()
+            if locked_unit and input_unit and locked_unit != input_unit:
+                findings.append(
+                    {
+                        "type": "unit_mismatch",
+                        "location": entry.get("name") or entry.get("id") or param_name,
+                        "route": "solver",
+                        "severity": "major",
+                        "fix": f"将输入参数 {param_name} 的单位统一为 {locked_unit}",
+                        "evidence": f"题设单位 {locked_unit}，结果登记中使用 {input_unit}",
+                    }
+                )
+
+    return _deduplicate_dict_rows(findings, ["type", "location", "evidence"])
+
+
+def build_paper_audit_report(
+    question_text: str,
+    markdown_text: str,
+    problem_facts: dict[str, Any],
+    result_registry: dict[str, Any],
+    audit_manifest: dict[str, Any],
+    delivery_audit_text: str = "",
+) -> dict[str, Any]:
+    references = (audit_manifest or {}).get("references", [])
+    blocks: list[dict[str, Any]] = []
+    blocks.extend(detect_placeholder_references(markdown_text, references))
+    blocks.extend(detect_bad_math_issues(markdown_text))
+    blocks.extend(compare_locked_parameters(problem_facts, markdown_text))
+    blocks.extend(build_unit_audit_findings(problem_facts, result_registry))
+
+    for entry in (result_registry or {}).get("blocked_results", []):
+        name = str(entry.get("name") or entry.get("id") or "").strip()
+        if not name or name not in (markdown_text or ""):
+            continue
+        blocks.append(
+            {
+                "type": "numeric_mismatch",
+                "location": name,
+                "route": "solver",
+                "severity": "critical",
+                "fix": "重新计算该结果，并确保正文只引用 verified_results 中的数值",
+                "evidence": f"结果登记状态为 {entry.get('status', 'unverified')}，但正文仍引用该结果",
+            }
+        )
+
+    blocks = _deduplicate_dict_rows(blocks, ["type", "location", "evidence"])
+    status = "BLOCK" if blocks else "PASS"
+    return {
+        "status": status,
+        "blocks": blocks,
+        "programmatic_checks": {
+            "formula_count": (audit_manifest or {}).get("formula_count", 0),
+            "table_count": (audit_manifest or {}).get("table_count", 0),
+            "reference_count": (audit_manifest or {}).get("reference_count", 0),
+            "locked_parameter_count": len((problem_facts or {}).get("locked_parameters", {})),
+            "verified_result_count": len((result_registry or {}).get("verified_results", [])),
+            "blocked_result_count": len((result_registry or {}).get("blocked_results", [])),
+        },
+        "llm_summary": (delivery_audit_text or "").strip(),
+    }
+
+
+def validate_paper_audit_report(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("status") not in {"PASS", "BLOCK"}:
+        return False
+    blocks = payload.get("blocks")
+    if not isinstance(blocks, list):
+        return False
+    for block in blocks:
+        if not isinstance(block, dict):
+            return False
+        required = ["type", "location", "route", "severity", "fix"]
+        if any(not str(block.get(key, "")).strip() for key in required):
+            return False
+    return True
+
+
 def _resolve_markdown_image_path(md_path: str, image_target: str) -> Path | None:
     target = (image_target or "").strip().strip("<>").strip()
     if not target or re.match(r"^[a-zA-Z]+://", target):

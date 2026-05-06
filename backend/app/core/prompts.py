@@ -59,7 +59,8 @@ CODER_PROMPT = get_prompt(
 2. 每次准备 import 第三方库时，都要以“当前环境已安装”为前提；若导入失败或环境不存在该库，必须立刻改用已安装库、标准库或已有结果文件，不能继续硬写依赖。
 3. 关键计算结果不能只写在自然语言总结里，必须落盘到结构化 JSON 结果文件后，才能宣称任务完成。
 4. 结构化结果文件中至少要包含：section、summary、key_results、generated_files、warnings。
-5. 若无法得到可靠数值，必须在结构化结果文件和最终总结中明确写出“不可靠/无法确认”，禁止编造结果。
+5. key_results 中的关键结果应优先使用强 schema：id、name、value、unit、formula、formula_id、inputs、source_data、code_cell、verified、warnings。
+6. 若无法得到可靠数值，必须在结构化结果文件和最终总结中明确写出“不可靠/无法确认”，禁止编造结果。
 """,
 )
 
@@ -87,6 +88,7 @@ DEFAULT_WRITING_STAGE_PROMPTS = {
 3. 列出已知条件、参数、数据来源与缺失信息。
 4. 区分题面明示条件与合理假设空间，不得把假设写成题面事实。
 5. 给出后续建模所需的关键检查点。
+6. 明确标出题设中的不可修改参数、给定公式、数据表来源和建议题型分类。
 
 输出格式必须为 Markdown，并至少包含：
 - 问题背景
@@ -102,6 +104,7 @@ DEFAULT_WRITING_STAGE_PROMPTS = {
 2. 每个假设都必须说明理由、影响与可能风险。
 3. 若问题目标不足以支撑“最优”“唯一”“显著优于”等结论，必须明确写出前提不足。
 4. 公式、目标函数、约束必须能对应到题目目标。
+5. 若题目属于物理机理型或参数敏感性分析型，必须显式给出单位、量纲或参数来源约束。
 
 输出必须包含：
 - 假设列表
@@ -129,10 +132,14 @@ DEFAULT_WRITING_STAGE_PROMPTS = {
 
 硬约束：
 1. 你必须优先读取并复算工作目录中的数据文件、结果文件、图像文件和中间产物，不能只相信求解摘要文本。
+2. 你必须以 result_registry.json 中的条目作为首要复核对象；如果其中存在 legacy 或 unverified 条目，必须逐条给出复核结论，而不是重新自由发挥一个新总结。
 2. 每个关键数值结论都必须标明来源：原始数据、计算脚本输出、结果文件，或明确写“无法复核”。
 3. 若发现数值不一致、单位错误、口径切换、图表标题与数据不符、由假设直接冒充结果，必须直接判为“复核失败”。
 4. 若缺少复核所需数据，也必须列为阻断项，不得脑补。
 5. 你的输出应服务于后续分析和最终审计，必须明确指出“可写入论文”和“禁止写入论文”的内容。
+6. 你必须优先核对 result_registry 中的 verified_results，并标出其中任何单位问题、题设参数偏移或状态冲突。
+7. 你写出的 数值复核_structured_results.json 中，key_results 必须是一组逐条复核记录；每条至少包含 id、name、paper_value、value 或 computed_value、unit、source_data、code_cell、verified、status、warnings。禁止只写 problem_1 这种综述级对象。
+8. 对于无法在原始数据、代码输出或结果文件中定位证据的 legacy 数值，status 必须写 blocked 或 mismatch，不能写 verified。
 
 输出必须按以下固定结构：
 1. 复核对象清单
@@ -171,6 +178,8 @@ DEFAULT_WRITING_STAGE_PROMPTS = {
 3. 若问题无法修正，必须降级措辞，不得直接忽略。
 4. 不得新增未在前文定义的变量、数据结论或比较口径。
 5. 不得把“无法验证”的内容写成确定事实。
+6. 论文中出现的所有具体数值结论都必须来自 result_registry.json 的 verified_results；若没有对应 id，禁止写入具体数字。
+7. 参考文献不得由 Writer 自行编造，必须来自 scholar 工具返回结果或用户上传材料；若没有真实来源，则不要生成虚构参考文献。
 
 输出要求：
 - 只输出完整 Markdown 论文正文。
@@ -185,6 +194,8 @@ DEFAULT_WRITING_STAGE_PROMPTS = {
 3. 若某结论无法被现有数据、代码或结果文件复现，必须列为 BLOCK，不得用“基本合理”带过。
 4. 若发现问题，必须给出返工路由，且只能从以下三类中选择：modeling、solver、writer。
 5. 你必须把审计结论同步写入结构化结果文件；warnings 中不得留空字符串。
+6. 你还必须在工作目录写出 paper_audit_report.json，结构至少包含：status、blocks；每个 block 至少包含 type、location、route、severity、fix。
+7. 以下占位或伪造参考文献模式一旦命中，必须直接 BLOCK：张三、李四、王五、赵六、某某、XXX、TODO、TBD、待补充、参考文献待完善。
 
 输出必须按以下结构：
 审计结论：PASS 或 BLOCK
@@ -208,6 +219,7 @@ DEFAULT_WRITING_STAGE_PROMPTS = {
 5. 若最终论文中的关键数字、表格结论、图注结论无法在复核报告或可交付终审报告中找到对应支持项，也必须判为 BLOCK。
 6. 你的职责是阻断，不是鼓励；存在疑点时默认 BLOCK，而不是默认 PASS。
 7. 若 BLOCK，请在“必要修正”中明确指出应退回 modeling、solver 或 writer 中的哪一类 Agent。
+8. 你必须优先参考 paper_audit_report.json 中的 blocks，而不是忽略机器审计结果。
 
 输出格式必须为：
 审计结论：PASS 或 BLOCK

@@ -1,4 +1,5 @@
 """工作流引擎 - 按任务类型编排写作与润色流水线。"""
+import json
 import os
 import re
 from typing import AsyncGenerator
@@ -17,11 +18,16 @@ from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.tools.local_interpreter import LocalCodeInterpreter
 from app.tools.openalex_scholar import OpenAlexScholar
 from app.utils.common_utils import (
+    build_paper_audit_report,
     build_paper_audit_manifest,
+    build_problem_facts,
+    build_result_registry,
     get_current_files,
+    load_json,
     md_to_docx,
     normalize_math_markdown,
     save_json,
+    validate_paper_audit_report,
 )
 from app.utils.log_util import logger
 
@@ -146,6 +152,53 @@ def _detect_repair_routes(*reports: str) -> list[str]:
     return [route for route in ["modeling", "solver", "writer"] if route in routes]
 
 
+def _json_for_prompt(payload: object, limit: int = 12000) -> str:
+    try:
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception:
+        text = str(payload)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 16] + "\n...\n}"
+
+
+def _merge_audit_reports(primary: dict | None, fallback: dict) -> dict:
+    if not validate_paper_audit_report(primary):
+        return fallback
+
+    blocks = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in [primary.get("blocks", []), fallback.get("blocks", [])]:
+        for block in source:
+            marker = (str(block.get("type", "")), str(block.get("location", "")), str(block.get("fix", "")))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            blocks.append(block)
+
+    return {
+        "status": "BLOCK" if primary.get("status") == "BLOCK" or fallback.get("status") == "BLOCK" or blocks else "PASS",
+        "blocks": blocks,
+        "programmatic_checks": fallback.get("programmatic_checks", {}),
+        "llm_summary": primary.get("llm_summary") or fallback.get("llm_summary", ""),
+    }
+
+
+def _routes_from_audit_report(report: dict | None) -> list[str]:
+    if not isinstance(report, dict):
+        return []
+    routes = []
+    for block in report.get("blocks", []):
+        route = str(block.get("route", "")).strip()
+        if route in {"modeling", "solver", "writer"} and route not in routes:
+            routes.append(route)
+    if "modeling" in routes and "solver" not in routes:
+        routes.append("solver")
+    if "solver" in routes and "writer" not in routes:
+        routes.append("writer")
+    return routes
+
+
 def _build_models() -> dict[str, LLM]:
     return {
         "breakdown": LLM(model=config_manager.get_effective_model("COORDINATOR_MODEL"), temperature=0.2, max_tokens=8192),
@@ -219,6 +272,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
     stage_outputs: dict[str, object] = {}
     chart_images: list[str] = []
     solver_images: list[str] = []
+    problem_facts: dict[str, object] = {}
+    result_registry: dict[str, object] = {"verified_results": [], "blocked_results": [], "summary": {"verified_count": 0, "blocked_count": 0}}
+    problem_facts_path = os.path.join(work_dir, "problem_facts.json")
+    result_registry_path = os.path.join(work_dir, "result_registry.json")
 
     try:
         yield _progress(task_id, "breakdown", 0.06, "题目拆解 Agent 正在分析赛题", current_subtask="题目拆解")
@@ -234,12 +291,18 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             breakdown_prompt,
             "题目拆解",
         )
+        problem_facts = build_problem_facts(question, str(stage_outputs["breakdown"]))
+        save_json(problem_facts, problem_facts_path)
+        stage_outputs["problem_facts"] = problem_facts
+        stage_outputs["problem_facts_file"] = os.path.basename(problem_facts_path)
         yield _message("breakdown", _preview(str(stage_outputs["breakdown"])))
 
         yield _progress(task_id, "modeling", 0.18, "假设与建模 Agent 正在建立模型", current_subtask="模型建立")
         modeling_prompt = (
             f"# 题目\n{question}\n\n"
             f"# 题目拆解结果\n{stage_outputs['breakdown']}\n\n"
+            f"# 题设事实锁定文件\n{os.path.basename(problem_facts_path)}\n\n"
+            f"# 题设事实锁定内容\n{_json_for_prompt(problem_facts, 8000)}\n\n"
             "请输出可直接审查的建模方案。"
         )
         stage_outputs["modeling"] = await _run_text_agent(
@@ -255,6 +318,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         review_prompt = (
             f"# 题目拆解\n{stage_outputs['breakdown']}\n\n"
             f"# 建模方案\n{stage_outputs['modeling']}\n\n"
+            f"# 题设事实锁定\n{_json_for_prompt(problem_facts, 6000)}\n\n"
             "请给出结构化评审，不要改写原模型。"
         )
         stage_outputs["review"] = await _run_text_agent(
@@ -280,12 +344,18 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
             f"## 建模方案\n{stage_outputs['modeling']}\n\n"
             f"## 模型审查意见\n{stage_outputs['review']}\n\n"
+            f"## problem_facts.json\n{_json_for_prompt(problem_facts, 9000)}\n\n"
             f"## 数据文件\n{data_context}\n\n"
             "请选择合适算法并执行代码，输出算法方案说明、完整代码、计算结果与结果摘要。"
+            "题设锁定参数不得擅自修改。所有可写入论文的关键结果必须登记到结构化结果文件，供后续生成 result_registry.json。"
         )
         solver_result = await solver.run(prompt=solver_prompt, subtask_title="算法与编程求解")
         stage_outputs["solve"] = solver_result.model_dump()
         solver_images = solver_result.created_images
+        result_registry = build_result_registry(work_dir, solver_result.structured_result_files)
+        save_json(result_registry, result_registry_path)
+        stage_outputs["result_registry"] = result_registry
+        stage_outputs["result_registry_file"] = os.path.basename(result_registry_path)
         yield _message("solve", _preview(solver_result.coder_response), section="算法与编程求解")
 
         yield _progress(task_id, "verification", 0.56, "数值复核 Agent 正在独立复算关键结果", current_subtask="数值复核")
@@ -304,18 +374,27 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
             f"## 建模方案\n{stage_outputs['modeling']}\n\n"
             f"## 模型审查意见\n{stage_outputs['review']}\n\n"
+            f"## problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
+            f"## result_registry.json\n{_json_for_prompt(result_registry, 9000)}\n\n"
             f"## 求解摘要\n{solver_result.coder_response}\n\n"
             f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
             f"## 数据文件\n{data_context}\n\n"
             f"## 当前工作目录结果文件\n{artifact_context}\n\n"
-            "请独立复算和核验所有关键数值、表格结论与图像结论。"
-            "不要照抄求解摘要；若某结论无法通过数据或结果文件复核，必须列入复核失败项。"
+            "请以 result_registry.json 中的每个条目为首要复核对象，逐条独立复算和核验对应的关键数值、表格结论与图像结论。"
+            "如果 result_registry 中存在 legacy、unverified 或空证据条目，必须优先把它们改写为可追踪的逐条复核记录。"
+            "不要照抄求解摘要，也不要无目标地反复遍历整个目录；若某结论无法通过数据或结果文件复核，必须列入复核失败项并写入结构化结果文件。"
         )
         verification_result = await verification_agent.run(
             prompt=verification_prompt,
             subtask_title="数值复核",
         )
         stage_outputs["verification"] = verification_result.model_dump()
+        result_registry = build_result_registry(
+            work_dir,
+            list(dict.fromkeys(solver_result.structured_result_files + verification_result.structured_result_files)),
+        )
+        save_json(result_registry, result_registry_path)
+        stage_outputs["result_registry"] = result_registry
         yield _message("verification", _preview(verification_result.coder_response), section="数值复核")
 
         yield _progress(task_id, "analysis", 0.68, "结果分析与验证 Agent 正在复核结论", current_subtask="结果分析")
@@ -323,6 +402,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 原题\n{question}\n\n"
             f"# 模型方案\n{stage_outputs['modeling']}\n\n"
             f"# 审查报告\n{stage_outputs['review']}\n\n"
+            f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
+            f"# result_registry.json\n{_json_for_prompt(result_registry, 10000)}\n\n"
             f"# 求解输出\n{solver_result.coder_response}\n\n"
             f"# 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
             f"# 数值复核报告\n{verification_result.coder_response}\n\n"
@@ -350,6 +431,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
         chart_prompt = (
             f"## 结果分析报告\n{stage_outputs['analysis']}\n\n"
+            f"## result_registry.json\n{_json_for_prompt(result_registry, 8000)}\n\n"
             f"## 求解结果\n{solver_result.coder_response}\n\n"
             f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
             f"## 模型符号与假设\n{stage_outputs['modeling']}\n\n"
@@ -358,6 +440,18 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         chart_result = await chart_agent.run(prompt=chart_prompt, subtask_title="图表与一致性")
         chart_images = chart_result.created_images
         stage_outputs["charts"] = chart_result.model_dump()
+        result_registry = build_result_registry(
+            work_dir,
+            list(
+                dict.fromkeys(
+                    solver_result.structured_result_files
+                    + verification_result.structured_result_files
+                    + chart_result.structured_result_files
+                )
+            ),
+        )
+        save_json(result_registry, result_registry_path)
+        stage_outputs["result_registry"] = result_registry
         yield _message("charts", _preview(chart_result.coder_response), section="图表与一致性")
 
         yield _progress(task_id, "writing", 0.9, "论文组织与润色 Agent 正在整合全文", current_subtask="论文撰写")
@@ -370,6 +464,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         writer.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["final_writer"]
         final_prompt = (
             f"# 原题\n{question}\n\n"
+            f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
+            f"# result_registry.json\n{_json_for_prompt(result_registry, 12000)}\n\n"
             f"# 题目拆解\n{stage_outputs['breakdown']}\n\n"
             f"# 假设与建模\n{stage_outputs['modeling']}\n\n"
             f"# 模型审查报告\n{stage_outputs['review']}\n\n"
@@ -379,7 +475,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
             f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
             f"# 图表与一致性\n{chart_result.coder_response}\n\n"
-            "请输出完整论文 Markdown。"
+            "请输出完整论文 Markdown。论文中所有具体数值都必须来自 result_registry.json 的 verified_results；"
+            "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。参考文献必须来自 scholar 工具或用户材料。"
         )
         final_writer_result = await writer.run(
             prompt=final_prompt,
@@ -402,6 +499,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         delivery_auditor.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["delivery_audit"]
 
         audit_report = ""
+        audit_report_machine: dict[str, object] = {"status": "PASS", "blocks": []}
         max_audit_rounds = 2
         for audit_round in range(1, max_audit_rounds + 1):
             draft_paper_path = os.path.join(work_dir, f"final_paper_audit_round_{audit_round}.md")
@@ -418,6 +516,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
                 f"## 建模方案\n{stage_outputs['modeling']}\n\n"
                 f"## 模型审查\n{stage_outputs['review']}\n\n"
+                f"## problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
+                f"## result_registry.json\n{_json_for_prompt(result_registry, 10000)}\n\n"
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                 f"## 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
                 f"## 当前工作目录文件\n{get_current_files(work_dir)}\n\n"
@@ -425,12 +525,25 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"## 自动抽取审计清单\n{os.path.basename(audit_manifest_path)}\n\n"
                 "请用代码读取最终论文和审计清单，完成公式抽取、表格数值抽取、关键结果复算、论文值与复算值比对、题设参数检查、公式编号/符号/单位检查、参考文献占位或虚构检查。"
                 "若发现阻断项，必须明确写出返工路由：modeling、solver、writer。"
+                "同时必须在工作目录写出 paper_audit_report.json，格式为 {status, blocks[]}，每个 block 至少包含 type、location、route、severity、fix。"
             )
             delivery_audit_result = await delivery_auditor.run(
                 prompt=delivery_audit_prompt,
                 subtask_title="可交付终审复核",
             )
             stage_outputs[f"delivery_audit_round_{audit_round}"] = delivery_audit_result.model_dump()
+            fallback_audit_report = build_paper_audit_report(
+                question,
+                final_paper,
+                problem_facts,
+                result_registry,
+                audit_manifest,
+                delivery_audit_result.coder_response,
+            )
+            raw_machine_report = load_json(os.path.join(work_dir, "paper_audit_report.json"))
+            audit_report_machine = _merge_audit_reports(raw_machine_report, fallback_audit_report)
+            save_json(audit_report_machine, os.path.join(work_dir, "paper_audit_report.json"))
+            stage_outputs[f"paper_audit_report_round_{audit_round}"] = audit_report_machine
             yield _message("delivery_audit", _preview(delivery_audit_result.coder_response), section=f"可交付终审复核第{audit_round}轮")
 
             yield _progress(task_id, "final_audit", 0.96, f"最终审查 Agent 第{audit_round}轮核对审查意见", current_subtask="最终审查")
@@ -441,6 +554,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
                 f"# 图表一致性结果\n{chart_result.coder_response}\n\n"
                 f"# 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
+                f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 12000)}\n\n"
                 f"# 可交付终审结构化结果文件\n{', '.join(delivery_audit_result.structured_result_files) if delivery_audit_result.structured_result_files else '无'}\n\n"
                 f"# 最终论文\n{final_paper}\n\n"
                 "请检查最终论文是否完整吸收前序审查意见与可交付终审复核结论，是否仍存在无证据结论、符号不一致、图文不一致、复核失败项被写入正文或无法验证的断言。"
@@ -458,7 +572,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             audit_first_line = audit_report.splitlines()[0].upper() if audit_report.splitlines() else ""
             delivery_first_line = delivery_audit_result.coder_response.splitlines()[0].upper() if delivery_audit_result.coder_response.splitlines() else ""
             blocked = (
-                "审计结论：BLOCK" in audit_report
+                audit_report_machine.get("status") == "BLOCK"
+                or bool(audit_report_machine.get("blocks"))
+                or "审计结论：BLOCK" in audit_report
                 or "AUDIT结论：BLOCK" in audit_report
                 or "BLOCK" in audit_first_line
                 or "审计结论：BLOCK" in delivery_audit_result.coder_response
@@ -470,7 +586,11 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             if audit_round == max_audit_rounds:
                 break
 
-            repair_routes = _detect_repair_routes(delivery_audit_result.coder_response, audit_report)
+            repair_routes = _routes_from_audit_report(audit_report_machine) or _detect_repair_routes(
+                _json_for_prompt(audit_report_machine, 6000),
+                delivery_audit_result.coder_response,
+                audit_report,
+            )
             stage_outputs[f"final_audit_routes_round_{audit_round}"] = repair_routes
 
             if "modeling" in repair_routes:
@@ -479,6 +599,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     f"# 原题\n{question}\n\n"
                     f"# 当前建模方案\n{stage_outputs['modeling']}\n\n"
                     f"# 当前最终论文\n{final_paper}\n\n"
+                    f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 10000)}\n\n"
                     f"# 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
                     f"# 最终审查报告\n{audit_report}\n\n"
                     "请只修正被终审指出的参数、公式、符号、单位或建模定义问题，输出新的建模方案。"
@@ -495,6 +616,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 review_repair_prompt = (
                     f"# 题目拆解\n{stage_outputs['breakdown']}\n\n"
                     f"# 新建模方案\n{stage_outputs['modeling']}\n\n"
+                    f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 8000)}\n\n"
                     f"# 终审指出的问题\n{delivery_audit_result.coder_response}\n\n"
                     "请重新输出结构化模型审查，重点检查终审指出的问题是否已被修正。"
                 )
@@ -523,6 +645,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     f"## 建模方案\n{stage_outputs['modeling']}\n\n"
                     f"## 模型审查意见\n{stage_outputs['review']}\n\n"
                     f"## 上一版最终论文\n{final_paper}\n\n"
+                    f"## problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
+                    f"## paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 10000)}\n\n"
                     f"## 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
                     f"## 最终审查报告\n{audit_report}\n\n"
                     f"## 数据文件\n{data_context}\n\n"
@@ -531,6 +655,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 solver_result = await solver.run(prompt=solver_prompt, subtask_title="算法与编程求解")
                 stage_outputs["solve"] = solver_result.model_dump()
                 solver_images = solver_result.created_images
+                result_registry = build_result_registry(work_dir, solver_result.structured_result_files)
+                save_json(result_registry, result_registry_path)
+                stage_outputs["result_registry"] = result_registry
                 yield _message("solve", _preview(solver_result.coder_response), section=f"终审回退算法求解第{audit_round}轮")
 
                 verification_agent = CoderAgent(
@@ -548,24 +675,33 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
                     f"## 建模方案\n{stage_outputs['modeling']}\n\n"
                     f"## 模型审查意见\n{stage_outputs['review']}\n\n"
+                    f"## result_registry.json\n{_json_for_prompt(result_registry, 9000)}\n\n"
                     f"## 新求解摘要\n{solver_result.coder_response}\n\n"
                     f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                     f"## 数据文件\n{data_context}\n\n"
                     f"## 当前工作目录结果文件\n{artifact_context}\n\n"
                     f"## 可交付终审阻断项\n{delivery_audit_result.coder_response}\n\n"
-                    "请重新独立复算和核验终审阻断项涉及的关键数值、表格结论与图像结论。"
+                    "请以 result_registry.json 和终审阻断项中的条目为复核对象，逐条重新独立复算和核验涉及的关键数值、表格结论与图像结论。"
+                    "数值复核结构化结果文件必须输出逐条记录，明确哪些条目已修复 verified，哪些仍是 blocked 或 mismatch。"
                 )
                 verification_result = await verification_agent.run(
                     prompt=verification_prompt,
                     subtask_title="数值复核",
                 )
                 stage_outputs["verification"] = verification_result.model_dump()
+                result_registry = build_result_registry(
+                    work_dir,
+                    list(dict.fromkeys(solver_result.structured_result_files + verification_result.structured_result_files)),
+                )
+                save_json(result_registry, result_registry_path)
+                stage_outputs["result_registry"] = result_registry
                 yield _message("verification", _preview(verification_result.coder_response), section=f"终审回退数值复核第{audit_round}轮")
 
                 analysis_prompt = (
                     f"# 原题\n{question}\n\n"
                     f"# 模型方案\n{stage_outputs['modeling']}\n\n"
                     f"# 审查报告\n{stage_outputs['review']}\n\n"
+                    f"# result_registry.json\n{_json_for_prompt(result_registry, 10000)}\n\n"
                     f"# 求解输出\n{solver_result.coder_response}\n\n"
                     f"# 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                     f"# 数值复核报告\n{verification_result.coder_response}\n\n"
@@ -593,6 +729,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 )
                 chart_prompt = (
                     f"## 结果分析报告\n{stage_outputs['analysis']}\n\n"
+                    f"## result_registry.json\n{_json_for_prompt(result_registry, 9000)}\n\n"
                     f"## 求解结果\n{solver_result.coder_response}\n\n"
                     f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                     f"## 模型符号与假设\n{stage_outputs['modeling']}\n\n"
@@ -608,6 +745,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             revision_prompt = (
                 f"# 原题\n{question}\n\n"
                 f"# 已生成论文\n{final_paper}\n\n"
+                f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
+                f"# result_registry.json\n{_json_for_prompt(result_registry, 10000)}\n\n"
+                f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 12000)}\n\n"
                 f"# 更新后的建模方案\n{stage_outputs['modeling']}\n\n"
                 f"# 更新后的模型审查\n{stage_outputs['review']}\n\n"
                 f"# 更新后的求解结果\n{solver_result.coder_response}\n\n"
@@ -629,6 +769,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             yield _message("writing", _preview(final_paper), section=f"审查后修订第{audit_round}轮")
 
         stage_outputs["final_audit"] = audit_report
+        stage_outputs["paper_audit_report"] = audit_report_machine
 
         paper_path, docx_path, notebook_path = await _finalize_outputs(
             task_id=task_id,

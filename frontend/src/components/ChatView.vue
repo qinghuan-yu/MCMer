@@ -204,7 +204,18 @@ const agentMetaMap = computed(() => Object.fromEntries(agentTabs.value.map((tab)
 const isRunning = computed(() => !props.result && props.progress < 1)
 
 const normalizedMessages = computed<NormalizedMessage[]>(() => {
-  return props.messages.map((msg, index) => normalizeMessage(msg, index))
+  let activeAgent = normalizeAgentKey(props.stage, '', props.taskType)
+  return props.messages.map((msg, index) => {
+    const stage = msg.data?.stage || ''
+    const section = msg.section || msg.data?.current_subtask || ''
+    const inferredAgent = inferAgent(msg, stage, section, activeAgent)
+
+    if (inferredAgent !== 'all') {
+      activeAgent = inferredAgent
+    }
+
+    return normalizeMessage(msg, index, inferredAgent)
+  })
 })
 
 const displayMessages = computed(() => normalizedMessages.value.slice(-80))
@@ -249,10 +260,10 @@ watch(() => props.taskType, () => {
   selectedAgent.value = 'all'
 })
 
-function normalizeMessage(msg: RuntimeMessage, index: number): NormalizedMessage {
+function normalizeMessage(msg: RuntimeMessage, index: number, inferredAgent?: string): NormalizedMessage {
   const kind = msg.type || 'info'
   const stage = msg.data?.stage || ''
-  const agent = inferAgent(msg, stage)
+  const agent = inferredAgent || inferAgent(msg, stage, msg.section || msg.data?.current_subtask || '', 'all')
   const meta = agentMetaMap.value[agent] || { id: agent, label: '系统', icon: '🔄', color: 'rgba(20, 28, 45, 0.12)' }
   const progress = typeof msg.data?.progress === 'number' ? Math.round(msg.data.progress * 100) : null
   const section = msg.section || msg.data?.current_subtask || ''
@@ -282,25 +293,54 @@ function normalizeMessage(msg: RuntimeMessage, index: number): NormalizedMessage
   }
 }
 
-function inferAgent(msg: RuntimeMessage, stage: string): string {
-  if (msg.agent === 'coder') {
-    return props.taskType === 'polish' ? 'recalculation' : 'solve'
+function normalizeAgentKey(stage: string, section: string, taskType: TaskType): string {
+  const stageKey = (stage || '').trim().toLowerCase()
+  const sectionText = (section || '').trim()
+
+  if (taskType === 'writing') {
+    if (stageKey === 'breakdown' || sectionText.includes('题目拆解')) return 'breakdown'
+    if (stageKey === 'modeling' || sectionText.includes('模型建立') || sectionText.includes('假设与建模') || sectionText.includes('终审回退建模')) return 'modeling'
+    if (stageKey === 'review' || sectionText.includes('模型审查')) return 'review'
+    if (stageKey === 'solve' || sectionText.includes('算法求解') || sectionText.includes('算法与编程求解') || sectionText.includes('终审回退算法求解')) return 'solve'
+    if (stageKey === 'verification' || stageKey === 'analysis' || sectionText.includes('数值复核') || sectionText.includes('结果分析与验证') || sectionText.includes('终审回退数值复核')) return 'analysis'
+    if (stageKey === 'charts' || sectionText.includes('图表与一致性')) return 'charts'
+    if (stageKey === 'writing' || sectionText.includes('论文组织与润色') || sectionText.includes('论文撰写') || sectionText.includes('审查后修订')) return 'writing'
+    if (stageKey === 'delivery_audit' || stageKey === 'final_audit' || sectionText.includes('可交付终审复核') || sectionText.includes('最终审查')) return 'final_audit'
+    return 'all'
   }
+
+  if (stageKey === 'breakdown' || sectionText.includes('题目拆解')) return 'breakdown'
+  if (stageKey === 'consistency' || sectionText.includes('一致性')) return 'consistency'
+  if (stageKey === 'recalculation' || sectionText.includes('复核')) return 'recalculation'
+  if (stageKey === 'chart_consistency' || sectionText.includes('图文一致性') || sectionText.includes('图表')) return 'chart_consistency'
+  if (stageKey === 'wording' || sectionText.includes('措辞') || sectionText.includes('修订')) return 'wording'
+  return 'all'
+}
+
+function inferAgent(msg: RuntimeMessage, stage: string, section: string, fallbackAgent: string): string {
+  const normalizedKey = normalizeAgentKey(stage, section, props.taskType)
+  if (normalizedKey !== 'all') {
+    return normalizedKey
+  }
+
   if (msg.agent === 'writer') {
     return props.taskType === 'polish' ? 'wording' : 'writing'
   }
   if (msg.agent === 'coordinator') return 'breakdown'
   if (msg.agent === 'modeler') return 'modeling'
   if (msg.agent && agentMetaMap.value[msg.agent]) return msg.agent
-  if (stage && agentMetaMap.value[stage]) return stage
+  if (msg.agent === 'coder' && fallbackAgent !== 'all') {
+    return fallbackAgent
+  }
   if (msg.type === 'code' || (msg.type === 'result' && typeof msg.content === 'string')) {
-    return props.taskType === 'polish' ? 'recalculation' : 'solve'
+    return fallbackAgent !== 'all' ? fallbackAgent : (props.taskType === 'polish' ? 'recalculation' : 'solve')
   }
   return 'all'
 }
 
 function stageLabelFromStage(stage: string) {
-  const active = agentMetaMap.value[stage]
+  const activeKey = normalizeAgentKey(stage, '', props.taskType)
+  const active = agentMetaMap.value[activeKey]
   if (stage === 'done') return '✅ 完成'
   return active ? `${active.icon} ${active.label}` : '处理中...'
 }

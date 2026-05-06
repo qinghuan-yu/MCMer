@@ -170,8 +170,9 @@ class CoderAgent(Agent):
             f"3. 在结束前，必须在工作目录写出结构化结果文件 {result_filename}。\n"
             "4. 该 JSON 文件必须包含字段：section、summary、key_results、generated_files、warnings。\n"
             f"5. section 字段必须严格等于 {subtask_title}。\n"
-            "6. key_results 必须是数组；每个元素至少应包含 name、value、unit、evidence、source。\n"
-            "7. 若结果不可靠，必须写入 warnings，并在 key_results 中显式标注无法确认。"
+            "6. key_results 必须是数组；每个元素至少应包含 id、name、value、unit、evidence、source、verified。\n"
+            "7. 对关键结果，必须尽量补充 formula、formula_id、inputs、source_data、code_cell、warnings，用于后续生成 result_registry.json。\n"
+            "8. 若结果不可靠，必须写入 warnings，并在 key_results 中显式标注无法确认或 mismatch。"
         )
         await self.append_chat_history({"role": "user", "content": contract_prompt})
 
