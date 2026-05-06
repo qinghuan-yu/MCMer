@@ -1,5 +1,6 @@
 """工作流引擎 - 按任务类型编排写作与润色流水线。"""
 import os
+import re
 from typing import AsyncGenerator
 
 from app.config.setting import settings
@@ -15,7 +16,13 @@ from app.services.task_service import task_manager
 from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.tools.local_interpreter import LocalCodeInterpreter
 from app.tools.openalex_scholar import OpenAlexScholar
-from app.utils.common_utils import get_current_files, md_to_docx, normalize_math_markdown, save_json
+from app.utils.common_utils import (
+    build_paper_audit_manifest,
+    get_current_files,
+    md_to_docx,
+    normalize_math_markdown,
+    save_json,
+)
 from app.utils.log_util import logger
 
 
@@ -75,6 +82,68 @@ def _progress(
             current_subtask=current_subtask,
         ).model_dump(),
     }
+
+
+def _needs_keyword(text: str, patterns: list[str]) -> bool:
+    haystack = (text or "").lower()
+    return any(pattern.lower() in haystack for pattern in patterns)
+
+
+def _detect_repair_routes(*reports: str) -> list[str]:
+    combined = "\n".join(report for report in reports if report)
+    routes: set[str] = set()
+
+    if _needs_keyword(
+        combined,
+        [
+            "题设参数",
+            "参数被擅自修改",
+            "符号不一致",
+            "单位不一致",
+            "公式编号",
+            "模型定义",
+            "变量定义",
+        ],
+    ):
+        routes.add("modeling")
+
+    if _needs_keyword(
+        combined,
+        [
+            "无法复现",
+            "复算",
+            "数值不一致",
+            "表格值",
+            "关键数值",
+            "不可验证计算",
+            "阻断项",
+        ],
+    ):
+        routes.add("solver")
+
+    if _needs_keyword(
+        combined,
+        [
+            "参考文献",
+            "占位",
+            "虚构",
+            "图文不一致",
+            "降级措辞",
+            "写作",
+            "writer",
+        ],
+    ):
+        routes.add("writer")
+
+    if "modeling" in routes:
+        routes.add("solver")
+    if "solver" in routes:
+        routes.add("writer")
+
+    if not routes and re.search(r"\bBLOCK\b", combined, re.I):
+        routes.add("writer")
+
+    return [route for route in ["modeling", "solver", "writer"] if route in routes]
 
 
 def _build_models() -> dict[str, LLM]:
@@ -322,9 +391,48 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             raise ValueError("最终写作阶段返回空内容")
         yield _message("writing", _preview(final_paper), section="论文组织与润色")
 
+        delivery_auditor = CoderAgent(
+            task_id=task_id,
+            model=models["coder"],
+            work_dir=work_dir,
+            max_chat_turns=settings.MAX_CHAT_TURNS,
+            max_retries=settings.MAX_RETRIES,
+            code_interpreter=code_interpreter,
+        )
+        delivery_auditor.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["delivery_audit"]
+
         audit_report = ""
         max_audit_rounds = 2
         for audit_round in range(1, max_audit_rounds + 1):
+            draft_paper_path = os.path.join(work_dir, f"final_paper_audit_round_{audit_round}.md")
+            with open(draft_paper_path, "w", encoding="utf-8") as f:
+                f.write(normalize_math_markdown(final_paper))
+
+            audit_manifest_path = os.path.join(work_dir, f"delivery_audit_manifest_round_{audit_round}.json")
+            audit_manifest = build_paper_audit_manifest(question, final_paper)
+            save_json(audit_manifest, audit_manifest_path)
+
+            yield _progress(task_id, "delivery_audit", 0.94, f"可交付终审复核 Agent 第{audit_round}轮正在抽取公式、表格并复算", current_subtask="可交付终审复核")
+            delivery_audit_prompt = (
+                f"## 原题\n{question}\n\n"
+                f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
+                f"## 建模方案\n{stage_outputs['modeling']}\n\n"
+                f"## 模型审查\n{stage_outputs['review']}\n\n"
+                f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
+                f"## 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
+                f"## 当前工作目录文件\n{get_current_files(work_dir)}\n\n"
+                f"## 最终论文路径\n{os.path.basename(draft_paper_path)}\n\n"
+                f"## 自动抽取审计清单\n{os.path.basename(audit_manifest_path)}\n\n"
+                "请用代码读取最终论文和审计清单，完成公式抽取、表格数值抽取、关键结果复算、论文值与复算值比对、题设参数检查、公式编号/符号/单位检查、参考文献占位或虚构检查。"
+                "若发现阻断项，必须明确写出返工路由：modeling、solver、writer。"
+            )
+            delivery_audit_result = await delivery_auditor.run(
+                prompt=delivery_audit_prompt,
+                subtask_title="可交付终审复核",
+            )
+            stage_outputs[f"delivery_audit_round_{audit_round}"] = delivery_audit_result.model_dump()
+            yield _message("delivery_audit", _preview(delivery_audit_result.coder_response), section=f"可交付终审复核第{audit_round}轮")
+
             yield _progress(task_id, "final_audit", 0.96, f"最终审查 Agent 第{audit_round}轮核对审查意见", current_subtask="最终审查")
             audit_prompt = (
                 f"# 原题\n{question}\n\n"
@@ -332,8 +440,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 数值复核报告\n{verification_result.coder_response}\n\n"
                 f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
                 f"# 图表一致性结果\n{chart_result.coder_response}\n\n"
+                f"# 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
+                f"# 可交付终审结构化结果文件\n{', '.join(delivery_audit_result.structured_result_files) if delivery_audit_result.structured_result_files else '无'}\n\n"
                 f"# 最终论文\n{final_paper}\n\n"
-                "请检查最终论文是否完整吸收前序审查意见，是否仍存在无证据结论、符号不一致、图文不一致、复核失败项被写入正文或无法验证的断言。"
+                "请检查最终论文是否完整吸收前序审查意见与可交付终审复核结论，是否仍存在无证据结论、符号不一致、图文不一致、复核失败项被写入正文或无法验证的断言。"
             )
             audit_report = await _run_text_agent(
                 task_id,
@@ -346,20 +456,168 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             yield _message("final_audit", _preview(audit_report), section=f"最终审查第{audit_round}轮")
 
             audit_first_line = audit_report.splitlines()[0].upper() if audit_report.splitlines() else ""
-            blocked = "审计结论：BLOCK" in audit_report or "AUDIT结论：BLOCK" in audit_report or "BLOCK" in audit_first_line
+            delivery_first_line = delivery_audit_result.coder_response.splitlines()[0].upper() if delivery_audit_result.coder_response.splitlines() else ""
+            blocked = (
+                "审计结论：BLOCK" in audit_report
+                or "AUDIT结论：BLOCK" in audit_report
+                or "BLOCK" in audit_first_line
+                or "审计结论：BLOCK" in delivery_audit_result.coder_response
+                or "BLOCK" in delivery_first_line
+            )
             if not blocked:
                 break
 
             if audit_round == max_audit_rounds:
                 break
 
-            yield _progress(task_id, "writing", 0.985, f"论文组织与润色 Agent 正在根据第{audit_round}轮审查修订全文", current_subtask="审查后修订")
+            repair_routes = _detect_repair_routes(delivery_audit_result.coder_response, audit_report)
+            stage_outputs[f"final_audit_routes_round_{audit_round}"] = repair_routes
+
+            if "modeling" in repair_routes:
+                yield _progress(task_id, "modeling", 0.972, f"建模链路正在根据第{audit_round}轮终审问题回退修正", current_subtask="终审回退-建模")
+                modeling_repair_prompt = (
+                    f"# 原题\n{question}\n\n"
+                    f"# 当前建模方案\n{stage_outputs['modeling']}\n\n"
+                    f"# 当前最终论文\n{final_paper}\n\n"
+                    f"# 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
+                    f"# 最终审查报告\n{audit_report}\n\n"
+                    "请只修正被终审指出的参数、公式、符号、单位或建模定义问题，输出新的建模方案。"
+                )
+                stage_outputs["modeling"] = await _run_text_agent(
+                    task_id,
+                    models["modeling"],
+                    WRITING_STAGE_SYSTEM_PROMPTS["modeling"],
+                    modeling_repair_prompt,
+                    f"终审回退建模第{audit_round}轮",
+                )
+                yield _message("modeling", _preview(str(stage_outputs["modeling"])), section=f"终审回退建模第{audit_round}轮")
+
+                review_repair_prompt = (
+                    f"# 题目拆解\n{stage_outputs['breakdown']}\n\n"
+                    f"# 新建模方案\n{stage_outputs['modeling']}\n\n"
+                    f"# 终审指出的问题\n{delivery_audit_result.coder_response}\n\n"
+                    "请重新输出结构化模型审查，重点检查终审指出的问题是否已被修正。"
+                )
+                stage_outputs["review"] = await _run_text_agent(
+                    task_id,
+                    models["review"],
+                    WRITING_STAGE_SYSTEM_PROMPTS["review"],
+                    review_repair_prompt,
+                    f"终审回退模型审查第{audit_round}轮",
+                )
+                yield _message("review", _preview(str(stage_outputs["review"])), section=f"终审回退模型审查第{audit_round}轮")
+
+            if "solver" in repair_routes:
+                yield _progress(task_id, "solve", 0.976, f"求解链路正在根据第{audit_round}轮终审问题回退复算", current_subtask="终审回退-求解")
+                solver = CoderAgent(
+                    task_id=task_id,
+                    model=models["coder"],
+                    work_dir=work_dir,
+                    max_chat_turns=settings.MAX_CHAT_TURNS,
+                    max_retries=settings.MAX_RETRIES,
+                    code_interpreter=code_interpreter,
+                )
+                solver_prompt = (
+                    f"## 数学建模题目\n{question}\n\n"
+                    f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
+                    f"## 建模方案\n{stage_outputs['modeling']}\n\n"
+                    f"## 模型审查意见\n{stage_outputs['review']}\n\n"
+                    f"## 上一版最终论文\n{final_paper}\n\n"
+                    f"## 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
+                    f"## 最终审查报告\n{audit_report}\n\n"
+                    f"## 数据文件\n{data_context}\n\n"
+                    "请只针对终审阻断项重新计算、修正结果并更新结构化结果文件，禁止保留无法复现的旧结论。"
+                )
+                solver_result = await solver.run(prompt=solver_prompt, subtask_title="算法与编程求解")
+                stage_outputs["solve"] = solver_result.model_dump()
+                solver_images = solver_result.created_images
+                yield _message("solve", _preview(solver_result.coder_response), section=f"终审回退算法求解第{audit_round}轮")
+
+                verification_agent = CoderAgent(
+                    task_id=task_id,
+                    model=models["coder"],
+                    work_dir=work_dir,
+                    max_chat_turns=settings.MAX_CHAT_TURNS,
+                    max_retries=settings.MAX_RETRIES,
+                    code_interpreter=code_interpreter,
+                )
+                verification_agent.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["verification"]
+                artifact_context = get_current_files(work_dir)
+                verification_prompt = (
+                    f"## 原题\n{question}\n\n"
+                    f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
+                    f"## 建模方案\n{stage_outputs['modeling']}\n\n"
+                    f"## 模型审查意见\n{stage_outputs['review']}\n\n"
+                    f"## 新求解摘要\n{solver_result.coder_response}\n\n"
+                    f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
+                    f"## 数据文件\n{data_context}\n\n"
+                    f"## 当前工作目录结果文件\n{artifact_context}\n\n"
+                    f"## 可交付终审阻断项\n{delivery_audit_result.coder_response}\n\n"
+                    "请重新独立复算和核验终审阻断项涉及的关键数值、表格结论与图像结论。"
+                )
+                verification_result = await verification_agent.run(
+                    prompt=verification_prompt,
+                    subtask_title="数值复核",
+                )
+                stage_outputs["verification"] = verification_result.model_dump()
+                yield _message("verification", _preview(verification_result.coder_response), section=f"终审回退数值复核第{audit_round}轮")
+
+                analysis_prompt = (
+                    f"# 原题\n{question}\n\n"
+                    f"# 模型方案\n{stage_outputs['modeling']}\n\n"
+                    f"# 审查报告\n{stage_outputs['review']}\n\n"
+                    f"# 求解输出\n{solver_result.coder_response}\n\n"
+                    f"# 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
+                    f"# 数值复核报告\n{verification_result.coder_response}\n\n"
+                    f"# 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
+                    f"# 可交付终审阻断项\n{delivery_audit_result.coder_response}\n\n"
+                    f"# 当前结果文件清单\n{artifact_context}\n\n"
+                    "请重新输出结果分析与验证报告，并明确哪些结论已修复、哪些仍需降级。"
+                )
+                stage_outputs["analysis"] = await _run_text_agent(
+                    task_id,
+                    models["analysis"],
+                    WRITING_STAGE_SYSTEM_PROMPTS["analysis"],
+                    analysis_prompt,
+                    f"终审回退结果分析第{audit_round}轮",
+                )
+                yield _message("analysis", _preview(str(stage_outputs["analysis"])), section=f"终审回退结果分析第{audit_round}轮")
+
+                chart_agent = CoderAgent(
+                    task_id=task_id,
+                    model=models["coder"],
+                    work_dir=work_dir,
+                    max_chat_turns=settings.MAX_CHAT_TURNS,
+                    max_retries=settings.MAX_RETRIES,
+                    code_interpreter=code_interpreter,
+                )
+                chart_prompt = (
+                    f"## 结果分析报告\n{stage_outputs['analysis']}\n\n"
+                    f"## 求解结果\n{solver_result.coder_response}\n\n"
+                    f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
+                    f"## 模型符号与假设\n{stage_outputs['modeling']}\n\n"
+                    f"## 终审阻断项\n{delivery_audit_result.coder_response}\n\n"
+                    "请只修正与终审阻断项相关的图表或一致性问题，必要时更新图片并输出格式一致性校验清单。"
+                )
+                chart_result = await chart_agent.run(prompt=chart_prompt, subtask_title="图表与一致性")
+                chart_images = chart_result.created_images
+                stage_outputs["charts"] = chart_result.model_dump()
+                yield _message("charts", _preview(chart_result.coder_response), section=f"终审回退图表一致性第{audit_round}轮")
+
+            yield _progress(task_id, "writing", 0.985, f"论文组织与润色 Agent 正在根据第{audit_round}轮终审回退重写全文", current_subtask="终审回退-写作")
             revision_prompt = (
                 f"# 原题\n{question}\n\n"
                 f"# 已生成论文\n{final_paper}\n\n"
-                f"# 数值复核报告\n{verification_result.coder_response}\n\n"
+                f"# 更新后的建模方案\n{stage_outputs['modeling']}\n\n"
+                f"# 更新后的模型审查\n{stage_outputs['review']}\n\n"
+                f"# 更新后的求解结果\n{solver_result.coder_response}\n\n"
+                f"# 更新后的数值复核报告\n{verification_result.coder_response}\n\n"
+                f"# 更新后的结果分析与验证\n{stage_outputs['analysis']}\n\n"
+                f"# 更新后的图表与一致性\n{chart_result.coder_response}\n\n"
+                f"# 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
                 f"# 最终审查报告\n{audit_report}\n\n"
-                "请严格根据最终审查报告修订全文。若某问题仍无法修正，必须在正文中降级措辞，不得忽略，也不得保留与复核报告冲突的确定性表述。"
+                f"# 返工路由\n{', '.join(repair_routes) if repair_routes else 'writer'}\n\n"
+                "请严格根据终审报告与返工后的最新结果重写全文。若某问题仍无法修正，必须在正文中降级措辞，不得忽略，也不得保留与复核报告冲突的确定性表述。"
             )
             revised_writer_result = await writer.run(
                 prompt=revision_prompt,

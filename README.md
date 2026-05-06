@@ -65,6 +65,70 @@ MCMer/
 
 ## 快速启动
 
+### 首次配置（git clone 之后）
+
+如果你是刚通过 `git clone` 拉取本项目，建议按下面顺序完成第一次配置。
+
+#### 1. 创建 Python 虚拟环境
+
+本项目默认使用项目根目录下的 `.venv`，`start-dev.cmd` 也依赖这个约定。
+
+```powershell
+git clone <your-repo-url>
+cd MCMer
+
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+pip install -e .\backend
+```
+
+说明：
+
+- 后端要求 Python >= 3.10，建议直接使用 Python 3.11。
+- 使用 `pip install -e .\backend` 后，会按 [backend/pyproject.toml](backend/pyproject.toml) 安装后端依赖。
+- 后端依赖量级属于中等，不算特别夸张，但会比普通 Web 项目稍重，因为包含 Jupyter/ipykernel、LiteLLM、文档导出等能力。
+
+#### 2. 安装前端依赖
+
+```powershell
+cd frontend
+pnpm install
+cd ..
+```
+
+说明：
+
+- 需要本机已安装 Node.js 和 `pnpm`。
+- 前端依赖量级不大，主要是 Vue 3、Vite、Pinia、KaTeX、marked 等常规依赖。
+
+#### 3. 复制环境配置文件
+
+后端默认读取 `backend/.env.dev`，而不是直接读取 `.env.example`。因此 clone 后建议先复制一份：
+
+```powershell
+Copy-Item .\backend\.env.example .\backend\.env.dev
+```
+
+前端如果需要单独指定后端地址，也可以复制：
+
+```powershell
+Copy-Item .\frontend\.env.example .\frontend\.env.development
+```
+
+至少建议检查这些配置项：
+
+- `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `MIMO_API_KEY`
+- `DEFAULT_MODEL`、`MODELER_MODEL`、`CODER_MODEL`、`WRITER_MODEL`
+- `CODE_INTERPRETER`，默认是 `local`
+- `REDIS_URL`，默认是 `redis://localhost:6379/0`
+
+补充说明：
+
+- Redis 不是强制前置。若本机没有 Redis，后端会自动退回内存模式，项目仍可启动。
+- 运行时模型和 key 也可以在前端设置页中修改，本地配置会写入 `backend/.local/runtime_config.json`。
+
 ### 方式一：一键启动
 
 Windows 下可直接双击根目录脚本：
@@ -106,11 +170,13 @@ pnpm run dev --host 0.0.0.0 --port 5173
 ### Python
 
 - 建议直接使用项目根目录下的 `.venv`
+- 推荐 Python 3.11
 - 后端依赖定义在 [backend/pyproject.toml](backend/pyproject.toml)
 
 ### Node.js
 
 - 需要本地已安装 `pnpm`
+- 建议 Node.js 18+
 - 前端依赖定义在 [frontend/package.json](frontend/package.json)
 
 ### 配置文件
@@ -166,6 +232,24 @@ cd backend
 - `notebook.ipynb`：代码执行记录
 - `*_structured_results.json`：结构化中间结果
 - 图表、CSV、JSON 等分析文件
+
+## 免责声明
+
+本项目 MCMer 仅用于数学建模学习、科研参考与教学演示，旨在为使用者提供题目分析思路、流程演示、建模方法参考与论文写作范式示例。
+
+项目在输入题目与数据后生成的论文、图表、代码和相关结果，仅可作为学习材料，用于帮助使用者理解建模原理、梳理解题流程和学习学术表达规范，不构成可直接提交、可直接发表或可直接用于正式评审的成果。
+
+严禁任何个人或团体将本项目输出内容直接或间接用于以下正式场景：
+
+- 数学建模竞赛提交
+- 课程作业提交
+- 学术论文发表
+- 学位论文或科研成果申报
+- 其他要求原创性、独立完成或真实研究贡献的正式用途
+
+若使用者违反上述约定，擅自将本项目输出内容用于违规用途，由此产生的一切后果，包括但不限于竞赛成绩取消、课程成绩处理、学术处分、论文撤稿或其他责任，均由使用者自行承担，与本项目作者及贡献者无关，作者与贡献者不承担任何直接或间接责任。
+
+同时，禁止利用本项目从事有偿代做、内容倒卖、包装投稿、虚假申报或其他违规盈利行为。一经发现，项目作者有权在适用范围内保留追究相关责任的权利。
 
 ## 许可证
 
