@@ -36,6 +36,7 @@ class TaskManager:
         source_question: str = "",
         paper_content: str = "",
         polishing_requirements: str = "",
+        workflow_mode: str = "",
     ) -> str:
         """创建新任务（支持作为修订子任务）"""
         task_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
@@ -49,6 +50,7 @@ class TaskManager:
             "question": question,
             "status": TaskStatus.PENDING.value,
             "task_type": task_type,
+            "workflow_mode": (workflow_mode or settings.WORKFLOW_MODE or "standard").strip().lower(),
             "work_dir": work_dir,
             "created_at": datetime.now().isoformat(),
             "parent_task_id": parent_task_id,
@@ -216,6 +218,7 @@ class TaskManager:
                 "question": task_info.get("question", "")[:120],
                 "status": task_info.get("status", "unknown"),
                 "task_type": task_info.get("task_type", "writing"),
+                "workflow_mode": task_info.get("workflow_mode", "standard"),
                 "created_at": task_info.get("created_at", ""),
                 "has_paper": has_paper,
                 "has_notebook": (task_dir / "notebook.ipynb").exists(),
@@ -232,6 +235,7 @@ class TaskManager:
                     "question": info.get("question", "")[:120],
                     "status": info.get("status", "pending"),
                     "task_type": info.get("task_type", "writing"),
+                    "workflow_mode": info.get("workflow_mode", "standard"),
                     "created_at": info.get("created_at", ""),
                     "has_paper": os.path.exists(os.path.join(info["work_dir"], "res.md")),
                     "has_notebook": os.path.exists(os.path.join(info["work_dir"], "notebook.ipynb")),
@@ -272,6 +276,7 @@ class TaskManager:
             "paper_version": 2 if paper_v2 else (1 if paper else 0),
             "status": task.get("status", "unknown"),
             "task_type": task.get("task_type", "writing"),
+            "workflow_mode": task.get("workflow_mode", "standard"),
             "created_at": task.get("created_at", ""),
         }
 

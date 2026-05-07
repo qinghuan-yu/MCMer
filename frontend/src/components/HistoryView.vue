@@ -116,6 +116,14 @@
           <input type="checkbox" v-model="reviseWithCode" />
           同时让代码手重新执行相关代码
         </label>
+        <label class="checkbox-label mode-label">
+          修订模式
+          <select v-model="workflowMode" class="mode-select">
+            <option value="fast">fast：快速模式</option>
+            <option value="standard">standard：标准模式</option>
+            <option value="strict">strict：严格模式</option>
+          </select>
+        </label>
         <div class="dialog-actions">
           <button class="btn-cancel" @click="closeReviseDialog">取消</button>
           <button
@@ -139,6 +147,7 @@ interface HistoryTask {
   question: string
   status: string
   task_type: 'writing' | 'polish'
+  workflow_mode?: 'fast' | 'standard' | 'strict'
   created_at: string
   has_paper: boolean
   has_notebook: boolean
@@ -150,7 +159,7 @@ interface HistoryTask {
 const emit = defineEmits<{
   openProject: [task: HistoryTask]
   viewPaper: [taskId: string]
-  revise: [taskId: string, feedback: string, reviseCode: boolean]
+  revise: [taskId: string, feedback: string, reviseCode: boolean, workflowMode: 'fast' | 'standard' | 'strict']
   newTask: []
 }>()
 
@@ -163,6 +172,7 @@ const showReviseDialog = ref(false)
 const reviseTargetId = ref('')
 const reviseFeedback = ref('')
 const reviseWithCode = ref(false)
+const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
 
 const statusMap: Record<string, string> = {
   pending: '等待中',
@@ -191,6 +201,7 @@ function startRevise(task: HistoryTask) {
   reviseTargetId.value = task.task_id
   reviseFeedback.value = ''
   reviseWithCode.value = false
+  workflowMode.value = task.workflow_mode || 'standard'
   showReviseDialog.value = true
 }
 
@@ -211,7 +222,7 @@ function closeReviseDialog() {
 
 function submitRevise() {
   if (!reviseFeedback.value.trim()) return
-  emit('revise', reviseTargetId.value, reviseFeedback.value.trim(), reviseWithCode.value)
+  emit('revise', reviseTargetId.value, reviseFeedback.value.trim(), reviseWithCode.value, workflowMode.value)
   showReviseDialog.value = false
 }
 
@@ -559,6 +570,22 @@ onMounted(async () => {
   font-size: 0.85rem;
   color: var(--text-secondary);
   cursor: pointer;
+}
+
+.mode-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.mode-select {
+  min-width: 220px;
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(20, 28, 45, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0 12px;
 }
 
 .dialog-actions {

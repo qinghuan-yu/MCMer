@@ -33,6 +33,7 @@ router = APIRouter()
 class CreateTaskRequest(BaseModel):
     question: str = ""
     task_type: str = "writing"
+    workflow_mode: str = "standard"
     source_question: str = ""
     paper_content: str = ""
     polishing_requirements: str = ""
@@ -43,6 +44,7 @@ class TaskResponse(BaseModel):
     task_id: str
     status: str
     task_type: str = "writing"
+    workflow_mode: str = "standard"
     work_dir: str = ""
 
 
@@ -89,8 +91,11 @@ def _cancel_payload(task_id: str) -> dict:
 async def create_task(req: CreateTaskRequest):
     """创建新的数学建模任务"""
     task_type = (req.task_type or "writing").strip().lower()
+    workflow_mode = (req.workflow_mode or "standard").strip().lower()
     if task_type not in {"writing", "polish"}:
         raise HTTPException(status_code=400, detail="不支持的任务类型")
+    if workflow_mode not in {"fast", "standard", "strict"}:
+        raise HTTPException(status_code=400, detail="不支持的 workflow_mode")
 
     if task_type == "writing" and not req.question.strip() and not req.expect_files:
         raise HTTPException(status_code=400, detail="问题不能为空")
@@ -98,9 +103,11 @@ async def create_task(req: CreateTaskRequest):
     if task_type == "polish" and not req.paper_content.strip() and not req.expect_files:
         raise HTTPException(status_code=400, detail="润色任务需要提供论文内容")
 
+    default_question = "论文润色任务" if task_type == "polish" else ""
     task_id = task_manager.create_task(
-        question=req.question.strip() or "论文润色任务",
+        question=req.question.strip() or default_question,
         task_type=task_type,
+        workflow_mode=workflow_mode,
         source_question=req.source_question.strip(),
         paper_content=req.paper_content,
         polishing_requirements=req.polishing_requirements.strip(),
@@ -111,6 +118,7 @@ async def create_task(req: CreateTaskRequest):
         task_id=task_id,
         status=task["status"],
         task_type=task.get("task_type", task_type),
+        workflow_mode=task.get("workflow_mode", workflow_mode),
         work_dir=task["work_dir"],
     )
 
@@ -165,6 +173,7 @@ async def get_task(task_id: str):
         task_id=task_id,
         status=task.get("status", "unknown"),
         task_type=task.get("task_type", "writing"),
+        workflow_mode=task.get("workflow_mode", "standard"),
         work_dir=task.get("work_dir", ""),
     )
 
@@ -200,6 +209,7 @@ async def list_active_tasks():
                 "task_id": tid,
                 "status": info["status"],
                 "task_type": info.get("task_type", "writing"),
+                "workflow_mode": info.get("workflow_mode", "standard"),
                 "question": info.get("question", "")[:100],
                 "created_at": info.get("created_at", ""),
             }
@@ -312,6 +322,7 @@ async def revise_paper(task_id: str, req: RevisionRequest):
         feedback=req.feedback,
         revise_code=req.revise_code,
         task_type="polish",
+        workflow_mode=(req.workflow_mode or task.get("workflow_mode") or "standard"),
         source_question=task.get("source_question", task.get("question", "")),
         paper_content=paper,
         polishing_requirements=req.feedback,

@@ -55,12 +55,17 @@ class Settings(BaseSettings):
     MAX_CHAT_TURNS: int = 30
     MAX_RETRIES: int = 5
     MAX_MEMORY: int = 12
+    LLM_REQUEST_TIMEOUT: int = 120
+    WORKFLOW_MODE: str = "standard"
+    CODER_MAX_TOTAL_TOOL_CALLS: int = 8
+    CODER_MAX_WALL_SECONDS: int = 180
 
     # --- Work Dir ---
     WORK_DIR: str = "./project/work_dir"
 
     # --- Log ---
     LOG_LEVEL: str = "INFO"
+    IGNORE_SYSTEM_PROXY: bool = True
 
     model_config = {"env_file": str(env_path), "extra": "allow"}
 

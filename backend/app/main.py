@@ -4,6 +4,20 @@ MCMer - FastAPI 主入口
 import os
 from contextlib import asynccontextmanager
 
+
+def _clear_proxy_env() -> None:
+    """清理会影响第三方 HTTP 客户端的系统代理变量。"""
+    proxy_keys = [
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    ]
+    for key in proxy_keys:
+        os.environ.pop(key, None)
+
+
+if os.getenv("IGNORE_SYSTEM_PROXY", "true").strip().lower() not in {"0", "false", "no", "off"}:
+    _clear_proxy_env()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -16,10 +30,27 @@ from app.utils.log_util import logger
 from app.config.setting import settings
 
 
+def _clear_proxy_env_with_log() -> None:
+    """清理代理变量并记录日志。"""
+    proxy_keys = [
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    ]
+    cleared = []
+    for key in proxy_keys:
+        if os.environ.pop(key, None) is not None:
+            cleared.append(key)
+    if cleared:
+        logger.warning("已清理进程代理环境变量: %s", ", ".join(cleared))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("🚀 MCMer 启动中...")
+    if settings.IGNORE_SYSTEM_PROXY:
+        _clear_proxy_env_with_log()
+
     try:
         await redis_manager.connect()
         logger.info("✅ Redis 连接成功")
@@ -29,6 +60,8 @@ async def lifespan(app: FastAPI):
     # 加载运行时配置
     logger.info("📋 已加载运行时配置")
     config_manager._apply_to_env()
+    if settings.IGNORE_SYSTEM_PROXY:
+        _clear_proxy_env_with_log()
 
     # 确保工作目录存在
     os.makedirs(settings.WORK_DIR, exist_ok=True)

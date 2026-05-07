@@ -82,6 +82,13 @@
           同时让代码手重新执行相关代码
         </label>
 
+        <label class="input-label">修订模式</label>
+        <select v-model="workflowMode" class="mode-select">
+          <option value="fast">fast：快速模式</option>
+          <option value="standard">standard：标准模式</option>
+          <option value="strict">strict：严格模式</option>
+        </select>
+
         <button
           class="submit-revise-btn"
           :disabled="!feedback.trim() || submitting"
@@ -107,7 +114,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: []
-  revise: [taskId: string, feedback: string, reviseCode: boolean]
+  revise: [taskId: string, feedback: string, reviseCode: boolean, workflowMode: 'fast' | 'standard' | 'strict']
   newTask: []
 }>()
 
@@ -121,6 +128,7 @@ const latestVersion = ref(1)
 const showRevisePanel = ref(false)
 const feedback = ref('')
 const reviseWithCode = ref(false)
+const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
 const submitting = ref(false)
 
 // 版本选择
@@ -193,7 +201,7 @@ function loadVersion() {
 function submitRevise() {
   if (!feedback.value.trim()) return
   submitting.value = true
-  emit('revise', props.taskId, feedback.value.trim(), reviseWithCode.value)
+  emit('revise', props.taskId, feedback.value.trim(), reviseWithCode.value, workflowMode.value)
   // 不在这里重置 submitting，让父组件在 WebSocket 完成后处理
 }
 
@@ -420,6 +428,16 @@ onMounted(() => {
   display: block;
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+.mode-select {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(20, 28, 45, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0 12px;
 }
 
 .revise-textarea {

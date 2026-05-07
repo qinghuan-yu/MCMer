@@ -30,6 +30,9 @@ SUPPLEMENTARY_EXTENSIONS = {
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".bmp"}
 MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
+PRIMARY_QUESTION_HINTS = ("problem", "question", "题目", "原题", "赛题")
+SECONDARY_QUESTION_HINTS = ("附录", "appendix", "术语", "说明")
+
 
 class SourceIngestError(RuntimeError):
     """源材料解析失败。"""
@@ -162,12 +165,36 @@ def _build_image_manifest(bundle_dir: Path, bundle_prefix: str, referenced_asset
     return manifest
 
 
+def _score_question_source(path: str, text: str = "") -> int:
+    filename = Path(path).stem.lower()
+    lowered_text = (text or "").strip().lower()
+    score = 0
+
+    if any(token in filename for token in PRIMARY_QUESTION_HINTS):
+        score += 10
+    if any(token in filename for token in SECONDARY_QUESTION_HINTS):
+        score -= 10
+
+    if any(token in lowered_text for token in ("问题一", "问题二", "问题三", "题目", "背景", "赛题")):
+        score += 3
+    if lowered_text.startswith("附录") or "附录1" in lowered_text:
+        score -= 3
+
+    return score
+
+
 def ingest_question_source(saved_path: str, task: dict) -> dict[str, Any]:
     text = _read_text_like_file(saved_path).strip()
-    updates = {
-        "source_question_text": text,
-        "source_question_file": saved_path,
-    }
+    updates: dict[str, Any] = {}
+    current_source_file = str(task.get("source_question_file") or "").strip()
+    current_score = _score_question_source(current_source_file, str(task.get("source_question_text") or "")) if current_source_file else -10**9
+    new_score = _score_question_source(saved_path, text)
+
+    if not current_source_file or new_score >= current_score:
+        updates.update({
+            "source_question_text": text,
+            "source_question_file": saved_path,
+        })
     if not (task.get("question") or "").strip():
         updates["question"] = text
     if not (task.get("source_question") or "").strip():

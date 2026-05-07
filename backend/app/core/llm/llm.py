@@ -5,6 +5,20 @@ import os
 import asyncio
 from typing import Optional, AsyncGenerator
 
+
+def _clear_proxy_env() -> None:
+    proxy_keys = [
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    ]
+    for key in proxy_keys:
+        os.environ.pop(key, None)
+
+
+if os.getenv("IGNORE_SYSTEM_PROXY", "true").strip().lower() not in {"0", "false", "no", "off"}:
+    _clear_proxy_env()
+
+import httpx
 import litellm
 from litellm import completion, acompletion
 from litellm.exceptions import APIError, RateLimitError, ServiceUnavailableError
@@ -15,6 +29,15 @@ from app.utils.log_util import logger
 # 配置 LiteLLM
 litellm.drop_params = True
 litellm.telemetry = False
+
+
+def _configure_litellm_http_clients() -> None:
+    """强制 LiteLLM 使用不信任系统代理的 HTTP 客户端。"""
+    litellm.client_session = httpx.Client(trust_env=False)
+    litellm.aclient_session = httpx.AsyncClient(trust_env=False)
+
+
+_configure_litellm_http_clients()
 
 
 def _get_effective_key(env_key: str, setting_val: str) -> Optional[str]:
@@ -172,6 +195,7 @@ class LLM:
             "messages": history,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "timeout": settings.LLM_REQUEST_TIMEOUT,
         }
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -183,8 +207,22 @@ class LLM:
 
         for attempt in range(3):
             try:
-                response = await acompletion(**kwargs)
+                response = await asyncio.wait_for(
+                    acompletion(**kwargs),
+                    timeout=settings.LLM_REQUEST_TIMEOUT + 5,
+                )
                 return response
+            except asyncio.TimeoutError:
+                wait = 2 ** attempt
+                logger.warning(
+                    f"{agent_name}: 请求超时, 第{attempt+1}次重试, "
+                    f"等待{wait}s"
+                )
+                if attempt == 2:
+                    raise RuntimeError(
+                        f"{agent_name or 'LLM'}: 请求超时，超过 {settings.LLM_REQUEST_TIMEOUT}s"
+                    )
+                await asyncio.sleep(wait)
             except (RateLimitError, ServiceUnavailableError) as e:
                 wait = 2 ** attempt
                 logger.warning(
@@ -212,6 +250,7 @@ class LLM:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": True,
+            "timeout": settings.LLM_REQUEST_TIMEOUT,
         }
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -219,10 +258,16 @@ class LLM:
             kwargs["api_base"] = self.base_url
 
         try:
-            response = await acompletion(**kwargs)
+            response = await asyncio.wait_for(
+                acompletion(**kwargs),
+                timeout=settings.LLM_REQUEST_TIMEOUT + 5,
+            )
             async for chunk in response:
                 if chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
+        except asyncio.TimeoutError:
+            logger.error(f"{agent_name}: 流式对话超时")
+            yield f"\n[错误: 请求超时，超过 {settings.LLM_REQUEST_TIMEOUT}s]"
         except Exception as e:
             logger.error(f"{agent_name}: 流式对话错误 - {e}")
             yield f"\n[错误: {str(e)}]"
@@ -235,6 +280,7 @@ class LLM:
                 messages=history,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+                timeout=settings.LLM_REQUEST_TIMEOUT,
             )
             return response.choices[0].message.content
         except Exception as e:

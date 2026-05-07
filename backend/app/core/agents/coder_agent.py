@@ -15,6 +15,7 @@ from pathlib import Path
 import importlib.metadata
 import json
 import re
+import time
 from app.core.functions import coder_tools
 
 
@@ -26,11 +27,15 @@ class CoderAgent(Agent):
         work_dir: str,
         max_chat_turns: int = settings.MAX_CHAT_TURNS,
         max_retries: int = settings.MAX_RETRIES,
+        max_total_tool_calls: int = settings.CODER_MAX_TOTAL_TOOL_CALLS,
+        max_wall_seconds: int = settings.CODER_MAX_WALL_SECONDS,
         code_interpreter: BaseCodeInterpreter = None,
     ) -> None:
         super().__init__(task_id, model, max_chat_turns)
         self.work_dir = work_dir
         self.max_retries = max_retries
+        self.max_total_tool_calls = max_total_tool_calls
+        self.max_wall_seconds = max_wall_seconds
         self.is_first_run = True
         self.system_prompt = CODER_PROMPT
         self.code_interpreter = code_interpreter
@@ -152,11 +157,89 @@ class CoderAgent(Agent):
         if missing:
             return False, f"结构化结果文件缺少字段: {', '.join(missing)}"
 
+        if not isinstance(payload.get("summary"), str) or not payload.get("summary", "").strip():
+            return False, "summary 必须是非空字符串"
+
         if not isinstance(payload.get("key_results"), list):
             return False, "key_results 必须是数组"
 
+        if not isinstance(payload.get("generated_files"), list):
+            return False, "generated_files 必须是数组"
+
+        if not isinstance(payload.get("warnings"), list):
+            return False, "warnings 必须是数组"
+
         if payload.get("section") != expected_section:
             return False, f"section 字段必须为 {expected_section}"
+
+        key_results = payload.get("key_results", [])
+        if not key_results:
+            return False, "key_results 不能为空"
+
+        status_allowed = {"verified", "mismatch", "blocked", "unverified"}
+        verification_section = expected_section == "数值复核"
+
+        for index, item in enumerate(key_results, start=1):
+            if not isinstance(item, dict):
+                return False, f"key_results[{index}] 必须是对象"
+
+            common_required = ["id", "name", "verified", "status", "warnings"]
+            common_missing = [key for key in common_required if key not in item]
+            if common_missing:
+                return False, f"key_results[{index}] 缺少字段: {', '.join(common_missing)}"
+
+            if str(item.get("status", "")).strip() not in status_allowed:
+                return False, f"key_results[{index}].status 非法"
+
+            if not isinstance(item.get("warnings"), list):
+                return False, f"key_results[{index}].warnings 必须是数组"
+
+            if verification_section:
+                required = ["unit", "source_data"]
+                missing_fields = [key for key in required if key not in item]
+                if missing_fields:
+                    return False, f"key_results[{index}] 缺少字段: {', '.join(missing_fields)}"
+
+                if not isinstance(item.get("source_data"), list):
+                    return False, f"key_results[{index}].source_data 必须是数组"
+
+                has_verification_value = any(
+                    item.get(key) not in {None, "", "见论文", "无法确认"}
+                    for key in ["paper_value", "value", "computed_value"]
+                )
+                if not has_verification_value:
+                    return False, f"key_results[{index}] 缺少可复核的 paper_value/value/computed_value"
+
+                if item.get("status") == "verified" and not item.get("source_data"):
+                    return False, f"key_results[{index}] 为 verified 时 source_data 不能为空"
+            else:
+                required = [
+                    "value",
+                    "unit",
+                    "formula",
+                    "inputs",
+                    "source_data",
+                    "code_cell",
+                    "evidence",
+                    "source",
+                ]
+                missing_fields = [key for key in required if key not in item]
+                if missing_fields:
+                    return False, f"key_results[{index}] 缺少字段: {', '.join(missing_fields)}"
+
+                if not isinstance(item.get("inputs"), dict):
+                    return False, f"key_results[{index}].inputs 必须是对象"
+
+                if not isinstance(item.get("source_data"), list):
+                    return False, f"key_results[{index}].source_data 必须是数组"
+
+                if item.get("status") == "verified":
+                    if item.get("value") in {None, "", "见论文", "无法确认"}:
+                        return False, f"key_results[{index}] 为 verified 时 value 不能为空且不能是占位文本"
+                    if not item.get("source_data"):
+                        return False, f"key_results[{index}] 为 verified 时 source_data 不能为空"
+                    if not str(item.get("code_cell", "")).strip() and not str(item.get("source", "")).strip():
+                        return False, f"key_results[{index}] 为 verified 时 code_cell 或 source 至少一个非空"
 
         return True, ""
 
@@ -170,9 +253,11 @@ class CoderAgent(Agent):
             f"3. 在结束前，必须在工作目录写出结构化结果文件 {result_filename}。\n"
             "4. 该 JSON 文件必须包含字段：section、summary、key_results、generated_files、warnings。\n"
             f"5. section 字段必须严格等于 {subtask_title}。\n"
-            "6. key_results 必须是数组；每个元素至少应包含 id、name、value、unit、evidence、source、verified。\n"
-            "7. 对关键结果，必须尽量补充 formula、formula_id、inputs、source_data、code_cell、warnings，用于后续生成 result_registry.json。\n"
-            "8. 若结果不可靠，必须写入 warnings，并在 key_results 中显式标注无法确认或 mismatch。"
+            "6. key_results 必须是数组，且不能为空。\n"
+            "7. 若当前子任务不是数值复核，则每个 key_result 至少应包含 id、name、value、unit、formula、inputs、source_data、code_cell、evidence、source、verified、status、warnings。\n"
+            "8. 若当前子任务是数值复核，则每个 key_result 至少应包含 id、name、paper_value、computed_value 或 value、unit、source_data、verified、status、warnings。\n"
+            "9. 对 status=verified 的条目，禁止使用 见论文/无法确认 这类占位值；必须给出真实 value 和 source_data。\n"
+            "10. 若结果不可靠，必须写入 warnings，并在 key_results 中显式标注 mismatch 或 blocked。"
         )
         await self.append_chat_history({"role": "user", "content": contract_prompt})
 
@@ -216,6 +301,87 @@ class CoderAgent(Agent):
                     "但只有在原始子任务要求已经全部满足时，才输出最终结果并停止调用工具。"
                 ),
             }
+        )
+
+    async def _force_blocked_result(
+        self,
+        expected_result_file: Path,
+        subtask_title: str,
+        reason: str,
+    ) -> CoderToWriter:
+        blocked_id = f"{self._sanitize_section_name(subtask_title)}_blocked"
+        blocked_result = {
+            "id": blocked_id,
+            "name": f"{subtask_title}执行状态",
+            "value": "blocked",
+            "paper_value": "",
+            "computed_value": "blocked",
+            "unit": "",
+            "formula": "",
+            "inputs": {},
+            "source_data": [],
+            "code_cell": "",
+            "evidence": reason,
+            "source": "coder_guardrail",
+            "verified": False,
+            "status": "blocked",
+            "warnings": [reason],
+        }
+
+        existing_payload: dict[str, object] = {}
+        if expected_result_file.exists():
+            try:
+                existing_payload = json.loads(expected_result_file.read_text(encoding="utf-8"))
+            except Exception:
+                existing_payload = {}
+
+        existing_key_results = existing_payload.get("key_results", [])
+        if not isinstance(existing_key_results, list):
+            existing_key_results = []
+
+        filtered_key_results = [
+            item for item in existing_key_results if isinstance(item, dict) and item.get("id") != blocked_id
+        ]
+        filtered_key_results.append(blocked_result)
+
+        existing_generated_files = existing_payload.get("generated_files", [])
+        if not isinstance(existing_generated_files, list):
+            existing_generated_files = []
+
+        existing_warnings = existing_payload.get("warnings", [])
+        if not isinstance(existing_warnings, list):
+            existing_warnings = []
+
+        existing_summary = str(existing_payload.get("summary", "") or "").strip()
+        blocked_summary = f"{subtask_title} 被阻断：{reason}"
+        if existing_summary and blocked_summary not in existing_summary:
+            summary = f"{existing_summary}\n\n{blocked_summary}"
+        else:
+            summary = blocked_summary
+
+        payload = {
+            "section": existing_payload.get("section") or subtask_title,
+            "summary": summary,
+            "key_results": filtered_key_results,
+            "generated_files": list(dict.fromkeys(str(item) for item in existing_generated_files if item)),
+            "warnings": list(dict.fromkeys([*existing_warnings, reason])),
+        }
+        expected_result_file.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content=reason,
+                type="warning",
+                agent="coder",
+            ),
+        )
+        return CoderToWriter(
+            coder_response=f"{subtask_title} 已阻断：{reason}",
+            created_images=[],
+            structured_result_files=[expected_result_file.name],
         )
 
     async def _handle_repeated_code(self, code: str, subtask_title: str) -> bool:
@@ -279,20 +445,49 @@ class CoderAgent(Agent):
         await self.append_chat_history({"role": "user", "content": prompt})
 
         retry_count = 0
+        total_retry_count = 0
+        total_tool_calls = 0
         last_error_message = ""
         structured_result_retry_count = 0
         expected_result_file = Path(self.work_dir) / self._structured_result_filename(subtask_title)
+        started_at = time.monotonic()
 
         while True:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= self.max_wall_seconds:
+                return await self._force_blocked_result(
+                    expected_result_file,
+                    subtask_title,
+                    f"超过最大执行时间 {self.max_wall_seconds} 秒，任务被阻断",
+                )
+
+            if total_tool_calls >= self.max_total_tool_calls:
+                return await self._force_blocked_result(
+                    expected_result_file,
+                    subtask_title,
+                    f"超过最大工具调用次数 {self.max_total_tool_calls}，任务被阻断",
+                )
+
+            if total_retry_count >= self.max_retries:
+                return await self._force_blocked_result(
+                    expected_result_file,
+                    subtask_title,
+                    f"超过最大错误重试次数 {self.max_retries}，任务被阻断",
+                )
+
             if retry_count >= self.max_retries:
-                await self._soft_reset_retry_limit(last_error_message)
-                retry_count = 0
-                continue
+                return await self._force_blocked_result(
+                    expected_result_file,
+                    subtask_title,
+                    f"连续错误重试达到上限 {self.max_retries}，最后错误：{last_error_message}",
+                )
 
             if self.current_chat_turns >= self.max_chat_turns:
-                await self._soft_reset_chat_limit()
-                self.current_chat_turns = 0
-                continue
+                return await self._force_blocked_result(
+                    expected_result_file,
+                    subtask_title,
+                    f"达到最大对话轮次 {self.max_chat_turns}，任务被阻断",
+                )
 
             self.current_chat_turns += 1
             logger.info(f"当前对话轮次: {self.current_chat_turns}")
@@ -317,6 +512,7 @@ class CoderAgent(Agent):
 
                     if tool_call.function.name == "execute_code":
                         logger.info(f"调用工具: {tool_call.function.name}")
+                        total_tool_calls += 1
                         await redis_manager.publish_message(
                             self.task_id,
                             SystemMessage(
@@ -374,6 +570,7 @@ class CoderAgent(Agent):
 
                             logger.warning(f"代码执行错误: {error_message}")
                             retry_count += 1
+                            total_retry_count += 1
                             logger.info(f"当前尝试次:{retry_count} / {self.max_retries}")
                             last_error_message = error_message
                             reflection_prompt = get_reflection_prompt(error_message, code)
@@ -430,8 +627,10 @@ class CoderAgent(Agent):
                             }
                         )
                         if structured_result_retry_count >= 3:
-                            raise RuntimeError(
-                                f"{subtask_title} 未能按要求生成有效的结构化结果文件: {validation_error}"
+                            return await self._force_blocked_result(
+                                expected_result_file,
+                                subtask_title,
+                                f"未能生成有效的结构化结果文件: {validation_error}",
                             )
                         continue
 
@@ -454,6 +653,7 @@ class CoderAgent(Agent):
             except Exception as e:
                 logger.error(f"执行过程中发生异常: {str(e)}")
                 retry_count += 1
+                total_retry_count += 1
                 last_error_message = str(e)
                 continue
             logger.info(f"{self.__class__.__name__}:完成:执行子任务: {subtask_title}")

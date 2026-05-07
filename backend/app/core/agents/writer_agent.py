@@ -124,17 +124,20 @@ class WriterAgent(Agent):
         footnotes = []
 
         response_content = ""
+        tool_only_turns = 0
+        force_plaintext_response = False
         for _ in range(self.max_chat_turns):
             response = await self.model.chat(
                 history=self.chat_history,
-                tools=writer_tools,
-                tool_choice="auto",
+                tools=None if force_plaintext_response else writer_tools,
+                tool_choice="none" if force_plaintext_response else "auto",
                 agent_name=self.__class__.__name__,
                 sub_title=sub_title,
             )
             message = response.choices[0].message
 
             if hasattr(message, "tool_calls") and message.tool_calls:
+                tool_only_turns += 1
                 logger.info("检测到工具调用")
                 await self.append_chat_history(message.model_dump())
                 ic(message.model_dump())
@@ -142,11 +145,27 @@ class WriterAgent(Agent):
                     if tool_call.function.name == "search_papers":
                         logger.info("调用工具: search_papers")
                         await self._run_search_papers_tool(tool_call, sub_title)
+
+                if tool_only_turns >= 3:
+                    force_plaintext_response = True
+                    await self.append_chat_history(
+                        {
+                            "role": "user",
+                            "content": (
+                                "你已经完成必要的文献检索。"
+                                "从现在开始禁止继续调用 search_papers。"
+                                "请直接基于现有题目、结果文件、复核结论和已检索到的文献，输出完整论文正文 Markdown。"
+                                "如果参考文献仍不足，可以先不写参考文献章节，但不能返回空内容。"
+                            ),
+                        }
+                    )
                 continue
 
             response_content = (message.content or "").strip()
             if response_content:
                 break
+
+            force_plaintext_response = True
 
             await self.append_chat_history(
                 {

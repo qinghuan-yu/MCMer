@@ -130,6 +130,7 @@ import PaperView from './components/PaperView.vue'
 import SettingsPage from './components/SettingsPage.vue'
 
 type TaskType = 'writing' | 'polish'
+type WorkflowMode = 'fast' | 'standard' | 'strict'
 
 interface RuntimeMessage {
   type: string
@@ -157,6 +158,7 @@ interface HistoryTask {
   question: string
   status: string
   task_type: TaskType
+  workflow_mode?: WorkflowMode
   created_at: string
   has_paper: boolean
   has_notebook: boolean
@@ -169,6 +171,7 @@ interface TaskDetail {
   task_id: string
   status: string
   task_type: TaskType
+  workflow_mode?: WorkflowMode
   work_dir: string
 }
 
@@ -184,6 +187,7 @@ interface TaskResultPayload {
 
 interface TaskDraftPayload {
   taskType: TaskType
+  workflowMode: WorkflowMode
   question: string
   sourceQuestion: string
   paperContent: string
@@ -445,6 +449,7 @@ async function handleSubmit(payload: TaskDraftPayload) {
       body: JSON.stringify({
         question: payload.question,
         task_type: payload.taskType,
+        workflow_mode: payload.workflowMode,
         source_question: payload.sourceQuestion,
         paper_content: payload.paperContent,
         polishing_requirements: payload.polishingRequirements,
@@ -518,7 +523,7 @@ async function handleOpenProject(task: HistoryTask) {
 // ============================================================
 // 开始修订
 // ============================================================
-async function handleStartRevise(taskId: string, feedback: string, reviseCode: boolean = false) {
+async function handleStartRevise(taskId: string, feedback: string, reviseCode: boolean = false, workflowMode: WorkflowMode = 'standard') {
   try {
     // 1. 创建修订任务
     const reviseRes = await fetch(`/api/tasks/${taskId}/revise`, {
@@ -528,6 +533,7 @@ async function handleStartRevise(taskId: string, feedback: string, reviseCode: b
         task_id: taskId,
         feedback: feedback,
         revise_code: reviseCode,
+        workflow_mode: workflowMode,
       }),
     })
     const revision = await reviseRes.json()

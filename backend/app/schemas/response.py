@@ -85,6 +85,7 @@ class RevisionRequest(BaseModel):
     task_id: str
     feedback: str  # 用户的修改建议
     revise_code: bool = False  # 是否需要修改代码
+    workflow_mode: str = "standard"
     sections: Optional[list[str]] = None  # 指定修订的章节
 
 

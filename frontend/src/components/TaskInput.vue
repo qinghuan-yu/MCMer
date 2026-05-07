@@ -1,6 +1,15 @@
 <template>
   <div class="task-form" :class="`mode-${mode}`">
     <div class="form-body">
+      <div class="field compact-field">
+        <label>工作流模式</label>
+        <select v-model="workflowMode" :disabled="loading" class="mode-select">
+          <option value="fast">fast：快速模式</option>
+          <option value="standard">standard：标准模式</option>
+          <option value="strict">strict：严格模式</option>
+        </select>
+      </div>
+
       <template v-if="mode === 'writing'">
         <div class="field field-grow">
           <label>输入题目</label>
@@ -58,15 +67,6 @@
           ></textarea>
         </div>
 
-        <div class="field field-grow">
-          <label>待润色论文</label>
-          <textarea
-            v-model="paperContent"
-            placeholder="粘贴需要润色的 Markdown 或论文正文..."
-            :disabled="loading"
-          ></textarea>
-        </div>
-
         <div class="field field-slim compact-field">
           <label>润色要求</label>
           <textarea
@@ -78,7 +78,7 @@
         </div>
 
         <div class="field compact-field">
-          <label>补充数据</label>
+          <label>上传数据</label>
           <div
             class="upload"
             :class="{ dragging: isDragging, 'has-files': uploadedFiles.length > 0 }"
@@ -126,6 +126,7 @@ type TaskMode = 'writing' | 'polish'
 
 interface TaskDraftPayload {
   taskType: TaskMode
+  workflowMode: 'fast' | 'standard' | 'strict'
   question: string
   sourceQuestion: string
   paperContent: string
@@ -146,6 +147,7 @@ const question = ref('')
 const sourceQuestion = ref('')
 const paperContent = ref('')
 const polishingRequirements = ref('')
+const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
 const uploadedFiles = ref<File[]>([])
 const isDragging = ref(false)
 const fileInput = ref<HTMLInputElement>()
@@ -217,6 +219,7 @@ function handleSubmit() {
 
   emit('submit', {
     taskType: props.mode,
+    workflowMode: workflowMode.value,
     question: question.value.trim(),
     sourceQuestion: sourceQuestion.value.trim(),
     paperContent: paperContent.value.trim(),
@@ -256,6 +259,17 @@ label {
   font-size: 15px;
   font-weight: 800;
   letter-spacing: -0.02em;
+}
+
+.mode-select {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid rgba(20, 28, 45, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text, #182235);
+  font-size: 14px;
 }
 
 textarea {

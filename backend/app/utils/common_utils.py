@@ -44,6 +44,33 @@ STRONG_RESULT_KEYS = {
 
 BLOCKED_STATUS_HINTS = {"blocked", "failed", "mismatch", "unverified", "阻断", "失败", "不通过"}
 
+LEGACY_RESULT_CONTEXT_KEYS = {
+    "title",
+    "name",
+    "case",
+    "problem_id",
+    "工况",
+    "场景",
+    "项目",
+    "对象",
+}
+
+LEGACY_RESULT_IGNORED_KEYS = {
+    "title",
+    "name",
+    "case",
+    "problem_id",
+    "工况",
+    "场景",
+    "项目",
+    "对象",
+    "说明",
+    "描述",
+    "建议",
+    "结论",
+    "限制因素",
+}
+
 
 def _slugify_identifier(text: str, fallback: str = "item") -> str:
     value = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_]+", "_", (text or "").strip())
@@ -228,6 +255,59 @@ def _normalize_legacy_scalar_result(
     }
 
 
+def _split_legacy_metric_key(raw_key: str) -> tuple[str, str]:
+    key = str(raw_key or "").strip()
+    if not key:
+        return "result", ""
+
+    match = re.match(r"^(?P<label>.+?)_(?P<unit>[A-Za-z%°/·*^\-\d]+)$", key)
+    if not match:
+        return key, ""
+
+    return match.group("label").strip() or key, match.group("unit").strip()
+
+
+def _extract_legacy_key_result_metrics(
+    item: dict[str, Any],
+    *,
+    section: str,
+    source_file: str,
+    is_verification_payload: bool,
+) -> list[dict[str, Any]]:
+    context = ""
+    for key in LEGACY_RESULT_CONTEXT_KEYS:
+        value = item.get(key)
+        if value is not None and str(value).strip():
+            context = str(value).strip()
+            break
+
+    entries: list[dict[str, Any]] = []
+    for raw_key, raw_value in item.items():
+        if raw_key in LEGACY_RESULT_IGNORED_KEYS:
+            continue
+        numeric_value = _parse_numeric_value(raw_value)
+        if numeric_value is None:
+            continue
+
+        metric_name, metric_unit = _split_legacy_metric_key(str(raw_key))
+        path_parts = [part for part in [context, metric_name] if part]
+        entries.append(
+            _normalize_legacy_scalar_result(
+                section=section,
+                source_file=source_file,
+                path_parts=path_parts,
+                raw_value=raw_value,
+                unit=metric_unit,
+                status="verified" if is_verification_payload else "verified",
+                verified=True,
+                warnings=["legacy_key_result_metric"],
+                source="legacy_key_result_metric",
+            )
+        )
+
+    return entries
+
+
 def _collect_legacy_results_from_mapping(
     node: Any,
     *,
@@ -369,6 +449,14 @@ def _extract_legacy_registry_entries(payload: dict[str, Any], section: str, sour
     for item in payload.get("key_results", []):
         if _looks_like_strong_result_entry(item) or not isinstance(item, dict):
             continue
+        metric_entries = _extract_legacy_key_result_metrics(
+            item,
+            section=section,
+            source_file=source_file,
+            is_verification_payload=is_verification_payload,
+        )
+        if metric_entries:
+            verified_entries.extend(metric_entries)
         title = str(item.get("title") or item.get("problem_id") or f"{section}_review")
         findings = item.get("main_findings")
         if not isinstance(findings, list) or not findings:
@@ -822,7 +910,8 @@ def get_current_files(work_dir: str, sub_dir: str = "") -> str:
     for f in sorted(path.iterdir()):
         if f.is_file():
             size_kb = f.stat().st_size / 1024
-            files.append(f"- {f.name} ({size_kb:.1f} KB)")
+            display_name = f"{sub_dir}/{f.name}" if sub_dir else f.name
+            files.append(f"- {display_name} ({size_kb:.1f} KB)")
 
     if not files:
         return "目录为空"
