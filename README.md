@@ -215,7 +215,6 @@ docker compose down -v
 
 #### 4. Docker 方式的适用范围
 
-- 适合给队友、评审或 GitHub 访客快速体验完整链路。
 - 适合复现 Redis、FastAPI、Vite 前后端联动和导出链路。
 - 不建议替代本地开发调试；日常开发仍建议优先使用 `.venv` 和 `pnpm run dev`。
 
