@@ -555,6 +555,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             work_dir=work_dir,
             max_chat_turns=settings.MAX_CHAT_TURNS,
             max_retries=settings.MAX_RETRIES,
+            max_wall_seconds=settings.SOLVE_CODER_MAX_WALL_SECONDS,
             code_interpreter=code_interpreter,
         )
         solver_prompt = (

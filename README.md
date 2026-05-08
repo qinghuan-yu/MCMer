@@ -165,6 +165,60 @@ pnpm install
 pnpm run dev --host 0.0.0.0 --port 5173
 ```
 
+### 方式三：Docker Compose 启动
+
+Docker 在本项目中的定位是可复现部署的第二启动方式，不替代你本地 `.venv + pnpm` 的开发方式。
+
+#### 1. 准备配置文件
+
+后端建议先复制一份开发环境配置：
+
+```powershell
+Copy-Item .\backend\.env.example .\backend\.env.dev
+```
+
+如果希望预先放入运行时模型与 key 配置，也可以初始化本地运行时配置目录：
+
+```powershell
+New-Item -ItemType Directory -Force .\backend\.local | Out-Null
+Copy-Item .\backend\runtime_config.example.json .\backend\.local\runtime_config.json
+```
+
+说明：
+
+- Compose 会把 `backend/project/work_dir`、`backend/.local` 和 `backend/logs` 挂载到容器内，方便保留任务产物、运行时配置和日志。
+- Compose 内部会自动把后端 Redis 地址改为 `redis://redis:6379/0`，不需要手动改 `.env.dev`。
+
+#### 2. 一键启动
+
+```powershell
+docker compose up --build
+```
+
+启动后可访问：
+
+- 前端首页：`http://127.0.0.1:5173`
+- 后端接口文档：`http://127.0.0.1:8000/docs`
+- 后端健康检查：`http://127.0.0.1:8000/health`
+
+#### 3. 停止与清理
+
+```powershell
+docker compose down
+```
+
+如果要连同 Redis 持久化数据一起删除：
+
+```powershell
+docker compose down -v
+```
+
+#### 4. Docker 方式的适用范围
+
+- 适合给队友、评审或 GitHub 访客快速体验完整链路。
+- 适合复现 Redis、FastAPI、Vite 前后端联动和导出链路。
+- 不建议替代本地开发调试；日常开发仍建议优先使用 `.venv` 和 `pnpm run dev`。
+
 ## 运行前准备
 
 ### Python

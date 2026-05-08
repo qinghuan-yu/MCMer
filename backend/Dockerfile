@@ -1,31 +1,23 @@
-FROM python:3.11-slim
+FROM docker.m.daocloud.io/library/python:3.11-slim
 
 WORKDIR /app
 
-# 安装系统依赖
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# 数学建模执行、文档导出和部分 Python 包编译依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
+    build-essential \
+    pandoc \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 uv
-RUN pip install --no-cache-dir uv
+# 复制后端源码并安装依赖
+COPY backend/ ./
+RUN python -m pip install --upgrade pip && pip install .
 
-# 复制依赖文件
-COPY pyproject.toml ./
-
-# 安装 Python 依赖
-RUN uv sync --frozen || uv sync
-
-# 复制应用代码
-COPY . .
-
-# 创建虚拟环境和激活脚本
-ENV PATH="/app/.venv/bin:$PATH"
-ENV ENV=PROD
-
-# 创建工作目录
-RUN mkdir -p /app/project/work_dir
+# 预创建持久化目录
+RUN mkdir -p /app/project/work_dir /app/.local /app/logs
 
 EXPOSE 8000
 

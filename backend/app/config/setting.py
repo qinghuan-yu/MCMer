@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     WORKFLOW_MODE: str = "standard"
     CODER_MAX_TOTAL_TOOL_CALLS: int = 8
     CODER_MAX_WALL_SECONDS: int = 180
+    SOLVE_CODER_MAX_WALL_SECONDS: int = 420
 
     # --- Work Dir ---
     WORK_DIR: str = "./project/work_dir"
