@@ -555,6 +555,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             work_dir=work_dir,
             max_chat_turns=settings.MAX_CHAT_TURNS,
             max_retries=settings.MAX_RETRIES,
+            max_total_tool_calls=settings.SOLVE_CODER_MAX_TOTAL_TOOL_CALLS,
             max_wall_seconds=settings.SOLVE_CODER_MAX_WALL_SECONDS,
             code_interpreter=code_interpreter,
         )
@@ -566,6 +567,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "请严格根据 solve_spec.json 执行求解；若规格与实际数据不符，可以做最小必要修正，但必须在结构化结果文件 warnings 中说明。"
             "必须按 subproblems 分步执行；每完成一个子问题，就立即把当前已确认的 key_results、generated_files 和 warnings 写回结构化结果文件，"
             "不要等全部子问题结束后再一次性落盘。若后续子问题失败，已完成子问题的结果必须保留。"
+            "禁止为了字体缺失、标签中英文切换、图例样式、排版美化、重复打印检查或截图式确认而重复执行出图代码。"
+            "若图已成功生成，只允许在其影响数值结论或文件缺失时重画；单纯视觉优化一律禁止。"
+            "禁止反复完整读取同一工作簿或重复打印整表；完成列名识别后应转入建模与结果登记。"
             "输出算法方案说明、完整代码、计算结果与结果摘要。"
             "题设锁定参数不得擅自修改。所有可写入论文的关键结果必须登记到结构化结果文件，供后续生成 result_registry.json。"
         )

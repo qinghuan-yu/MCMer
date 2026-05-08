@@ -72,6 +72,7 @@ class TaskManager:
 
         # 持久化任务信息
         self._save_task_info(task_id, task_info)
+        redis_manager.ensure_task_message_log(task_id)
 
         logger.info(f"任务已创建: {task_id}" + (" (修订)" if parent_task_id else ""))
         return task_id
@@ -85,6 +86,22 @@ class TaskManager:
         except Exception as e:
             logger.warning(f"保存任务信息失败: {e}")
 
+    def _normalize_loaded_task(self, task_id: str, task: dict) -> dict:
+        """将重启后遗留的运行中任务修正为失败，避免前端误判为仍在执行。"""
+        status = str(task.get("status", "")).strip().lower()
+        if task_id in self._active_tasks:
+            return task
+        if status not in {TaskStatus.RUNNING.value, TaskStatus.PENDING.value}:
+            return task
+        if not task.get("auto_started"):
+            return task
+
+        task["status"] = TaskStatus.FAILED.value
+        task.setdefault("error_message", "任务在服务重启后中断，请重新发起。")
+        self._save_task_info(task_id, task)
+        logger.warning(f"任务 {task_id} 在服务重启后遗留为 {status}，已修正为 failed")
+        return task
+
     def get_task(self, task_id: str) -> Optional[dict]:
         """获取任务信息（先查内存，再查磁盘）"""
         if task_id in self._active_tasks:
@@ -96,7 +113,8 @@ class TaskManager:
         if os.path.exists(info_path):
             try:
                 with open(info_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    task = json.load(f)
+                    return self._normalize_loaded_task(task_id, task)
             except Exception:
                 pass
         return None
@@ -174,6 +192,25 @@ class TaskManager:
         self.cleanup(task_id)
         return work_dir
 
+    def is_task_executing(self, task_id: str, task: Optional[dict] = None) -> bool:
+        """判断任务是否真的处于可停止的执行态，而不是仅在磁盘上残留为 pending/running。"""
+        workflow_task = self._workflow_tasks.get(task_id)
+        if workflow_task and not workflow_task.done():
+            return True
+
+        task = task or self.get_task(task_id)
+        if not task:
+            return False
+
+        status = str(task.get("status", "")).strip().lower()
+        if status not in {TaskStatus.RUNNING.value, TaskStatus.PENDING.value}:
+            return False
+
+        if not task.get("auto_started"):
+            return False
+
+        return task_id in self._active_tasks
+
     def update_paper_path(self, task_id: str, paper_path: str) -> None:
         """更新论文路径"""
         if task_id in self._active_tasks:
@@ -205,13 +242,14 @@ class TaskManager:
             task_info = {}
             try:
                 with open(info_path, "r", encoding="utf-8") as f:
-                    task_info = json.load(f)
+                    task_info = self._normalize_loaded_task(task_dir.name, json.load(f))
             except Exception:
                 continue
 
             has_paper = paper_path.exists()
             # 检查是否有修订版本
             revisions = list(task_dir.glob("res_v*.md"))
+            can_stop = self.is_task_executing(task_info.get("task_id", task_dir.name), task_info)
 
             tasks.append({
                 "task_id": task_info.get("task_id", task_dir.name),
@@ -225,11 +263,14 @@ class TaskManager:
                 "revision_count": len(revisions),
                 "is_revision": task_info.get("is_revision", False),
                 "parent_task_id": task_info.get("parent_task_id", ""),
+                "can_stop": can_stop,
+                "can_delete": not can_stop,
             })
 
         # 也加入当前活跃但可能在磁盘上的任务
         for tid, info in self._active_tasks.items():
             if not any(t["task_id"] == tid for t in tasks):
+                can_stop = self.is_task_executing(tid, info)
                 tasks.append({
                     "task_id": tid,
                     "question": info.get("question", "")[:120],
@@ -242,6 +283,8 @@ class TaskManager:
                     "revision_count": 0,
                     "is_revision": info.get("is_revision", False),
                     "parent_task_id": info.get("parent_task_id", ""),
+                    "can_stop": can_stop,
+                    "can_delete": not can_stop,
                 })
 
         return tasks

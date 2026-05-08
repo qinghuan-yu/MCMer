@@ -1,5 +1,6 @@
 {
   "DEEPSEEK_API_KEY": "",
+  "LLM_PROXY_URL": "",
   "WRITER_MODEL": "mimo/mimo-v2.5",
   "DEFAULT_MODEL": "mimo/mimo-v2.5",
   "OPENAI_API_KEY": "",

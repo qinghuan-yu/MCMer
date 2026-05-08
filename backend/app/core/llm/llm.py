@@ -29,15 +29,7 @@ from app.utils.log_util import logger
 # 配置 LiteLLM
 litellm.drop_params = True
 litellm.telemetry = False
-
-
-def _configure_litellm_http_clients() -> None:
-    """强制 LiteLLM 使用不信任系统代理的 HTTP 客户端。"""
-    litellm.client_session = httpx.Client(trust_env=False)
-    litellm.aclient_session = httpx.AsyncClient(trust_env=False)
-
-
-_configure_litellm_http_clients()
+_configured_proxy_url: Optional[str] = None
 
 
 def _get_effective_key(env_key: str, setting_val: str) -> Optional[str]:
@@ -50,6 +42,29 @@ def _get_effective_key(env_key: str, setting_val: str) -> Optional[str]:
     except Exception:
         pass
     return os.environ.get(env_key) or setting_val or None
+
+
+def _get_llm_proxy_url() -> Optional[str]:
+    return _get_effective_key("LLM_PROXY_URL", settings.LLM_PROXY_URL)
+
+
+def _configure_litellm_http_clients() -> None:
+    """为 LiteLLM 配置 HTTP 客户端，默认忽略系统代理，仅使用应用显式代理。"""
+    global _configured_proxy_url
+    proxy_url = _get_llm_proxy_url()
+    if proxy_url == _configured_proxy_url and getattr(litellm, "client_session", None) is not None:
+        return
+
+    client_kwargs = {"trust_env": False}
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+
+    litellm.client_session = httpx.Client(**client_kwargs)
+    litellm.aclient_session = httpx.AsyncClient(**client_kwargs)
+    _configured_proxy_url = proxy_url
+
+
+_configure_litellm_http_clients()
 
 
 def _infer_provider(model_name: str) -> str:
@@ -143,6 +158,7 @@ class LLM:
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ):
+        _configure_litellm_http_clients()
         self.model = model or _get_effective_key("DEFAULT_MODEL", settings.DEFAULT_MODEL)
         # 自动从运行时配置获取 API Key
         if not api_key:

@@ -82,7 +82,7 @@ class ConfigManager:
         valid_prefixes = (
             "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "MIMO_", "E2B_",
             "DEFAULT_MODEL", "COORDINATOR_MODEL", "MODELER_MODEL",
-            "CODER_MODEL", "WRITER_MODEL", "OPENAI_BASE_URL",
+            "CODER_MODEL", "WRITER_MODEL", "OPENAI_BASE_URL", "LLM_PROXY_URL",
         )
         for k, v in keys.items():
             if any(k.startswith(p) for p in valid_prefixes) or k in valid_prefixes:

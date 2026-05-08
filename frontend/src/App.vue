@@ -245,6 +245,10 @@ const entryOptions = [
   },
 ]
 function switchView(view: ViewState) {
+  if (view === 'new') {
+    stopRuntimeTracking()
+    resetRuntimeState()
+  }
   currentView.value = view
 }
 

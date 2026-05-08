@@ -303,6 +303,34 @@ class CoderAgent(Agent):
             }
         )
 
+    async def _warn_near_tool_budget(
+        self,
+        total_tool_calls: int,
+        subtask_title: str,
+        expected_result_file: Path,
+    ) -> None:
+        remaining = self.max_total_tool_calls - total_tool_calls
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content=f"代码手接近工具调用上限，剩余 {remaining} 次，将优先落盘结构化结果并停止非必要收尾。",
+                type="warning",
+                agent="coder",
+            ),
+        )
+        await self.append_chat_history(
+            {
+                "role": "user",
+                "content": (
+                    f"你距离工具调用上限只剩 {remaining} 次。"
+                    f"请立即优先把当前已经确认的 key_results、generated_files、warnings 写入 {expected_result_file.name}。"
+                    "禁止为了字体、标签语言、图例位置、排版美观、重复打印检查或重复读取整张工作表而再次调用 execute_code。"
+                    "如果已有图已经生成，不要仅因中文字体警告或样式问题重新出图。"
+                    f"若 {subtask_title} 仍有未完成子问题，只保留真正影响最终数值结论的必要计算。"
+                ),
+            }
+        )
+
     async def _force_blocked_result(
         self,
         expected_result_file: Path,
@@ -449,6 +477,7 @@ class CoderAgent(Agent):
         total_tool_calls = 0
         last_error_message = ""
         structured_result_retry_count = 0
+        near_tool_budget_warned = False
         expected_result_file = Path(self.work_dir) / self._structured_result_filename(subtask_title)
         started_at = time.monotonic()
 
@@ -513,6 +542,16 @@ class CoderAgent(Agent):
                     if tool_call.function.name == "execute_code":
                         logger.info(f"调用工具: {tool_call.function.name}")
                         total_tool_calls += 1
+                        if (
+                            not near_tool_budget_warned
+                            and total_tool_calls >= max(2, self.max_total_tool_calls - 3)
+                        ):
+                            near_tool_budget_warned = True
+                            await self._warn_near_tool_budget(
+                                total_tool_calls,
+                                subtask_title,
+                                expected_result_file,
+                            )
                         await redis_manager.publish_message(
                             self.task_id,
                             SystemMessage(

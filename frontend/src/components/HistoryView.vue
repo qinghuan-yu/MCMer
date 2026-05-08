@@ -48,6 +48,9 @@
         </div>
 
         <div class="task-meta">
+          <span v-if="task.status" class="meta-item task-status" :class="task.status">
+            {{ statusMap[task.status] || task.status }}
+          </span>
           <span v-if="task.created_at" class="meta-item">
             🕐 {{ formatDate(task.created_at) }}
           </span>
@@ -66,6 +69,14 @@
             打开项目
           </button>
           <button
+            v-if="task.can_stop"
+            class="btn-stop"
+            :disabled="stoppingTaskId === task.task_id"
+            @click.stop="stopTask(task)"
+          >
+            {{ stoppingTaskId === task.task_id ? '停止中...' : '停止任务' }}
+          </button>
+          <button
             v-if="task.has_paper"
             class="btn-view"
             @click.stop="$emit('viewPaper', task.task_id)"
@@ -80,7 +91,7 @@
             修订论文
           </button>
           <button
-            v-if="task.status !== 'running' && task.status !== 'pending'"
+            v-if="task.can_delete !== false"
             class="btn-delete"
             :disabled="deletingTaskId === task.task_id"
             @click.stop="deleteTask(task)"
@@ -154,6 +165,8 @@ interface HistoryTask {
   revision_count: number
   is_revision: boolean
   parent_task_id: string
+  can_stop?: boolean
+  can_delete?: boolean
 }
 
 const emit = defineEmits<{
@@ -166,6 +179,7 @@ const emit = defineEmits<{
 const tasks = ref<HistoryTask[]>([])
 const loading = ref(true)
 const deletingTaskId = ref('')
+const stoppingTaskId = ref('')
 
 // 修订对话框
 const showReviseDialog = ref(false)
@@ -262,6 +276,33 @@ async function deleteTask(task: HistoryTask) {
     window.alert(error instanceof Error ? error.message : '删除失败，请重试')
   } finally {
     deletingTaskId.value = ''
+  }
+}
+
+async function stopTask(task: HistoryTask) {
+  const confirmed = window.confirm('停止后当前运行中的任务会被中断，是否继续？')
+  if (!confirmed) return
+
+  stoppingTaskId.value = task.task_id
+  try {
+    const res = await fetch(`/api/tasks/${task.task_id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || '停止任务失败')
+    }
+
+    tasks.value = tasks.value.map((item) => {
+      if (item.task_id !== task.task_id) return item
+      return {
+        ...item,
+        status: 'cancelled',
+      }
+    })
+  } catch (error) {
+    console.error('停止任务失败:', error)
+    window.alert(error instanceof Error ? error.message : '停止任务失败，请重试')
+  } finally {
+    stoppingTaskId.value = ''
   }
 }
 
@@ -452,6 +493,7 @@ onMounted(async () => {
 }
 
 .btn-open,
+.btn-stop,
 .btn-view,
 .btn-revise,
 .btn-delete {
@@ -471,6 +513,16 @@ onMounted(async () => {
 
 .btn-open:hover {
   background: rgba(36, 78, 168, 0.16);
+}
+
+.btn-stop {
+  background: rgba(245, 158, 11, 0.12);
+  color: #c2410c;
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.18);
 }
 
 .btn-view {
@@ -503,7 +555,8 @@ onMounted(async () => {
   border-color: #b91c1c;
 }
 
-.btn-delete:disabled {
+.btn-delete:disabled,
+.btn-stop:disabled {
   cursor: not-allowed;
   opacity: 0.62;
 }

@@ -73,6 +73,11 @@
             </div>
             <div v-if="savedState.deepseek" class="saved-hint">已检测到已保存的 DeepSeek Key</div>
           </div>
+          <div class="field-group">
+            <label>LLM 代理</label>
+            <input v-model="form.llm_proxy_url" placeholder="http://127.0.0.1:7890" />
+            <div class="saved-hint">建议填写本机 HTTP/Mixed 代理端口；留空则直连，不读取 Windows 系统代理。</div>
+          </div>
         </div>
       </article>
 
@@ -131,6 +136,7 @@ const form = reactive({
   openai_base_url: '',
   anthropic_key: '',
   deepseek_key: '',
+  llm_proxy_url: '',
   mimo_key: '',
   mimo_base_url: 'https://api.xiaomimimo.com/v1',
 })
@@ -215,6 +221,7 @@ async function loadKeys() {
   form.deepseek_key = ''
   form.mimo_key = ''
   form.openai_base_url = keyData.OPENAI_BASE_URL || ''
+  form.llm_proxy_url = keyData.LLM_PROXY_URL || ''
   form.mimo_base_url = keyData.MIMO_BASE_URL || 'https://api.xiaomimimo.com/v1'
 }
 
@@ -270,6 +277,7 @@ async function saveKeys() {
   if (form.openai_base_url.trim()) payload.OPENAI_BASE_URL = form.openai_base_url.trim()
   if (form.anthropic_key.trim()) payload.ANTHROPIC_API_KEY = form.anthropic_key.trim()
   if (form.deepseek_key.trim()) payload.DEEPSEEK_API_KEY = form.deepseek_key.trim()
+  if (form.llm_proxy_url.trim()) payload.LLM_PROXY_URL = form.llm_proxy_url.trim()
   if (form.mimo_key.trim()) payload.MIMO_API_KEY = form.mimo_key.trim()
   if (form.mimo_base_url.trim()) payload.MIMO_BASE_URL = form.mimo_base_url.trim()
 

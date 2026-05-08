@@ -43,6 +43,17 @@ class RedisManager:
         except Exception as e:
             logger.debug(f"消息写盘失败(channel={channel}): {e}")
 
+    def ensure_task_message_log(self, task_id: str) -> None:
+        """确保任务对应的消息日志文件已初始化。"""
+        try:
+            log_path = os.path.join(self._message_log_dir, f"{task_id}.json")
+            if os.path.exists(log_path):
+                return
+            with open(log_path, "w", encoding="utf-8") as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.debug(f"初始化任务消息日志失败(task_id={task_id}): {e}")
+
     def get_task_messages(self, task_id: str) -> list[dict]:
         """从消息日志读取某任务的历史消息。"""
         log_path = os.path.join(self._message_log_dir, f"{task_id}.json")

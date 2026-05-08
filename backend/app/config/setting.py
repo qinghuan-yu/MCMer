@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = ""
     ANTHROPIC_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
+    LLM_PROXY_URL: str = ""
 
     # --- MiMo ---
     MIMO_API_KEY: str = ""
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
     WORKFLOW_MODE: str = "standard"
     CODER_MAX_TOTAL_TOOL_CALLS: int = 8
     CODER_MAX_WALL_SECONDS: int = 180
+    SOLVE_CODER_MAX_TOTAL_TOOL_CALLS: int = 16
     SOLVE_CODER_MAX_WALL_SECONDS: int = 420
 
     # --- Work Dir ---

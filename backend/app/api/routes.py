@@ -251,8 +251,7 @@ async def delete_history_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    status = task.get("status", "unknown")
-    if status in {TaskStatus.RUNNING.value, TaskStatus.PENDING.value} or task_id in task_manager._workflow_tasks:
+    if task_manager.is_task_executing(task_id, task):
         raise HTTPException(status_code=400, detail="运行中的任务请先停止")
 
     work_dir = task_manager.delete_task_files(task_id)
