@@ -277,9 +277,14 @@ def _should_run_chart_agent(
     solver_images: list[str],
 ) -> bool:
     verified_count = len(result_registry.get("verified_results", []) or [])
-    if verified_count <= 0:
+    blocked_count = len(result_registry.get("blocked_results", []) or [])
+    has_any_results = verified_count > 0 or blocked_count > 0 or bool(solver_images)
+    if not has_any_results:
         return False
-    return workflow_mode == "strict" or not solver_images
+    if verified_count > 0:
+        return workflow_mode == "strict" or not solver_images
+    # solve 被阻断但已有部分产出时，仍运行图表 Agent 做整理和收口
+    return True
 
 
 def _extract_json_object(text: str) -> dict[str, object] | None:
@@ -564,12 +569,17 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"## solve_spec.json\n{_json_for_prompt(solve_spec, 12000)}\n\n"
             f"## problem_facts.json\n{_json_for_prompt(problem_facts, 9000)}\n\n"
             f"## 数据文件\n{data_context}\n\n"
+            "## 核心执行顺序\n"
+            "1) 先做数值计算 → 2) 立即把确认的 key_results 写入结构化结果文件 → 3) 最后才考虑出图。\n"
+            "每执行一次代码得到新数值结论，就必须立即更新结构化结果文件，不要等所有子问题完成再一次性写入。\n\n"
             "请严格根据 solve_spec.json 执行求解；若规格与实际数据不符，可以做最小必要修正，但必须在结构化结果文件 warnings 中说明。"
             "必须按 subproblems 分步执行；每完成一个子问题，就立即把当前已确认的 key_results、generated_files 和 warnings 写回结构化结果文件，"
             "不要等全部子问题结束后再一次性落盘。若后续子问题失败，已完成子问题的结果必须保留。"
+            "生成 matplotlib 图表时，不要手动把 rcParams['font.sans-serif'] 设为 SimHei、Microsoft YaHei 或 DejaVu Sans 的单一/简化列表；优先使用环境预置字体配置。"
             "禁止为了字体缺失、标签中英文切换、图例样式、排版美化、重复打印检查或截图式确认而重复执行出图代码。"
             "若图已成功生成，只允许在其影响数值结论或文件缺失时重画；单纯视觉优化一律禁止。"
             "禁止反复完整读取同一工作簿或重复打印整表；完成列名识别后应转入建模与结果登记。"
+            "每次出图前先自问：这张图的数值结论是否已经登记到结构化结果文件？如果还没有，先写结果再画图。"
             "输出算法方案说明、完整代码、计算结果与结果摘要。"
             "题设锁定参数不得擅自修改。所有可写入论文的关键结果必须登记到结构化结果文件，供后续生成 result_registry.json。"
         )
@@ -660,9 +670,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 
         chart_result = CoderToWriter(
             coder_response="复用求解阶段已生成图表，未单独运行图表 Agent。",
-            created_images=[],
+            created_images=solver_images,
             structured_result_files=[],
         )
+        chart_images = solver_images
         if _should_run_chart_agent(workflow_mode, result_registry, solver_images):
             yield _progress(task_id, "charts", 0.8, "图表与一致性 Agent 正在生成图表", current_subtask="图表生成")
             chart_agent = CoderAgent(
@@ -705,6 +716,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             if verified_count <= 0:
                 chart_result = CoderToWriter(
                     coder_response="result_registry 中没有 verified_results，已跳过独立图表阶段，避免重复求解和引入未验证图表。",
+                    created_images=solver_images,
+                    structured_result_files=[],
+                )
+            else:
+                # verified_count > 0 但不需要单独运行图表 Agent（solver 已生成图片）
+                chart_result = CoderToWriter(
+                    coder_response="复用求解阶段已生成图表，未单独运行图表 Agent。",
                     created_images=solver_images,
                     structured_result_files=[],
                 )

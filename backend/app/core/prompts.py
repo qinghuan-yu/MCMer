@@ -61,6 +61,7 @@ CODER_PROMPT = get_prompt(
 4. 结构化结果文件中至少要包含：section、summary、key_results、generated_files、warnings。
 5. key_results 中的关键结果应优先使用强 schema：id、name、value、unit、formula、formula_id、inputs、source_data、code_cell、verified、warnings。
 6. 若无法得到可靠数值，必须在结构化结果文件和最终总结中明确写出“不可靠/无法确认”，禁止编造结果。
+7. 生成 matplotlib 图表时，不要自行把 font.sans-serif 设置成 SimHei、Microsoft YaHei、DejaVu Sans 等单一候选，也不要覆盖环境预置字体配置；如需显式设置，只能使用环境已提供的中文字体优先级。
 """,
 )
 

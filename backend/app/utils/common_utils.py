@@ -948,10 +948,27 @@ def normalize_math_markdown(markdown_text: str) -> str:
     if not markdown_text:
         return markdown_text
 
+    outer_fence_match = re.fullmatch(
+        r"\s*```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*",
+        markdown_text.replace("\r\n", "\n"),
+        flags=re.IGNORECASE,
+    )
+    if outer_fence_match:
+        markdown_text = outer_fence_match.group(1)
+
     def normalize_math_body(math_body: str) -> str:
         body = math_body.strip()
         body = re.sub(r"\\\\(?=[A-Za-z])", r"\\", body)
         return body
+
+    def normalize_block_math(math_body: str) -> str:
+        body = normalize_math_body(math_body)
+        tag_match = re.search(r"\\tag\{([^{}]+)\}\s*$", body)
+        if not tag_match:
+            return f"$$\n{body}\n$$\n"
+        equation_no = tag_match.group(1).strip()
+        body = re.sub(r"\s*\\tag\{[^{}]+\}\s*$", "", body).rstrip()
+        return f"$$\n{body}\n$$\n（{equation_no}）\n"
 
     code_fence_pattern = re.compile(r"(```[\s\S]*?```)")
     segments = code_fence_pattern.split(markdown_text.replace("\r\n", "\n"))
@@ -972,7 +989,7 @@ def normalize_math_markdown(markdown_text: str) -> str:
 
         segment = re.sub(
             r"\\\[\s*([\s\S]*?)\s*\\\]",
-            lambda m: f"\n$$\n{normalize_math_body(m.group(1))}\n$$\n",
+            lambda m: f"\n{normalize_block_math(m.group(1))}",
             segment,
         )
         segment = re.sub(
@@ -982,7 +999,7 @@ def normalize_math_markdown(markdown_text: str) -> str:
         )
         segment = re.sub(
             r"\$\$\s*([\s\S]*?)\s*\$\$",
-            lambda m: f"$$\n{normalize_math_body(m.group(1))}\n$$",
+            lambda m: normalize_block_math(m.group(1)).rstrip(),
             segment,
         )
         segment = re.sub(

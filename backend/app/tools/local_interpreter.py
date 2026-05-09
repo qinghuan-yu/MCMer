@@ -7,6 +7,7 @@ import glob
 import asyncio
 import ast
 import importlib.util
+import re
 from typing import Optional
 
 import nbformat
@@ -19,6 +20,8 @@ from app.utils.log_util import logger
 
 class LocalCodeInterpreter(BaseCodeInterpreter):
     """本地 Jupyter Kernel 代码解释器"""
+
+    _MATPLOTLIB_FONT_LIST = "['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'SimHei', 'Microsoft YaHei', 'PingFang SC', 'Arial Unicode MS', 'DejaVu Sans']"
 
     def __init__(self, work_dir: str):
         self.work_dir = work_dir
@@ -36,12 +39,16 @@ os.chdir(r'''{work_dir}''')
 
 try:
     import matplotlib
+    from matplotlib import font_manager
+    # 清除字体缓存，确保能识别容器中后安装的中文字体
+    font_manager._load_fontmanager(try_read_cache=False)
     matplotlib.rcParams['font.sans-serif'] = [
-        'Microsoft YaHei',
-        'SimHei',
-        'Noto Sans CJK SC',
-        'PingFang SC',
+        'WenQuanYi Micro Hei',
         'WenQuanYi Zen Hei',
+        'Noto Sans CJK SC',
+        'SimHei',
+        'Microsoft YaHei',
+        'PingFang SC',
         'Arial Unicode MS',
         'DejaVu Sans',
     ]
@@ -118,12 +125,35 @@ except Exception:
         result, _, _ = await self.execute_code(code)
         return result
 
+    @classmethod
+    def _normalize_matplotlib_font_settings(cls, code: str) -> str:
+        """把模型生成的字体配置重写为容器内可用的中文字体优先级。"""
+        if "rcParams" not in code:
+            return code
+
+        normalized = code
+        patterns = [
+            r"plt\.rcParams\[['\"]font\.sans-serif['\"]\]\s*=\s*\[[^\]]*\]",
+            r"matplotlib\.rcParams\[['\"]font\.sans-serif['\"]\]\s*=\s*\[[^\]]*\]",
+        ]
+        replacements = [
+            f"plt.rcParams['font.family'] = 'sans-serif'\nplt.rcParams['font.sans-serif'] = {cls._MATPLOTLIB_FONT_LIST}",
+            f"matplotlib.rcParams['font.family'] = 'sans-serif'\nmatplotlib.rcParams['font.sans-serif'] = {cls._MATPLOTLIB_FONT_LIST}",
+        ]
+
+        for pattern, replacement in zip(patterns, replacements):
+            normalized = re.sub(pattern, replacement, normalized)
+
+        return normalized
+
     async def execute_code(self, code: str) -> tuple[str, bool, str]:
         """执行代码，返回 (输出文本, 是否出错, 错误信息)
         
         兼容根目录 coder_agent 的调用约定。
         """
         await self._ensure_kernel()
+
+        code = self._normalize_matplotlib_font_settings(code)
 
         unavailable_imports = self._find_unavailable_imports(code)
         if unavailable_imports:

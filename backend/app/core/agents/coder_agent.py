@@ -406,9 +406,11 @@ class CoderAgent(Agent):
                 agent="coder",
             ),
         )
+        # 被阻断时仍返回当前工作目录中已有的图片，避免丢失已生成的图表
+        blocked_images = await self.code_interpreter.get_created_images(subtask_title) if self.code_interpreter else []
         return CoderToWriter(
             coder_response=f"{subtask_title} 已阻断：{reason}",
-            created_images=[],
+            created_images=blocked_images,
             structured_result_files=[expected_result_file.name],
         )
 
