@@ -4,6 +4,7 @@
 import os
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -959,6 +960,11 @@ def normalize_math_markdown(markdown_text: str) -> str:
     def normalize_math_body(math_body: str) -> str:
         body = math_body.strip()
         body = re.sub(r"\\\\(?=[A-Za-z])", r"\\", body)
+        body = re.sub(
+            r"(?<!\\)\\\[(\d+(?:\.\d+)?(?:pt|em|ex|cm|mm|in))\]",
+            r"\\\\[\1]",
+            body,
+        )
         return body
 
     def normalize_block_math(math_body: str) -> str:
@@ -1198,11 +1204,21 @@ def build_paper_audit_manifest(question_text: str, markdown_text: str) -> dict[s
 
 def md_to_docx(md_path: str, docx_path: str) -> bool:
     """尝试将 markdown 转为 docx，优先保留 LaTeX 公式为 Word 数学对象。"""
+    temp_md_path: Optional[str] = None
+
+    try:
+        normalized_markdown = normalize_math_markdown(Path(md_path).read_text(encoding="utf-8"))
+        with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as tmp:
+            tmp.write(normalized_markdown)
+            temp_md_path = tmp.name
+    except Exception:
+        temp_md_path = None
+
     try:
         import pypandoc
 
         pypandoc.convert_file(
-            md_path,
+            temp_md_path or md_path,
             "docx",
             outputfile=docx_path,
             extra_args=[
@@ -1213,6 +1229,12 @@ def md_to_docx(md_path: str, docx_path: str) -> bool:
         return os.path.exists(docx_path)
     except Exception:
         pass
+    finally:
+        if temp_md_path and os.path.exists(temp_md_path):
+            try:
+                os.remove(temp_md_path)
+            except OSError:
+                pass
 
     try:
         from docx import Document
@@ -1222,7 +1244,7 @@ def md_to_docx(md_path: str, docx_path: str) -> bool:
         return False
 
     try:
-        markdown = normalize_math_markdown(Path(md_path).read_text(encoding="utf-8"))
+        markdown = normalized_markdown if 'normalized_markdown' in locals() else normalize_math_markdown(Path(md_path).read_text(encoding="utf-8"))
     except Exception:
         return False
 

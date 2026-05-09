@@ -25,24 +25,14 @@
             <div class="model-panel">
               <div class="field-group">
                 <label>默认模型</label>
-                <select v-model="form.default_model">
-                  <option value="">使用 .env 配置</option>
-                  <option v-for="model in models" :key="model.id" :value="model.id">
-                    {{ model.name }} ({{ model.provider }})
-                  </option>
-                </select>
+                <BaseSelect v-model="form.default_model" :options="defaultModelOptions" placeholder="使用 .env 配置" />
               </div>
             </div>
 
             <div class="model-panel">
               <div class="field-group">
                 <label>写作手模型</label>
-                <select v-model="form.writer_model">
-                  <option value="">使用默认模型</option>
-                  <option v-for="model in models" :key="`writer-${model.id}`" :value="model.id">
-                    {{ model.name }} ({{ model.provider }})
-                  </option>
-                </select>
+                <BaseSelect v-model="form.writer_model" :options="writerModelOptions" placeholder="使用默认模型" />
               </div>
 
               <p class="model-hint">建议为长文写作单独选择更擅长长上下文的模型。</p>
@@ -62,8 +52,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import ApiKeySettings from './settings/ApiKeySettings.vue'
+import BaseSelect from './ui/BaseSelect.vue'
 
 defineEmits<{ 'new-task': [] }>()
 
@@ -75,6 +66,52 @@ const form = reactive({
 const saving = ref(false)
 const saveMsg = ref('')
 const saveType = ref<'success' | 'error'>('success')
+
+const defaultModelOptions = computed(() => [
+  { value: '', label: '使用 .env 配置', meta: '跟随后端环境变量中的默认模型。' },
+  ...models.value.map((model) => ({
+    value: model.id,
+    label: `${model.name} (${model.provider})`,
+  })),
+])
+
+const writerModelOptions = computed(() => [
+  { value: '', label: '使用默认模型', meta: '不单独指定写作模型。' },
+  ...models.value.map((model) => ({
+    value: model.id,
+    label: `${model.name} (${model.provider})`,
+  })),
+])
+
+function inferProvider(modelId: string): string {
+  const raw = (modelId || '').split('/', 1)[0]?.toLowerCase() || 'custom'
+  const labelMap: Record<string, string> = {
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    deepseek: 'DeepSeek',
+    mimo: 'MiMo',
+    gemini: 'Google',
+    ollama: 'Ollama',
+    custom: 'Custom',
+  }
+  return labelMap[raw] || raw
+}
+
+function ensureSavedModelVisible(modelId: string) {
+  if (!modelId || models.value.some((item) => item.id === modelId)) {
+    return
+  }
+
+  const fallbackName = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId
+  models.value = [
+    ...models.value,
+    {
+      id: modelId,
+      name: `${fallbackName}（当前已保存）`,
+      provider: inferProvider(modelId),
+    },
+  ]
+}
 
 function hintForBackendMismatch(status: number, detail: string): string {
   if (status === 404) {
@@ -118,6 +155,8 @@ async function loadSettings() {
   models.value = modelData.models || []
   form.default_model = keyData.DEFAULT_MODEL || ''
   form.writer_model = keyData.WRITER_MODEL || ''
+  ensureSavedModelVisible(form.default_model)
+  ensureSavedModelVisible(form.writer_model)
 }
 
 onMounted(async () => {
@@ -311,24 +350,6 @@ async function saveModels() {
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
-}
-
-.field-group select {
-  width: 100%;
-  min-width: 0;
-  min-height: 48px;
-  padding: 12px 14px;
-  border: 1px solid rgba(20, 28, 45, 0.1);
-  border-radius: 12px;
-  background: #fff;
-  color: var(--text);
-  font-size: 14px;
-}
-
-.field-group select:focus {
-  outline: none;
-  border-color: rgba(36, 78, 168, 0.45);
-  box-shadow: 0 0 0 3px rgba(36, 78, 168, 0.08);
 }
 
 .model-actions {

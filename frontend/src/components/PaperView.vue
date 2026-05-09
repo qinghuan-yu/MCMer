@@ -83,11 +83,7 @@
         </label>
 
         <label class="input-label">修订模式</label>
-        <select v-model="workflowMode" class="mode-select">
-          <option value="fast">fast：快速模式</option>
-          <option value="standard">standard：标准模式</option>
-          <option value="strict">strict：严格模式</option>
-        </select>
+        <BaseSelect v-model="workflowMode" :options="workflowModeOptions" />
 
         <button
           class="submit-revise-btn"
@@ -107,6 +103,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { Marked } from 'marked'
 import markedKatex from 'marked-katex-extension'
 import 'katex/dist/katex.min.css'
+import BaseSelect from './ui/BaseSelect.vue'
 
 const props = defineProps<{
   taskId: string
@@ -130,6 +127,12 @@ const feedback = ref('')
 const reviseWithCode = ref(false)
 const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
 const submitting = ref(false)
+
+const workflowModeOptions = [
+  { value: 'fast', label: 'fast：快速模式' },
+  { value: 'standard', label: 'standard：标准模式' },
+  { value: 'strict', label: 'strict：严格模式' },
+]
 
 // 版本选择
 const versions = computed(() => {
@@ -432,12 +435,7 @@ onMounted(() => {
 
 .mode-select {
   width: 100%;
-  min-height: 44px;
   margin-top: 8px;
-  border-radius: 12px;
-  border: 1px solid rgba(20, 28, 45, 0.12);
-  background: rgba(255, 255, 255, 0.92);
-  padding: 0 12px;
 }
 
 .revise-textarea {

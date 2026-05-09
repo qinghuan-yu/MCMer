@@ -100,12 +100,7 @@
           </div>
           <div class="field-group">
             <label>Base URL</label>
-            <select v-model="form.mimo_base_url">
-              <option value="https://api.xiaomimimo.com/v1">默认 API（无套餐）</option>
-              <option value="https://token-plan-cn.xiaomimimo.com/v1">Token Plan - 中国区</option>
-              <option value="https://token-plan-sgp.xiaomimimo.com/v1">Token Plan - 新加坡区</option>
-              <option value="https://token-plan-ams.xiaomimimo.com/v1">Token Plan - 欧洲区</option>
-            </select>
+            <BaseSelect v-model="form.mimo_base_url" :options="mimoBaseUrlOptions" />
           </div>
         </div>
       </article>
@@ -123,6 +118,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import BaseSelect from '../ui/BaseSelect.vue'
 
 const showKeys = reactive({
   openai: false,
@@ -151,6 +147,13 @@ const savedState = reactive({
 const saving = ref(false)
 const saveMsg = ref('')
 const saveType = ref<'success' | 'error'>('success')
+
+const mimoBaseUrlOptions = [
+  { value: 'https://api.xiaomimimo.com/v1', label: '默认 API（无套餐）' },
+  { value: 'https://token-plan-cn.xiaomimimo.com/v1', label: 'Token Plan - 中国区' },
+  { value: 'https://token-plan-sgp.xiaomimimo.com/v1', label: 'Token Plan - 新加坡区' },
+  { value: 'https://token-plan-ams.xiaomimimo.com/v1', label: 'Token Plan - 欧洲区' },
+]
 
 function hintForBackendMismatch(status: number, detail: string): string {
   if (status === 404) {
@@ -409,8 +412,7 @@ async function saveKeys() {
   color: var(--muted);
 }
 
-.field-group input,
-.field-group select {
+.field-group input {
   width: 100%;
   min-width: 0;
   min-height: 42px;
@@ -422,8 +424,7 @@ async function saveKeys() {
   font-size: 13px;
 }
 
-.field-group input:focus,
-.field-group select:focus {
+.field-group input:focus {
   outline: none;
   border-color: rgba(36, 78, 168, 0.45);
   box-shadow: 0 0 0 3px rgba(36, 78, 168, 0.08);

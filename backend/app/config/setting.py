@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     """全局配置"""
 
     # --- LLM ---
-    DEFAULT_MODEL: str = "openai/gpt-4o"
-    FALLBACK_MODEL: str = "openai/gpt-4o-mini"
+    DEFAULT_MODEL: str = "openai/gpt-4.1"
+    FALLBACK_MODEL: str = "openai/gpt-4.1-mini"
 
     COORDINATOR_MODEL: Optional[str] = None
     MODELER_MODEL: Optional[str] = None

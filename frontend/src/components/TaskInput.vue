@@ -3,11 +3,7 @@
     <div class="form-body">
       <div class="field compact-field">
         <label>工作流模式</label>
-        <select v-model="workflowMode" :disabled="loading" class="mode-select">
-          <option value="fast">fast：快速模式</option>
-          <option value="standard">standard：标准模式</option>
-          <option value="strict">strict：严格模式</option>
-        </select>
+        <BaseSelect v-model="workflowMode" :options="workflowModeOptions" :disabled="loading" />
       </div>
 
       <template v-if="mode === 'writing'">
@@ -70,10 +66,12 @@
         <div class="field field-slim compact-field">
           <label>润色要求</label>
           <textarea
+            ref="polishingRequirementsInput"
             v-model="polishingRequirements"
-            class="short-area"
+            class="short-area adaptive-area"
             placeholder="例如：收紧措辞、检查图文一致性、复核关键数值、改成竞赛论文风格。"
             :disabled="loading"
+            @input="handlePolishingRequirementsInput"
           ></textarea>
         </div>
 
@@ -120,7 +118,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import BaseSelect from './ui/BaseSelect.vue'
 
 type TaskMode = 'writing' | 'polish'
 
@@ -151,6 +150,13 @@ const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
 const uploadedFiles = ref<File[]>([])
 const isDragging = ref(false)
 const fileInput = ref<HTMLInputElement>()
+const polishingRequirementsInput = ref<HTMLTextAreaElement>()
+
+const workflowModeOptions = [
+  { value: 'fast', label: 'fast：快速模式', meta: '更快出稿，适合先看结构和方向。' },
+  { value: 'standard', label: 'standard：标准模式', meta: '默认平衡模式，适合大多数写作与润色任务。' },
+  { value: 'strict', label: 'strict：严格模式', meta: '增加复核和约束，适合正式交付前检查。' },
+] as const
 
 const writingSourceExtensions = ['.pdf', '.docx', '.txt', '.md']
 const polishSourceExtensions = ['.zip', '.md', '.docx', '.pdf']
@@ -165,6 +171,19 @@ const canSubmit = computed(() => {
 
 const submitLabel = computed(() => props.mode === 'writing' ? '开始写作' : '开始润色')
 const loadingLabel = computed(() => props.mode === 'writing' ? '正在创建写作任务...' : '正在创建润色任务...')
+
+function resizePolishingRequirements() {
+  const el = polishingRequirementsInput.value
+  if (!el) return
+  el.style.height = 'auto'
+  const maxHeight = window.innerWidth <= 720 ? 180 : 240
+  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`
+  el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
+}
+
+function handlePolishingRequirementsInput() {
+  resizePolishingRequirements()
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
@@ -227,6 +246,18 @@ function handleSubmit() {
     files: [...uploadedFiles.value],
   })
 }
+
+watch(polishingRequirements, () => {
+  nextTick(resizePolishingRequirements)
+})
+
+watch(() => props.mode, () => {
+  nextTick(resizePolishingRequirements)
+})
+
+onMounted(() => {
+  resizePolishingRequirements()
+})
 </script>
 
 <style scoped>
@@ -236,6 +267,7 @@ function handleSubmit() {
   gap: 0;
   height: 100%;
   min-height: 0;
+  overflow: visible;
 }
 
 .form-body {
@@ -243,7 +275,12 @@ function handleSubmit() {
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
+}
+
+.mode-polish .form-body {
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .field + .field { margin-top: 18px; }
@@ -259,17 +296,6 @@ label {
   font-size: 15px;
   font-weight: 800;
   letter-spacing: -0.02em;
-}
-
-.mode-select {
-  width: 100%;
-  min-height: 48px;
-  padding: 0 14px;
-  border: 1px solid rgba(20, 28, 45, 0.12);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--text, #182235);
-  font-size: 14px;
 }
 
 textarea {
@@ -331,12 +357,22 @@ textarea {
   height: 64px;
 }
 
+.adaptive-area {
+  min-height: 88px !important;
+  max-height: min(30vh, 240px);
+  resize: vertical;
+}
+
 .mode-polish .field + .field {
   margin-top: 14px;
 }
 
 .mode-polish .compact-field {
   margin-top: 10px;
+}
+
+.mode-polish .field:last-of-type {
+  padding-bottom: 6px;
 }
 
 textarea::placeholder { color: #a4a9b3; }

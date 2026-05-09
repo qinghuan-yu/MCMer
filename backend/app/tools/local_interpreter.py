@@ -42,6 +42,7 @@ try:
     from matplotlib import font_manager
     # 清除字体缓存，确保能识别容器中后安装的中文字体
     font_manager._load_fontmanager(try_read_cache=False)
+    matplotlib.rcParams['font.family'] = 'sans-serif'
     matplotlib.rcParams['font.sans-serif'] = [
         'WenQuanYi Micro Hei',
         'WenQuanYi Zen Hei',

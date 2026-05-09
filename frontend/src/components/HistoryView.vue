@@ -129,11 +129,7 @@
         </label>
         <label class="checkbox-label mode-label">
           修订模式
-          <select v-model="workflowMode" class="mode-select">
-            <option value="fast">fast：快速模式</option>
-            <option value="standard">standard：标准模式</option>
-            <option value="strict">strict：严格模式</option>
-          </select>
+          <BaseSelect v-model="workflowMode" :options="workflowModeOptions" />
         </label>
         <div class="dialog-actions">
           <button class="btn-cancel" @click="closeReviseDialog">取消</button>
@@ -152,6 +148,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import BaseSelect from './ui/BaseSelect.vue'
 
 interface HistoryTask {
   task_id: string
@@ -187,6 +184,12 @@ const reviseTargetId = ref('')
 const reviseFeedback = ref('')
 const reviseWithCode = ref(false)
 const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
+
+const workflowModeOptions = [
+  { value: 'fast', label: 'fast：快速模式' },
+  { value: 'standard', label: 'standard：标准模式' },
+  { value: 'strict', label: 'strict：严格模式' },
+]
 
 const statusMap: Record<string, string> = {
   pending: '等待中',
@@ -634,11 +637,6 @@ onMounted(async () => {
 
 .mode-select {
   min-width: 220px;
-  min-height: 40px;
-  border-radius: 10px;
-  border: 1px solid rgba(20, 28, 45, 0.12);
-  background: rgba(255, 255, 255, 0.92);
-  padding: 0 12px;
 }
 
 .dialog-actions {

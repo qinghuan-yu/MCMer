@@ -910,7 +910,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 80px;
   min-height: calc(100vh - 270px);
-  padding: 20px 110px 0 168px;
+  padding: 20px 110px 48px 168px;
 }
 
 .hero-left {
@@ -1033,12 +1033,13 @@ onBeforeUnmount(() => {
   flex-direction: column;
   justify-self: end;
   width: min(100%, 650px);
-  height: 664px;
+  min-height: 664px;
+  height: auto;
   padding: 28px 36px 30px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #ffffff;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 28px 80px rgba(18, 31, 58, 0.05), inset 0 1px 0 rgba(255,255,255,0.78);
 }
 

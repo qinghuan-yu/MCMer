@@ -483,23 +483,25 @@ async def update_api_keys(keys: dict):
 
 @router.get("/config/models")
 async def get_supported_models():
-    """获取常用模型列表"""
+    """获取前端展示用的常用模型列表，尽量过滤明显过时或实验性条目。"""
     return {
         "models": [
-            {"id": "openai/gpt-4o", "name": "GPT-4o", "provider": "OpenAI"},
-            {"id": "openai/gpt-4o-mini", "name": "GPT-4o Mini", "provider": "OpenAI"},
-            {"id": "openai/gpt-4-turbo", "name": "GPT-4 Turbo", "provider": "OpenAI"},
+            {"id": "openai/gpt-4.1", "name": "GPT-4.1", "provider": "OpenAI"},
+            {"id": "openai/gpt-4.1-mini", "name": "GPT-4.1 Mini", "provider": "OpenAI"},
+            {"id": "openai/o3", "name": "o3", "provider": "OpenAI"},
             {"id": "openai/o3-mini", "name": "o3 Mini", "provider": "OpenAI"},
-            {"id": "anthropic/claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "provider": "Anthropic"},
-            {"id": "anthropic/claude-3-opus-20240229", "name": "Claude 3 Opus", "provider": "Anthropic"},
-            {"id": "deepseek/deepseek-v4-flash", "name": "DeepSeek V4 Flash", "provider": "DeepSeek"},
-            {"id": "deepseek/deepseek-v4-pro", "name": "DeepSeek V4 Pro", "provider": "DeepSeek"},
-            {"id": "deepseek/deepseek-chat", "name": "DeepSeek Chat (Legacy, 即将弃用)", "provider": "DeepSeek"},
-            {"id": "deepseek/deepseek-reasoner", "name": "DeepSeek Reasoner (Legacy, 即将弃用)", "provider": "DeepSeek"},
+            {"id": "anthropic/claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "provider": "Anthropic"},
+            {"id": "anthropic/claude-opus-4-20250514", "name": "Claude Opus 4", "provider": "Anthropic"},
+            {"id": "anthropic/claude-3-7-sonnet-20250219", "name": "Claude 3.7 Sonnet", "provider": "Anthropic"},
+            {"id": "deepseek/deepseek-chat", "name": "DeepSeek Chat", "provider": "DeepSeek"},
+            {"id": "deepseek/deepseek-reasoner", "name": "DeepSeek Reasoner", "provider": "DeepSeek"},
+            {"id": "deepseek/deepseek-v4-flash", "name": "DeepSeek V4 Flash（兼容端点）", "provider": "DeepSeek"},
+            {"id": "deepseek/deepseek-v4-pro", "name": "DeepSeek V4 Pro（兼容端点）", "provider": "DeepSeek"},
             {"id": "mimo/mimo-v2.5-pro", "name": "MiMo V2.5 Pro", "provider": "MiMo"},
             {"id": "mimo/mimo-v2.5", "name": "MiMo V2.5", "provider": "MiMo"},
-            {"id": "gemini/gemini-2.0-flash", "name": "Gemini 2.0 Flash", "provider": "Google"},
-            {"id": "gemini/gemini-2.0-pro-exp-02-05", "name": "Gemini 2.0 Pro", "provider": "Google"},
+            {"id": "gemini/gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "Google"},
+            {"id": "gemini/gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "Google"},
+            {"id": "gemini/gemini-2.0-flash-lite", "name": "Gemini 2.0 Flash-Lite", "provider": "Google"},
             {"id": "ollama/llama3.1", "name": "Llama 3.1 (Ollama)", "provider": "Ollama"},
             {"id": "ollama/qwen2.5", "name": "Qwen 2.5 (Ollama)", "provider": "Ollama"},
         ]
