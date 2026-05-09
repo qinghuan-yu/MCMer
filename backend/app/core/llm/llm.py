@@ -157,6 +157,7 @@ class LLM:
         base_url: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        request_timeout: Optional[int] = None,
     ):
         _configure_litellm_http_clients()
         self.model = model or _get_effective_key("DEFAULT_MODEL", settings.DEFAULT_MODEL)
@@ -196,6 +197,7 @@ class LLM:
         self.base_url = base_url
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.request_timeout = request_timeout or settings.LLM_REQUEST_TIMEOUT
 
     async def chat(
         self,
@@ -211,7 +213,7 @@ class LLM:
             "messages": history,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "timeout": settings.LLM_REQUEST_TIMEOUT,
+            "timeout": self.request_timeout,
         }
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -225,7 +227,7 @@ class LLM:
             try:
                 response = await asyncio.wait_for(
                     acompletion(**kwargs),
-                    timeout=settings.LLM_REQUEST_TIMEOUT + 5,
+                    timeout=self.request_timeout + 5,
                 )
                 return response
             except asyncio.TimeoutError:
@@ -236,7 +238,7 @@ class LLM:
                 )
                 if attempt == 2:
                     raise RuntimeError(
-                        f"{agent_name or 'LLM'}: 请求超时，超过 {settings.LLM_REQUEST_TIMEOUT}s"
+                        f"{agent_name or 'LLM'}: 请求超时，超过 {self.request_timeout}s"
                     )
                 await asyncio.sleep(wait)
             except (RateLimitError, ServiceUnavailableError) as e:
@@ -266,7 +268,7 @@ class LLM:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": True,
-            "timeout": settings.LLM_REQUEST_TIMEOUT,
+            "timeout": self.request_timeout,
         }
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -276,14 +278,14 @@ class LLM:
         try:
             response = await asyncio.wait_for(
                 acompletion(**kwargs),
-                timeout=settings.LLM_REQUEST_TIMEOUT + 5,
+                timeout=self.request_timeout + 5,
             )
             async for chunk in response:
                 if chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
         except asyncio.TimeoutError:
             logger.error(f"{agent_name}: 流式对话超时")
-            yield f"\n[错误: 请求超时，超过 {settings.LLM_REQUEST_TIMEOUT}s]"
+            yield f"\n[错误: 请求超时，超过 {self.request_timeout}s]"
         except Exception as e:
             logger.error(f"{agent_name}: 流式对话错误 - {e}")
             yield f"\n[错误: {str(e)}]"
@@ -296,7 +298,7 @@ class LLM:
                 messages=history,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
-                timeout=settings.LLM_REQUEST_TIMEOUT,
+                timeout=self.request_timeout,
             )
             return response.choices[0].message.content
         except Exception as e:

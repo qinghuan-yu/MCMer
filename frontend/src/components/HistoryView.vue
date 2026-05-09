@@ -149,13 +149,14 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import BaseSelect from './ui/BaseSelect.vue'
+import { workflowModeOptions, type WorkflowMode } from '../constants/workflowModes'
 
 interface HistoryTask {
   task_id: string
   question: string
   status: string
   task_type: 'writing' | 'polish'
-  workflow_mode?: 'fast' | 'standard' | 'strict'
+  workflow_mode?: WorkflowMode
   created_at: string
   has_paper: boolean
   has_notebook: boolean
@@ -169,7 +170,7 @@ interface HistoryTask {
 const emit = defineEmits<{
   openProject: [task: HistoryTask]
   viewPaper: [taskId: string]
-  revise: [taskId: string, feedback: string, reviseCode: boolean, workflowMode: 'fast' | 'standard' | 'strict']
+  revise: [taskId: string, feedback: string, reviseCode: boolean, workflowMode: WorkflowMode]
   newTask: []
 }>()
 
@@ -183,13 +184,7 @@ const showReviseDialog = ref(false)
 const reviseTargetId = ref('')
 const reviseFeedback = ref('')
 const reviseWithCode = ref(false)
-const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
-
-const workflowModeOptions = [
-  { value: 'fast', label: 'fast：快速模式' },
-  { value: 'standard', label: 'standard：标准模式' },
-  { value: 'strict', label: 'strict：严格模式' },
-]
+const workflowMode = ref<WorkflowMode>('standard')
 
 const statusMap: Record<string, string> = {
   pending: '等待中',

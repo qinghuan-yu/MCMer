@@ -9,6 +9,7 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.llm.llm import LLM
+from app.core.workflow_budget import WorkflowBudget, resolve_workflow_budget
 from app.core.prompts import POLISH_STAGE_SYSTEM_PROMPTS, WRITING_STAGE_SYSTEM_PROMPTS
 from app.schemas.A2A import CoderToWriter
 from app.schemas.enums import FormatOutPut, TaskStatus
@@ -206,15 +207,81 @@ def _routes_from_audit_report(report: dict | None) -> list[str]:
     return routes
 
 
-def _build_models() -> dict[str, LLM]:
+def _build_models(budget: WorkflowBudget) -> dict[str, LLM]:
     return {
-        "breakdown": LLM(model=config_manager.get_effective_model("COORDINATOR_MODEL"), temperature=0.2, max_tokens=8192),
-        "modeling": LLM(model=config_manager.get_effective_model("MODELER_MODEL"), temperature=0.35, max_tokens=12288),
-        "review": LLM(model=config_manager.get_effective_model("MODELER_MODEL"), temperature=0.2, max_tokens=8192),
-        "coder": LLM(model=config_manager.get_effective_model("CODER_MODEL"), temperature=0.2, max_tokens=12288),
-        "analysis": LLM(model=config_manager.get_effective_model("WRITER_MODEL"), temperature=0.35, max_tokens=12288),
-        "writer": LLM(model=config_manager.get_effective_model("WRITER_MODEL"), temperature=0.45, max_tokens=16384),
+        "breakdown": LLM(model=config_manager.get_effective_model("COORDINATOR_MODEL"), temperature=0.2, max_tokens=8192, request_timeout=budget.llm_timeout),
+        "modeling": LLM(model=config_manager.get_effective_model("MODELER_MODEL"), temperature=0.35, max_tokens=12288, request_timeout=budget.llm_timeout),
+        "review": LLM(model=config_manager.get_effective_model("MODELER_MODEL"), temperature=0.2, max_tokens=8192, request_timeout=budget.llm_timeout),
+        "coder": LLM(model=config_manager.get_effective_model("CODER_MODEL"), temperature=0.2, max_tokens=12288, request_timeout=budget.llm_timeout),
+        "analysis": LLM(model=config_manager.get_effective_model("WRITER_MODEL"), temperature=0.35, max_tokens=12288, request_timeout=budget.llm_timeout),
+        "writer": LLM(model=config_manager.get_effective_model("WRITER_MODEL"), temperature=0.45, max_tokens=16384, request_timeout=budget.writer.request_timeout),
     }
+
+
+STRICT_WRITER_SECTION_SPECS = [
+    ("摘要与关键词", "输出摘要与关键词，突出问题、方法、核心结果与结论。"),
+    ("问题重述与分析", "输出问题重述、问题分析与任务拆解，不要提前写求解细节。"),
+    ("模型假设与符号说明", "输出模型假设、符号说明、变量定义与必要前提。"),
+    ("模型建立", "输出模型建立、公式推导与方法设计。"),
+    ("求解结果与分析", "输出算法求解、关键结果、图表解读、误差或灵敏度分析。所有具体数值都必须遵守 verified_results 约束。"),
+    ("结论与参考文献", "输出结论、模型评价与参考文献。若没有可靠文献，可省略参考文献章节但不能编造。"),
+]
+
+
+async def _run_writer_stage(
+    writer: WriterAgent,
+    prompt: str,
+    available_images: list[str],
+    sub_title: str,
+    budget: WorkflowBudget,
+) -> str:
+    if not budget.writer.sectioned:
+        try:
+            writer_result = await writer.run(
+                prompt=prompt,
+                available_images=available_images,
+                sub_title=sub_title,
+            )
+            return writer_result.response_content
+        except RuntimeError as exc:
+            error_text = str(exc)
+            if "超时" not in error_text and "timeout" not in error_text.lower():
+                raise
+            logger.warning("WriterAgent 整篇生成超时，切换为分章节写作兜底: %s", error_text)
+
+    section_outputs: list[str] = []
+    for index, (section_title, section_instruction) in enumerate(STRICT_WRITER_SECTION_SPECS, start=1):
+        section_writer = WriterAgent(
+            task_id=writer.task_id,
+            model=writer.model,
+            max_chat_turns=budget.writer.max_chat_turns,
+            comp_template=writer.comp_template,
+            format_output=writer.format_out_put,
+            scholar=writer.scholar,
+            max_memory=writer.max_memory,
+        )
+        section_writer.system_prompt = writer.system_prompt
+        completed_sections = "\n".join(
+            f"- 第{done_index}节：{title}"
+            for done_index, (title, _) in enumerate(STRICT_WRITER_SECTION_SPECS[: index - 1], start=1)
+        ) or "无"
+        section_prompt = (
+            f"{prompt}\n\n"
+            f"## 当前章节任务\n"
+            f"你当前只负责第{index}节《{section_title}》。\n"
+            f"章节要求：{section_instruction}\n"
+            f"已完成章节：\n{completed_sections}\n\n"
+            "只输出本章节 Markdown，不要重复其他章节，不要输出全文，不要使用 ```markdown 代码块包裹。"
+            "除《结论与参考文献》章节外，不要调用 search_papers。"
+        )
+        section_result = await section_writer.run(
+            prompt=section_prompt,
+            available_images=available_images,
+            sub_title=f"{sub_title}-{section_title}",
+        )
+        section_outputs.append(section_result.response_content.strip())
+
+    return "\n\n".join(part for part in section_outputs if part)
 
 
 def _resolve_workflow_mode(task: dict) -> str:
@@ -275,6 +342,7 @@ def _should_run_chart_agent(
     workflow_mode: str,
     result_registry: dict[str, object],
     solver_images: list[str],
+    budget: WorkflowBudget,
 ) -> bool:
     verified_count = len(result_registry.get("verified_results", []) or [])
     blocked_count = len(result_registry.get("blocked_results", []) or [])
@@ -283,8 +351,7 @@ def _should_run_chart_agent(
         return False
     if verified_count > 0:
         return workflow_mode == "strict" or not solver_images
-    # solve 被阻断但已有部分产出时，仍运行图表 Agent 做整理和收口
-    return True
+    return budget.allow_chart_recovery_without_verified_results
 
 
 def _extract_json_object(text: str) -> dict[str, object] | None:
@@ -403,12 +470,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
     question = _resolve_question(task)
     work_dir = task["work_dir"]
     workflow_mode = _resolve_workflow_mode(task)
+    budget = resolve_workflow_budget(workflow_mode)
     task_manager.update_status(task_id, TaskStatus.RUNNING)
 
     if not question.strip():
         raise ValueError("写作任务缺少原始题目内容，请输入题目或上传 docx/pdf 原题文件")
 
-    models = _build_models()
+    models = _build_models(budget)
     code_interpreter = _build_code_interpreter(work_dir)
     scholar = OpenAlexScholar()
 
@@ -558,10 +626,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             task_id=task_id,
             model=models["coder"],
             work_dir=work_dir,
-            max_chat_turns=settings.MAX_CHAT_TURNS,
-            max_retries=settings.MAX_RETRIES,
-            max_total_tool_calls=settings.SOLVE_CODER_MAX_TOTAL_TOOL_CALLS,
-            max_wall_seconds=settings.SOLVE_CODER_MAX_WALL_SECONDS,
+            max_chat_turns=budget.solver.max_chat_turns,
+            max_retries=budget.solver.max_retries,
+            max_total_tool_calls=budget.solver.max_total_tool_calls,
+            max_wall_seconds=budget.solver.max_wall_seconds,
             code_interpreter=code_interpreter,
         )
         solver_prompt = (
@@ -608,8 +676,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 task_id=task_id,
                 model=models["coder"],
                 work_dir=work_dir,
-                max_chat_turns=settings.MAX_CHAT_TURNS,
-                max_retries=settings.MAX_RETRIES,
+                max_chat_turns=budget.coder.max_chat_turns,
+                max_retries=budget.coder.max_retries,
+                max_total_tool_calls=budget.coder.max_total_tool_calls,
+                max_wall_seconds=budget.coder.max_wall_seconds,
                 code_interpreter=code_interpreter,
             )
             verification_agent.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["verification"]
@@ -674,14 +744,16 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             structured_result_files=[],
         )
         chart_images = solver_images
-        if _should_run_chart_agent(workflow_mode, result_registry, solver_images):
+        if _should_run_chart_agent(workflow_mode, result_registry, solver_images, budget):
             yield _progress(task_id, "charts", 0.8, "图表与一致性 Agent 正在生成图表", current_subtask="图表生成")
             chart_agent = CoderAgent(
                 task_id=task_id,
                 model=models["coder"],
                 work_dir=work_dir,
-                max_chat_turns=settings.MAX_CHAT_TURNS,
-                max_retries=settings.MAX_RETRIES,
+                max_chat_turns=budget.coder.max_chat_turns,
+                max_retries=budget.coder.max_retries,
+                max_total_tool_calls=budget.coder.max_total_tool_calls,
+                max_wall_seconds=budget.coder.max_wall_seconds,
                 code_interpreter=code_interpreter,
             )
             chart_prompt = (
@@ -734,6 +806,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         writer = WriterAgent(
             task_id=task_id,
             model=models["writer"],
+            max_chat_turns=budget.writer.max_chat_turns,
             format_output=FormatOutPut.Markdown,
             scholar=scholar,
         )
@@ -754,12 +827,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "请输出完整论文 Markdown。论文中所有具体数值都必须来自 result_registry.json 的 verified_results；"
             "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。参考文献必须来自 scholar 工具或用户材料。"
         )
-        final_writer_result = await writer.run(
+        final_paper = await _run_writer_stage(
+            writer=writer,
             prompt=final_prompt,
             available_images=solver_images + chart_images,
             sub_title="论文组织与润色",
+            budget=budget,
         )
-        final_paper = final_writer_result.response_content
         if not final_paper.strip():
             raise ValueError("最终写作阶段返回空内容")
         yield _message("writing", _preview(final_paper), section="论文组织与润色")
@@ -771,8 +845,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 task_id=task_id,
                 model=models["coder"],
                 work_dir=work_dir,
-                max_chat_turns=settings.MAX_CHAT_TURNS,
-                max_retries=settings.MAX_RETRIES,
+                max_chat_turns=budget.coder.max_chat_turns,
+                max_retries=budget.coder.max_retries,
+                max_total_tool_calls=budget.coder.max_total_tool_calls,
+                max_wall_seconds=budget.coder.max_wall_seconds,
                 code_interpreter=code_interpreter,
             )
             delivery_auditor.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["delivery_audit"]
@@ -912,8 +988,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     task_id=task_id,
                     model=models["coder"],
                     work_dir=work_dir,
-                    max_chat_turns=settings.MAX_CHAT_TURNS,
-                    max_retries=settings.MAX_RETRIES,
+                    max_chat_turns=budget.solver.max_chat_turns,
+                    max_retries=budget.solver.max_retries,
+                    max_total_tool_calls=budget.solver.max_total_tool_calls,
+                    max_wall_seconds=budget.solver.max_wall_seconds,
                     code_interpreter=code_interpreter,
                 )
                 solver_prompt = (
@@ -949,8 +1027,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                         task_id=task_id,
                         model=models["coder"],
                         work_dir=work_dir,
-                        max_chat_turns=settings.MAX_CHAT_TURNS,
-                        max_retries=settings.MAX_RETRIES,
+                        max_chat_turns=budget.coder.max_chat_turns,
+                        max_retries=budget.coder.max_retries,
+                        max_total_tool_calls=budget.coder.max_total_tool_calls,
+                        max_wall_seconds=budget.coder.max_wall_seconds,
                         code_interpreter=code_interpreter,
                     )
                     verification_agent.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["verification"]
@@ -1012,13 +1092,15 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     f"终审回退结果分析第{audit_round}轮",
                 )
                 yield _message("analysis", _preview(str(stage_outputs["analysis"])), section=f"终审回退结果分析第{audit_round}轮")
-                if _should_run_chart_agent("strict", result_registry, solver_images):
+                if _should_run_chart_agent("strict", result_registry, solver_images, budget):
                     chart_agent = CoderAgent(
                         task_id=task_id,
                         model=models["coder"],
                         work_dir=work_dir,
-                        max_chat_turns=settings.MAX_CHAT_TURNS,
-                        max_retries=settings.MAX_RETRIES,
+                        max_chat_turns=budget.coder.max_chat_turns,
+                        max_retries=budget.coder.max_retries,
+                        max_total_tool_calls=budget.coder.max_total_tool_calls,
+                        max_wall_seconds=budget.coder.max_wall_seconds,
                         code_interpreter=code_interpreter,
                     )
                     chart_prompt = (
@@ -1065,12 +1147,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 返工路由\n{', '.join(repair_routes) if repair_routes else 'writer'}\n\n"
                 "请严格根据终审报告与返工后的最新结果重写全文。若某问题仍无法修正，必须在正文中降级措辞，不得忽略，也不得保留与复核报告冲突的确定性表述。"
             )
-            revised_writer_result = await writer.run(
+            final_paper = await _run_writer_stage(
+                writer=writer,
                 prompt=revision_prompt,
                 available_images=solver_images + chart_images,
                 sub_title=f"审查后修订第{audit_round}轮",
+                budget=budget,
             )
-            final_paper = revised_writer_result.response_content
             stage_outputs[f"writing_revision_round_{audit_round}"] = final_paper
             yield _message("writing", _preview(final_paper), section=f"审查后修订第{audit_round}轮")
 
@@ -1126,6 +1209,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, None]:
     work_dir = task["work_dir"]
     workflow_mode = _resolve_workflow_mode(task)
+    budget = resolve_workflow_budget(workflow_mode)
     task_manager.update_status(task_id, TaskStatus.RUNNING)
 
     question = (task.get("source_question") or _resolve_question(task) or task.get("question", ""))
@@ -1140,7 +1224,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
     if not paper_content.strip():
         raise ValueError("润色任务缺少论文正文，请粘贴 Markdown 内容或上传 zip/docx/pdf 论文源文件")
 
-    models = _build_models()
+    models = _build_models(budget)
     code_interpreter = _build_code_interpreter(work_dir)
     scholar = OpenAlexScholar()
     stage_outputs: dict[str, object] = {}
@@ -1201,8 +1285,10 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
                 task_id=task_id,
                 model=models["coder"],
                 work_dir=work_dir,
-                max_chat_turns=settings.MAX_CHAT_TURNS,
-                max_retries=settings.MAX_RETRIES,
+                max_chat_turns=budget.coder.max_chat_turns,
+                max_retries=budget.coder.max_retries,
+                max_total_tool_calls=budget.coder.max_total_tool_calls,
+                max_wall_seconds=budget.coder.max_wall_seconds,
                 code_interpreter=code_interpreter,
             )
             recalculation_agent.system_prompt = POLISH_STAGE_SYSTEM_PROMPTS["recalculation"]
@@ -1244,6 +1330,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         writer = WriterAgent(
             task_id=task_id,
             model=models["writer"],
+            max_chat_turns=budget.writer.max_chat_turns,
             format_output=FormatOutPut.Markdown,
             scholar=scholar,
         )
@@ -1260,12 +1347,13 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             f"# 可用替代图片\n{', '.join(recalculation_result.created_images) if recalculation_result.created_images else '无'}\n\n"
             "请输出修订后的完整 Markdown 论文；若需要替换图片，请同步更新 Markdown 图片路径。"
         )
-        wording_result = await writer.run(
+        final_paper = await _run_writer_stage(
+            writer=writer,
             prompt=wording_prompt,
             available_images=recalculation_result.created_images,
             sub_title="论文措辞修订",
+            budget=budget,
         )
-        final_paper = wording_result.response_content
         if not final_paper.strip():
             raise ValueError("论文措辞修订阶段返回空内容")
         stage_outputs["wording"] = final_paper

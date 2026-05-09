@@ -552,6 +552,8 @@ def _normalize_legacy_result_text(entry: str, section: str, source_file: str) ->
 def _normalize_registry_warning_entry(entry: str, section: str, source_file: str) -> dict[str, Any]:
     text = str(entry or "").strip()
     name = text[:60] or f"{section}_warning"
+    severity = _classify_registry_warning_severity(text)
+    status = "blocked" if severity == "blocker" else "warning"
     return {
         "id": _slugify_identifier(f"{section}_warning_{name}", "warning"),
         "name": name,
@@ -569,10 +571,51 @@ def _normalize_registry_warning_entry(entry: str, section: str, source_file: str
         "source": "structured_result_warning",
         "source_file": source_file,
         "generated_files": [],
-        "status": "blocked",
+        "status": status,
+        "severity": severity,
         "verified": False,
-        "warnings": ["reported_by_stage"],
+        "warnings": [f"reported_by_stage_{severity}"],
     }
+
+
+def _classify_registry_warning_severity(text: str) -> str:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return "info"
+
+    blocker_keywords = [
+        "blocked",
+        "block",
+        "mismatch",
+        "失败",
+        "错误",
+        "无法",
+        "缺失",
+        "未找到",
+        "不一致",
+        "超时",
+        "终止",
+        "不可",
+    ]
+    warning_keywords = [
+        "warning",
+        "警告",
+        "注意",
+        "可能",
+        "建议",
+        "风险",
+        "有限",
+        "fallback",
+        "字体",
+        "兼容",
+        "需人工",
+    ]
+
+    if any(keyword in lowered for keyword in blocker_keywords):
+        return "blocker"
+    if any(keyword in lowered for keyword in warning_keywords):
+        return "warning"
+    return "info"
 
 
 def normalize_result_registry_entry(entry: Any, section: str, source_file: str) -> dict[str, Any]:
@@ -613,6 +656,7 @@ def normalize_result_registry_entry(entry: Any, section: str, source_file: str) 
 def build_result_registry(work_dir: str, structured_result_files: list[str]) -> dict[str, Any]:
     verified_results: list[dict[str, Any]] = []
     blocked_results: list[dict[str, Any]] = []
+    warning_results: list[dict[str, Any]] = []
     source_files: list[str] = []
 
     for filename in structured_result_files:
@@ -638,19 +682,27 @@ def build_result_registry(work_dir: str, structured_result_files: list[str]) -> 
         verified_results.extend(extra_verified)
         blocked_results.extend(extra_blocked)
         for warning in _normalize_result_warnings(payload.get("warnings")):
-            blocked_results.append(_normalize_registry_warning_entry(warning, section, filename))
+            normalized_warning = _normalize_registry_warning_entry(warning, section, filename)
+            if normalized_warning.get("severity") == "blocker":
+                blocked_results.append(normalized_warning)
+            else:
+                warning_results.append(normalized_warning)
 
     verified_results = _deduplicate_dict_rows(verified_results, ["id", "source_file"])
     blocked_results = _deduplicate_dict_rows(blocked_results, ["id", "source_file"])
+    warning_results = _deduplicate_dict_rows(warning_results, ["id", "source_file"])
 
     return {
         "registry_version": "0.2",
         "source_files": source_files,
         "verified_results": verified_results,
         "blocked_results": blocked_results,
+        "warning_results": warning_results,
         "summary": {
             "verified_count": len(verified_results),
             "blocked_count": len(blocked_results),
+            "warning_count": len([entry for entry in warning_results if entry.get("severity") == "warning"]),
+            "info_count": len([entry for entry in warning_results if entry.get("severity") == "info"]),
         },
     }
 

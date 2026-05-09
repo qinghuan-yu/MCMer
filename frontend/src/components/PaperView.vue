@@ -104,6 +104,7 @@ import { Marked } from 'marked'
 import markedKatex from 'marked-katex-extension'
 import 'katex/dist/katex.min.css'
 import BaseSelect from './ui/BaseSelect.vue'
+import { workflowModeOptions, type WorkflowMode } from '../constants/workflowModes'
 
 const props = defineProps<{
   taskId: string
@@ -111,7 +112,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: []
-  revise: [taskId: string, feedback: string, reviseCode: boolean, workflowMode: 'fast' | 'standard' | 'strict']
+  revise: [taskId: string, feedback: string, reviseCode: boolean, workflowMode: WorkflowMode]
   newTask: []
 }>()
 
@@ -125,14 +126,8 @@ const latestVersion = ref(1)
 const showRevisePanel = ref(false)
 const feedback = ref('')
 const reviseWithCode = ref(false)
-const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
+const workflowMode = ref<WorkflowMode>('standard')
 const submitting = ref(false)
-
-const workflowModeOptions = [
-  { value: 'fast', label: 'fast：快速模式' },
-  { value: 'standard', label: 'standard：标准模式' },
-  { value: 'strict', label: 'strict：严格模式' },
-]
 
 // 版本选择
 const versions = computed(() => {

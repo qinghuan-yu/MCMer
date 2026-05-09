@@ -120,12 +120,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import BaseSelect from './ui/BaseSelect.vue'
+import { workflowModeDetailedOptions, type WorkflowMode } from '../constants/workflowModes'
 
 type TaskMode = 'writing' | 'polish'
 
 interface TaskDraftPayload {
   taskType: TaskMode
-  workflowMode: 'fast' | 'standard' | 'strict'
+  workflowMode: WorkflowMode
   question: string
   sourceQuestion: string
   paperContent: string
@@ -146,17 +147,12 @@ const question = ref('')
 const sourceQuestion = ref('')
 const paperContent = ref('')
 const polishingRequirements = ref('')
-const workflowMode = ref<'fast' | 'standard' | 'strict'>('standard')
+const workflowMode = ref<WorkflowMode>('standard')
 const uploadedFiles = ref<File[]>([])
 const isDragging = ref(false)
 const fileInput = ref<HTMLInputElement>()
 const polishingRequirementsInput = ref<HTMLTextAreaElement>()
-
-const workflowModeOptions = [
-  { value: 'fast', label: 'fast：快速模式', meta: '更快出稿，适合先看结构和方向。' },
-  { value: 'standard', label: 'standard：标准模式', meta: '默认平衡模式，适合大多数写作与润色任务。' },
-  { value: 'strict', label: 'strict：严格模式', meta: '增加复核和约束，适合正式交付前检查。' },
-] as const
+const workflowModeOptions = workflowModeDetailedOptions
 
 const writingSourceExtensions = ['.pdf', '.docx', '.txt', '.md']
 const polishSourceExtensions = ['.zip', '.md', '.docx', '.pdf']
