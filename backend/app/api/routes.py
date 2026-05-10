@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from app.services.task_service import task_manager
 from app.services.config_manager import config_manager
 from app.services.redis_manager import redis_manager
+from app.core.workflow_budget import DEFAULT_WORKFLOW_MODE, SUPPORTED_WORKFLOW_MODES, normalize_workflow_mode
 from app.services.source_ingest import (
     PAPER_SOURCE_EXTENSIONS,
     QUESTION_SOURCE_EXTENSIONS,
@@ -91,11 +92,13 @@ def _cancel_payload(task_id: str) -> dict:
 async def create_task(req: CreateTaskRequest):
     """创建新的数学建模任务"""
     task_type = (req.task_type or "writing").strip().lower()
-    workflow_mode = (req.workflow_mode or "standard").strip().lower()
+    requested_workflow_mode = (req.workflow_mode or DEFAULT_WORKFLOW_MODE).strip().lower()
     if task_type not in {"writing", "polish"}:
         raise HTTPException(status_code=400, detail="不支持的任务类型")
-    if workflow_mode not in {"fast", "standard", "strict"}:
+    if requested_workflow_mode not in SUPPORTED_WORKFLOW_MODES:
         raise HTTPException(status_code=400, detail="不支持的 workflow_mode")
+
+    workflow_mode = normalize_workflow_mode(requested_workflow_mode)
 
     if task_type == "writing" and not req.question.strip() and not req.expect_files:
         raise HTTPException(status_code=400, detail="问题不能为空")

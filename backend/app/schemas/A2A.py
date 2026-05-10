@@ -2,7 +2,7 @@
 Agent-to-Agent 通信数据模型
 """
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SubQuestion(BaseModel):
@@ -10,13 +10,13 @@ class SubQuestion(BaseModel):
     id: int
     title: str
     description: str
-    keywords: list[str] = []
+    keywords: list[str] = Field(default_factory=list)
 
 
 class Questions(BaseModel):
     """问题集"""
     background: str = ""
-    sub_questions: list[SubQuestion] = []
+    sub_questions: list[SubQuestion] = Field(default_factory=list)
 
 
 class CoordinatorToModeler(BaseModel):
@@ -42,11 +42,11 @@ class Citation(BaseModel):
 class CoderToWriter(BaseModel):
     """代码手 -> 写作手"""
     coder_response: str | None = None       # LLM 最后的文字输出（含对结果的文字描述）
-    created_images: list[str] = []           # 本次执行新生成的图片文件名列表
-    structured_result_files: list[str] = []  # 本次执行生成/更新的结构化结果文件
+    created_images: list[str] = Field(default_factory=list)           # 本次执行新生成的图片文件名列表
+    structured_result_files: list[str] = Field(default_factory=list)  # 本次执行生成/更新的结构化结果文件
 
 
 class WriterResponse(BaseModel):
     """写作手响应"""
     response_content: str                    # 论文正文（Markdown）
-    footnotes: list = []                     # 文献引用脚注
+    footnotes: list = Field(default_factory=list)                     # 文献引用脚注

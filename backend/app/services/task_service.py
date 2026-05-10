@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config.setting import settings
+from app.core.workflow_budget import normalize_workflow_mode
 from app.schemas.enums import TaskStatus
 from app.schemas.response import TaskProgress
 from app.services.redis_manager import redis_manager
@@ -50,7 +51,7 @@ class TaskManager:
             "question": question,
             "status": TaskStatus.PENDING.value,
             "task_type": task_type,
-            "workflow_mode": (workflow_mode or settings.WORKFLOW_MODE or "standard").strip().lower(),
+            "workflow_mode": normalize_workflow_mode(workflow_mode or settings.WORKFLOW_MODE),
             "work_dir": work_dir,
             "created_at": datetime.now().isoformat(),
             "parent_task_id": parent_task_id,

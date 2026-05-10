@@ -5,18 +5,11 @@ import os
 import asyncio
 from typing import Optional, AsyncGenerator
 
-
-def _clear_proxy_env() -> None:
-    proxy_keys = [
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-    ]
-    for key in proxy_keys:
-        os.environ.pop(key, None)
+from app.utils.proxy import clear_proxy_env, should_ignore_system_proxy
 
 
-if os.getenv("IGNORE_SYSTEM_PROXY", "true").strip().lower() not in {"0", "false", "no", "off"}:
-    _clear_proxy_env()
+if should_ignore_system_proxy():
+    clear_proxy_env()
 
 import httpx
 import litellm

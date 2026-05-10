@@ -9,7 +9,7 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.llm.llm import LLM
-from app.core.workflow_budget import WorkflowBudget, resolve_workflow_budget
+from app.core.workflow_budget import WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
 from app.core.prompts import POLISH_STAGE_SYSTEM_PROMPTS, WRITING_STAGE_SYSTEM_PROMPTS
 from app.schemas.A2A import CoderToWriter
 from app.schemas.enums import FormatOutPut, TaskStatus
@@ -46,6 +46,17 @@ def _message(agent: str, content: str, msg_type: str = "success", section: str =
     if section:
         payload["section"] = section
     return payload
+
+
+def _unique_structured_result_files(*file_groups: list[str]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            filename
+            for group in file_groups
+            for filename in group
+            if filename
+        )
+    )
 
 
 def _resolve_question(task: dict) -> str:
@@ -285,8 +296,7 @@ async def _run_writer_stage(
 
 
 def _resolve_workflow_mode(task: dict) -> str:
-    mode = str(task.get("workflow_mode") or settings.WORKFLOW_MODE or "standard").strip().lower()
-    return mode if mode in {"fast", "standard", "strict"} else "standard"
+    return normalize_workflow_mode(task.get("workflow_mode") or settings.WORKFLOW_MODE)
 
 
 def _review_has_blocking_issues(review_text: str) -> bool:
@@ -701,7 +711,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs["verification"] = verification_result.model_dump()
             result_registry = build_result_registry(
                 work_dir,
-                list(dict.fromkeys(solver_result.structured_result_files + verification_result.structured_result_files)),
+                _unique_structured_result_files(
+                    solver_result.structured_result_files,
+                    verification_result.structured_result_files,
+                ),
             )
             save_json(result_registry, result_registry_path)
             stage_outputs["result_registry"] = result_registry
@@ -772,12 +785,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs["charts"] = chart_result.model_dump()
             result_registry = build_result_registry(
                 work_dir,
-                list(
-                    dict.fromkeys(
-                        solver_result.structured_result_files
-                        + verification_result.structured_result_files
-                        + chart_result.structured_result_files
-                    )
+                _unique_structured_result_files(
+                    solver_result.structured_result_files,
+                    verification_result.structured_result_files,
+                    chart_result.structured_result_files,
                 ),
             )
             save_json(result_registry, result_registry_path)
@@ -1065,7 +1076,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 stage_outputs["verification"] = verification_result.model_dump()
                 result_registry = build_result_registry(
                     work_dir,
-                    list(dict.fromkeys(solver_result.structured_result_files + verification_result.structured_result_files)),
+                    _unique_structured_result_files(
+                        solver_result.structured_result_files,
+                        verification_result.structured_result_files,
+                    ),
                 )
                 save_json(result_registry, result_registry_path)
                 stage_outputs["result_registry"] = result_registry

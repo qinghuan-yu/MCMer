@@ -4,19 +4,11 @@ MCMer - FastAPI 主入口
 import os
 from contextlib import asynccontextmanager
 
-
-def _clear_proxy_env() -> None:
-    """清理会影响第三方 HTTP 客户端的系统代理变量。"""
-    proxy_keys = [
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-    ]
-    for key in proxy_keys:
-        os.environ.pop(key, None)
+from app.utils.proxy import clear_proxy_env, should_ignore_system_proxy
 
 
-if os.getenv("IGNORE_SYSTEM_PROXY", "true").strip().lower() not in {"0", "false", "no", "off"}:
-    _clear_proxy_env()
+if should_ignore_system_proxy():
+    clear_proxy_env()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,14 +24,7 @@ from app.config.setting import settings
 
 def _clear_proxy_env_with_log() -> None:
     """清理代理变量并记录日志。"""
-    proxy_keys = [
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-    ]
-    cleared = []
-    for key in proxy_keys:
-        if os.environ.pop(key, None) is not None:
-            cleared.append(key)
+    cleared = clear_proxy_env()
     if cleared:
         logger.warning("已清理进程代理环境变量: %s", ", ".join(cleared))
 

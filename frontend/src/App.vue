@@ -128,9 +128,9 @@ import ChatView from './components/ChatView.vue'
 import HistoryView from './components/HistoryView.vue'
 import PaperView from './components/PaperView.vue'
 import SettingsPage from './components/SettingsPage.vue'
+import type { WorkflowMode } from './constants/workflowModes'
 
 type TaskType = 'writing' | 'polish'
-type WorkflowMode = 'fast' | 'standard' | 'strict'
 
 interface RuntimeMessage {
   type: string

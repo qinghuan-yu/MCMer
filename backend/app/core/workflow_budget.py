@@ -3,6 +3,15 @@ from dataclasses import dataclass
 from app.config.setting import settings
 
 
+DEFAULT_WORKFLOW_MODE = "standard"
+SUPPORTED_WORKFLOW_MODES = frozenset({"fast", DEFAULT_WORKFLOW_MODE, "strict"})
+
+
+def normalize_workflow_mode(mode: str | None, fallback: str = DEFAULT_WORKFLOW_MODE) -> str:
+    normalized = str(mode or fallback or DEFAULT_WORKFLOW_MODE).strip().lower()
+    return normalized if normalized in SUPPORTED_WORKFLOW_MODES else DEFAULT_WORKFLOW_MODE
+
+
 @dataclass(frozen=True)
 class CoderStageBudget:
     max_chat_turns: int
@@ -29,7 +38,7 @@ class WorkflowBudget:
 
 
 def resolve_workflow_budget(mode: str) -> WorkflowBudget:
-    normalized = (mode or "standard").strip().lower()
+    normalized = normalize_workflow_mode(mode)
     if normalized == "fast":
         return WorkflowBudget(
             mode="fast",
