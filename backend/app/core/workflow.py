@@ -9,7 +9,7 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.llm.llm import LLM
-from app.core.workflow_budget import WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
+from app.core.workflow_budget import CoderStageBudget, WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
 from app.core.prompts import POLISH_STAGE_SYSTEM_PROMPTS, WRITING_STAGE_SYSTEM_PROMPTS
 from app.schemas.A2A import CoderToWriter
 from app.schemas.enums import FormatOutPut, TaskStatus
@@ -179,6 +179,56 @@ def _json_for_prompt(payload: object, limit: int = 12000) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 16] + "\n...\n}"
+
+
+def _compact_result_registry_for_prompt(result_registry: dict | None, max_verified: int = 60, max_blocked: int = 8) -> dict:
+    """Keep high-signal computed results visible inside prompt limits."""
+    if not isinstance(result_registry, dict):
+        return {"verified_results": [], "blocked_results": [], "summary": {}}
+
+    verified = list(result_registry.get("verified_results", []) or [])
+    blocked = list(result_registry.get("blocked_results", []) or [])
+    source_files = result_registry.get("source_files", []) or []
+    summary = result_registry.get("summary", {}) or {}
+
+    def result_priority(entry: object) -> tuple[int, str]:
+        if not isinstance(entry, dict):
+            return (9, "")
+        source = str(entry.get("source", ""))
+        name = str(entry.get("name", ""))
+        value = str(entry.get("value", ""))
+        if source == "artifact_salvage_summary":
+            return (0, name)
+        if "RMSE" in name or "R²" in name or "R2" in name or "误差" in name or "比例" in name:
+            return (1, name)
+        if entry.get("source_data") and value.strip():
+            return (2, name)
+        if value.strip():
+            return (3, name)
+        return (4, name)
+
+    compact_verified = sorted(verified, key=result_priority)[:max_verified]
+    compact_blocked = blocked[:max_blocked]
+    omitted_verified = max(0, len(verified) - len(compact_verified))
+    omitted_blocked = max(0, len(blocked) - len(compact_blocked))
+
+    return {
+        "summary": {
+            **summary,
+            "prompt_compacted": True,
+            "verified_in_prompt": len(compact_verified),
+            "blocked_in_prompt": len(compact_blocked),
+            "omitted_verified": omitted_verified,
+            "omitted_blocked": omitted_blocked,
+        },
+        "source_files": source_files,
+        "verified_results": compact_verified,
+        "blocked_results": compact_blocked,
+        "writing_rule": (
+            "若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级；"
+            "不得把已在 verified_results 中登记的结果写成未计算或未获取。"
+        ),
+    }
 
 
 def _merge_audit_reports(primary: dict | None, fallback: dict) -> dict:
@@ -355,13 +405,11 @@ def _should_run_chart_agent(
     budget: WorkflowBudget,
 ) -> bool:
     verified_count = len(result_registry.get("verified_results", []) or [])
-    blocked_count = len(result_registry.get("blocked_results", []) or [])
-    has_any_results = verified_count > 0 or blocked_count > 0 or bool(solver_images)
-    if not has_any_results:
+    if verified_count <= 0:
         return False
     if verified_count > 0:
         return workflow_mode == "strict" or not solver_images
-    return budget.allow_chart_recovery_without_verified_results
+    return False
 
 
 def _extract_json_object(text: str) -> dict[str, object] | None:
@@ -428,6 +476,52 @@ def _fallback_solve_spec(
         "review_excerpt": _preview(review, 1000),
         "locked_parameters": problem_facts.get("locked_parameters", {}),
     }
+
+
+def _solve_spec_subproblems(solve_spec: dict[str, object]) -> list[dict[str, object]]:
+    raw_subproblems = solve_spec.get("subproblems", []) if isinstance(solve_spec, dict) else []
+    if not isinstance(raw_subproblems, list):
+        return []
+    subproblems: list[dict[str, object]] = []
+    for index, item in enumerate(raw_subproblems, start=1):
+        if isinstance(item, dict):
+            normalized = dict(item)
+        else:
+            normalized = {"objective": str(item)}
+        normalized.setdefault("id", f"p{index}")
+        subproblems.append(normalized)
+    return subproblems
+
+
+def _subproblem_label(index: int, subproblem: dict[str, object]) -> str:
+    raw_label = str(
+        subproblem.get("id")
+        or subproblem.get("title")
+        or subproblem.get("name")
+        or f"p{index}"
+    ).strip()
+    label = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "_", raw_label).strip("_")
+    return label or f"p{index}"
+
+
+def _should_split_solver(workflow_mode: str, solve_spec: dict[str, object]) -> bool:
+    return normalize_workflow_mode(workflow_mode) != "fast" and len(_solve_spec_subproblems(solve_spec)) > 1
+
+
+def _solver_budget_for_subproblem(budget: WorkflowBudget) -> CoderStageBudget:
+    if budget.mode == "strict":
+        return CoderStageBudget(
+            max_chat_turns=budget.solver.max_chat_turns,
+            max_retries=budget.solver.max_retries,
+            max_total_tool_calls=min(budget.solver.max_total_tool_calls, 24),
+            max_wall_seconds=budget.solver.max_wall_seconds,
+        )
+    return CoderStageBudget(
+        max_chat_turns=budget.solver.max_chat_turns,
+        max_retries=budget.solver.max_retries,
+        max_total_tool_calls=min(max(12, budget.solver.max_total_tool_calls), 18),
+        max_wall_seconds=budget.solver.max_wall_seconds,
+    )
 
 
 def _build_code_interpreter(work_dir: str):
@@ -632,36 +726,98 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["solve_spec_file"] = os.path.basename(solve_spec_path)
 
         yield _progress(task_id, "solve", 0.42, "算法与编程求解 Agent 正在执行代码", current_subtask="算法求解")
-        solver = CoderAgent(
-            task_id=task_id,
-            model=models["coder"],
-            work_dir=work_dir,
-            max_chat_turns=budget.solver.max_chat_turns,
-            max_retries=budget.solver.max_retries,
-            max_total_tool_calls=budget.solver.max_total_tool_calls,
-            max_wall_seconds=budget.solver.max_wall_seconds,
-            code_interpreter=code_interpreter,
-        )
-        solver_prompt = (
-            f"## 数学建模题目\n{question}\n\n"
-            f"## solve_spec.json\n{_json_for_prompt(solve_spec, 12000)}\n\n"
-            f"## problem_facts.json\n{_json_for_prompt(problem_facts, 9000)}\n\n"
-            f"## 数据文件\n{data_context}\n\n"
+        solver_images: list[str] = []
+        solver_structured_files: list[str] = []
+        solver_responses: list[str] = []
+        subproblem_budget = _solver_budget_for_subproblem(budget)
+        subproblems = _solve_spec_subproblems(solve_spec)
+
+        common_solver_rules = (
             "## 核心执行顺序\n"
             "1) 先做数值计算 → 2) 立即把确认的 key_results 写入结构化结果文件 → 3) 最后才考虑出图。\n"
             "每执行一次代码得到新数值结论，就必须立即更新结构化结果文件，不要等所有子问题完成再一次性写入。\n\n"
-            "请严格根据 solve_spec.json 执行求解；若规格与实际数据不符，可以做最小必要修正，但必须在结构化结果文件 warnings 中说明。"
-            "必须按 subproblems 分步执行；每完成一个子问题，就立即把当前已确认的 key_results、generated_files 和 warnings 写回结构化结果文件，"
-            "不要等全部子问题结束后再一次性落盘。若后续子问题失败，已完成子问题的结果必须保留。"
+            "若规格与实际数据不符，可以做最小必要修正，但必须在结构化结果文件 warnings 中说明。"
             "生成 matplotlib 图表时，不要手动把 rcParams['font.sans-serif'] 设为 SimHei、Microsoft YaHei 或 DejaVu Sans 的单一/简化列表；优先使用环境预置字体配置。"
             "禁止为了字体缺失、标签中英文切换、图例样式、排版美化、重复打印检查或截图式确认而重复执行出图代码。"
             "若图已成功生成，只允许在其影响数值结论或文件缺失时重画；单纯视觉优化一律禁止。"
             "禁止反复完整读取同一工作簿或重复打印整表；完成列名识别后应转入建模与结果登记。"
             "每次出图前先自问：这张图的数值结论是否已经登记到结构化结果文件？如果还没有，先写结果再画图。"
-            "输出算法方案说明、完整代码、计算结果与结果摘要。"
             "题设锁定参数不得擅自修改。所有可写入论文的关键结果必须登记到结构化结果文件，供后续生成 result_registry.json。"
         )
-        solver_result = await solver.run(prompt=solver_prompt, subtask_title="算法与编程求解")
+
+        if _should_split_solver(workflow_mode, solve_spec):
+            total_subproblems = len(subproblems)
+            for index, subproblem in enumerate(subproblems, start=1):
+                label = _subproblem_label(index, subproblem)
+                subtask_title = f"算法与编程求解_{label}"
+                yield _progress(
+                    task_id,
+                    "solve",
+                    0.42 + min(0.12, 0.12 * index / max(total_subproblems, 1)),
+                    f"算法求解 Agent 正在执行子问题 {index}/{total_subproblems}",
+                    current_subtask=subtask_title,
+                )
+                solver = CoderAgent(
+                    task_id=task_id,
+                    model=models["coder"],
+                    work_dir=work_dir,
+                    max_chat_turns=subproblem_budget.max_chat_turns,
+                    max_retries=subproblem_budget.max_retries,
+                    max_total_tool_calls=subproblem_budget.max_total_tool_calls,
+                    max_wall_seconds=subproblem_budget.max_wall_seconds,
+                    code_interpreter=code_interpreter,
+                )
+                completed_context = (
+                    f"## 已完成子问题结构化结果文件\n{', '.join(solver_structured_files) if solver_structured_files else '无'}\n\n"
+                    f"## 当前工作目录结果文件\n{get_current_files(work_dir)}\n\n"
+                )
+                subproblem_prompt = (
+                    f"## 数学建模题目\n{question}\n\n"
+                    f"## 当前只要求解的子问题 {index}/{total_subproblems}\n{_json_for_prompt(subproblem, 9000)}\n\n"
+                    f"## 完整 solve_spec 摘要\n{_json_for_prompt({'subproblem_count': total_subproblems, 'current_id': label}, 2000)}\n\n"
+                    f"## problem_facts.json\n{_json_for_prompt(problem_facts, 8000)}\n\n"
+                    f"## 数据文件\n{data_context}\n\n"
+                    f"{completed_context}"
+                    f"{common_solver_rules}"
+                    "本轮只解决当前子问题，不要尝试完成其他子问题；若需要前序结果，只读取已完成结构化结果文件。"
+                    "必须把当前子问题的 key_results、generated_files、warnings 写入本轮结构化结果文件。"
+                )
+                sub_result = await solver.run(prompt=subproblem_prompt, subtask_title=subtask_title)
+                solver_responses.append(f"## {subtask_title}\n{sub_result.coder_response}")
+                solver_images.extend(sub_result.created_images)
+                solver_structured_files.extend(sub_result.structured_result_files)
+                solver_structured_files = _unique_structured_result_files(solver_structured_files)
+                partial_registry = build_result_registry(work_dir, solver_structured_files)
+                save_json(partial_registry, result_registry_path)
+                yield _message("solve", _preview(sub_result.coder_response), section=subtask_title)
+
+            solver_result = CoderToWriter(
+                coder_response="\n\n".join(solver_responses),
+                created_images=list(dict.fromkeys(solver_images)),
+                structured_result_files=solver_structured_files,
+            )
+        else:
+            solver = CoderAgent(
+                task_id=task_id,
+                model=models["coder"],
+                work_dir=work_dir,
+                max_chat_turns=budget.solver.max_chat_turns,
+                max_retries=budget.solver.max_retries,
+                max_total_tool_calls=budget.solver.max_total_tool_calls,
+                max_wall_seconds=budget.solver.max_wall_seconds,
+                code_interpreter=code_interpreter,
+            )
+            solver_prompt = (
+                f"## 数学建模题目\n{question}\n\n"
+                f"## solve_spec.json\n{_json_for_prompt(solve_spec, 12000)}\n\n"
+                f"## problem_facts.json\n{_json_for_prompt(problem_facts, 9000)}\n\n"
+                f"## 数据文件\n{data_context}\n\n"
+                f"{common_solver_rules}"
+                "请严格根据 solve_spec.json 执行求解。必须按 subproblems 分步执行；每完成一个子问题，就立即把当前已确认的 key_results、generated_files 和 warnings 写回结构化结果文件，"
+                "不要等全部子问题结束后再一次性落盘。若后续子问题失败，已完成子问题的结果必须保留。"
+                "输出算法方案说明、完整代码、计算结果与结果摘要。"
+            )
+            solver_result = await solver.run(prompt=solver_prompt, subtask_title="算法与编程求解")
         stage_outputs["solve"] = solver_result.model_dump()
         solver_images = solver_result.created_images
         result_registry = build_result_registry(work_dir, solver_result.structured_result_files)
@@ -734,7 +890,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 模型方案\n{stage_outputs.get('modeling', '')}\n\n"
             f"# 审查报告\n{stage_outputs.get('review', '')}\n\n"
             f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
-            f"# result_registry.json\n{_json_for_prompt(result_registry, 10000)}\n\n"
+            f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
             f"# 求解输出\n{solver_result.coder_response}\n\n"
             f"# 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
             f"# verify_plan.json\n{_json_for_prompt(verify_plan, 6000)}\n\n"
@@ -771,7 +927,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             chart_prompt = (
                 f"## 结果分析报告\n{stage_outputs['analysis']}\n\n"
-                f"## result_registry.json\n{_json_for_prompt(result_registry, 8000)}\n\n"
+                f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 8000)}\n\n"
                 f"## 求解结果\n{solver_result.coder_response}\n\n"
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                 f"## 模型符号与假设\n{stage_outputs.get('modeling', '')}\n\n"
@@ -825,7 +981,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         final_prompt = (
             f"# 原题\n{question}\n\n"
             f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
-            f"# result_registry.json\n{_json_for_prompt(result_registry, 12000)}\n\n"
+            f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 12000)}\n\n"
             f"# 题目拆解\n{stage_outputs['breakdown']}\n\n"
             f"# 假设与建模\n{stage_outputs['modeling']}\n\n"
             f"# 模型审查报告\n{stage_outputs['review']}\n\n"
@@ -836,7 +992,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
             f"# 图表与一致性\n{chart_result.coder_response}\n\n"
             "请输出完整论文 Markdown。论文中所有具体数值都必须来自 result_registry.json 的 verified_results；"
-            "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。参考文献必须来自 scholar 工具或用户材料。"
+            "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。"
+            "若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级，不能把已 verified 的结果整体写成未计算。"
+            "参考文献必须来自 scholar 工具或用户材料。"
         )
         final_paper = await _run_writer_stage(
             writer=writer,
@@ -881,7 +1039,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"## 建模方案\n{stage_outputs['modeling']}\n\n"
                 f"## 模型审查\n{stage_outputs['review']}\n\n"
                 f"## problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
-                f"## result_registry.json\n{_json_for_prompt(result_registry, 10000)}\n\n"
+                f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                 f"## 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
                 f"## 当前工作目录文件\n{get_current_files(work_dir)}\n\n"
@@ -1051,7 +1209,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                         f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
                         f"## 建模方案\n{stage_outputs['modeling']}\n\n"
                         f"## 模型审查意见\n{stage_outputs['review']}\n\n"
-                        f"## result_registry.json\n{_json_for_prompt(result_registry, 9000)}\n\n"
+                        f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 9000)}\n\n"
                         f"## 新求解摘要\n{solver_result.coder_response}\n\n"
                         f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                         f"## 数据文件\n{data_context}\n\n"
@@ -1089,7 +1247,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     f"# 原题\n{question}\n\n"
                     f"# 模型方案\n{stage_outputs['modeling']}\n\n"
                     f"# 审查报告\n{stage_outputs['review']}\n\n"
-                    f"# result_registry.json\n{_json_for_prompt(result_registry, 10000)}\n\n"
+                    f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
                     f"# 求解输出\n{solver_result.coder_response}\n\n"
                     f"# 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                     f"# 数值复核报告\n{verification_result.coder_response}\n\n"
@@ -1119,7 +1277,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     )
                     chart_prompt = (
                         f"## 结果分析报告\n{stage_outputs['analysis']}\n\n"
-                        f"## result_registry.json\n{_json_for_prompt(result_registry, 9000)}\n\n"
+                        f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 9000)}\n\n"
                         f"## 求解结果\n{solver_result.coder_response}\n\n"
                         f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                         f"## 模型符号与假设\n{stage_outputs['modeling']}\n\n"
@@ -1148,7 +1306,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 原题\n{question}\n\n"
                 f"# 已生成论文\n{final_paper}\n\n"
                 f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
-                f"# result_registry.json\n{_json_for_prompt(result_registry, 10000)}\n\n"
+                f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
                 f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 12000)}\n\n"
                 f"# 更新后的建模方案\n{stage_outputs['modeling']}\n\n"
                 f"# 更新后的模型审查\n{stage_outputs['review']}\n\n"
@@ -1159,7 +1317,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
                 f"# 最终审查报告\n{audit_report}\n\n"
                 f"# 返工路由\n{', '.join(repair_routes) if repair_routes else 'writer'}\n\n"
-                "请严格根据终审报告与返工后的最新结果重写全文。若某问题仍无法修正，必须在正文中降级措辞，不得忽略，也不得保留与复核报告冲突的确定性表述。"
+                "请严格根据终审报告与返工后的最新结果重写全文。若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级，不能把已 verified 的结果整体写成未计算。"
+                "若某问题仍无法修正，必须在正文中降级措辞，不得忽略，也不得保留与复核报告冲突的确定性表述。"
             )
             final_paper = await _run_writer_stage(
                 writer=writer,

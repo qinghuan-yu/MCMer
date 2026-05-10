@@ -69,6 +69,139 @@ class CoderAgent(Agent):
             deduped.append(item)
         return deduped
 
+    @staticmethod
+    def _is_number_like(value: object) -> bool:
+        text = str(value or "").strip().replace(",", "")
+        if not text:
+            return False
+        try:
+            float(text)
+        except ValueError:
+            return False
+        return True
+
+    @classmethod
+    def _salvage_existing_payload_key_results(
+        cls,
+        payload: object,
+        source_name: str,
+        subtask_title: str,
+        limit: int = 30,
+    ) -> list[dict[str, object]]:
+        results: list[dict[str, object]] = []
+
+        def walk(node: object, path_parts: list[str]) -> None:
+            if len(results) >= limit:
+                return
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    walk(value, [*path_parts, str(key)])
+                return
+            if isinstance(node, list):
+                for index, value in enumerate(node, start=1):
+                    walk(value, [*path_parts, str(index)])
+                return
+            if not cls._is_number_like(node):
+                return
+
+            readable_path = " / ".join(part for part in path_parts if part)
+            if not readable_path:
+                readable_path = subtask_title
+            path_marker = readable_path.lower()
+            metadata_markers = [
+                "metadata",
+                "result_registry_summary",
+                "blocked_count",
+                "verified_count",
+                "warning_count",
+                "info_count",
+                "expected_but_missing",
+                "generated_at",
+            ]
+            if any(marker in path_marker for marker in metadata_markers):
+                return
+            result_markers = [
+                "关键结果",
+                "结果",
+                "统计",
+                "拟合",
+                "误差",
+                "参数",
+                "指标",
+                "预测",
+                "校正",
+                "阶段",
+                "异常",
+                "阈值",
+                "rmse",
+                "mae",
+                "r2",
+                "r²",
+                "metric",
+                "score",
+            ]
+            if not any(marker in path_marker for marker in result_markers):
+                return
+            value_text = str(node).strip()
+            result_id = cls._sanitize_section_name(f"{source_name}_{readable_path}")
+            results.append(
+                {
+                    "id": result_id,
+                    "name": readable_path,
+                    "value": value_text,
+                    "unit": "",
+                    "formula": "",
+                    "inputs": {},
+                    "source_data": [source_name],
+                    "code_cell": "",
+                    "evidence": f"从阻断前已写入的结构化结果 {source_name} 中自动保全数值：{readable_path} = {value_text}",
+                    "source": "existing_structured_payload_salvage",
+                    "verified": True,
+                    "status": "verified",
+                    "warnings": ["结果来自阻断前已生成的结构化结果自动保全，建议后续复核其文字表述与单位。"],
+                }
+            )
+
+        walk(payload, [])
+        return results
+
+    @classmethod
+    def _csv_summary_result(
+        cls,
+        csv_path: Path,
+        rows: list[dict[str, str]],
+        subtask_title: str,
+        max_preview_rows: int = 8,
+    ) -> dict[str, object] | None:
+        if not rows:
+            return None
+
+        columns = list(rows[0].keys())
+        preview_lines = [" | ".join(columns)]
+        preview_lines.append(" | ".join("---" for _ in columns))
+        for row in rows[:max_preview_rows]:
+            preview_lines.append(" | ".join(str(row.get(column, "")).strip() for column in columns))
+
+        result_id = cls._sanitize_section_name(f"{csv_path.stem}_result_table")
+        return {
+            "id": result_id,
+            "name": f"{csv_path.stem} 结果表",
+            "value": "\n".join(preview_lines),
+            "unit": "",
+            "formula": "",
+            "inputs": {"row_count": len(rows), "columns": columns},
+            "source_data": [csv_path.name],
+            "code_cell": "",
+            "evidence": (
+                f"从已生成结果文件 {csv_path.name} 自动保全表格摘要，共 {len(rows)} 行；"
+                f"预览前 {min(len(rows), max_preview_rows)} 行，供论文写作引用完整结果来源。"
+            ),
+            "source": "artifact_salvage_summary",
+            "verified": True,
+            "status": "verified",
+            "warnings": ["结果来自已生成产物的自动保全；完整数值请以 source_data 中的 CSV 文件为准。"],
+        }
+
     @classmethod
     def _salvage_artifact_key_results(cls, work_dir: str, subtask_title: str, limit: int = 40) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
@@ -82,33 +215,54 @@ class CoderAgent(Agent):
             try:
                 with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
                     reader = csv.DictReader(f)
-                    for row_index, row in enumerate(reader, start=1):
+                    rows = [dict(row) for row in reader]
+                summary = cls._csv_summary_result(csv_path, rows, subtask_title)
+                if summary:
+                    results.append(summary)
+
+                if len(results) >= limit:
+                    break
+
+                columns = list(rows[0].keys()) if rows else []
+                parameter_column = next((column for column in columns if "参数" in column or column.lower() in {"param", "parameter"}), "")
+                value_columns = [
+                    column
+                    for column in columns
+                    if column != parameter_column and ("值" in column or "value" in column.lower() or "参数" in column)
+                ]
+                is_parameter_table = bool(parameter_column and value_columns)
+                if not is_parameter_table:
+                    continue
+
+                for row_index, row in enumerate(rows, start=1):
+                    if len(results) >= limit:
+                        break
+                    parameter_name = str(row.get(parameter_column, "") or f"row{row_index}").strip()
+                    for column in value_columns:
                         if len(results) >= limit:
                             break
-                        for column, value in row.items():
-                            if len(results) >= limit:
-                                break
-                            value_text = str(value or "").strip()
-                            if not value_text:
-                                continue
-                            result_id = cls._sanitize_section_name(f"{csv_path.stem}_{row_index}_{column}")
-                            results.append(
-                                {
-                                    "id": result_id,
-                                    "name": str(column or result_id),
-                                    "value": value_text,
-                                    "unit": "",
-                                    "formula": "",
-                                    "inputs": {},
-                                    "source_data": [csv_path.name],
-                                    "code_cell": "",
-                                    "evidence": f"从已生成结果文件 {csv_path.name} 第 {row_index} 行自动保全，避免工具预算阻断后丢失已计算结果。",
-                                    "source": "artifact_salvage",
-                                    "verified": True,
-                                    "status": "verified",
-                                    "warnings": ["结果来自已生成产物的自动保全，建议后续复核其文字表述与单位。"],
-                                }
-                            )
+                        value_text = str(row.get(column) or "").strip()
+                        if not cls._is_number_like(value_text):
+                            continue
+                        result_id = cls._sanitize_section_name(f"{csv_path.stem}_{parameter_name}_{column}")
+                        display_name = f"{parameter_name}（{column}）" if parameter_name else str(column or result_id)
+                        results.append(
+                            {
+                                "id": result_id,
+                                "name": display_name,
+                                "value": value_text,
+                                "unit": "",
+                                "formula": "",
+                                "inputs": {},
+                                "source_data": [csv_path.name],
+                                "code_cell": "",
+                                "evidence": f"从已生成参数文件 {csv_path.name} 第 {row_index} 行自动保全，避免工具预算阻断后丢失已计算参数。",
+                                "source": "artifact_salvage",
+                                "verified": True,
+                                "status": "verified",
+                                "warnings": ["结果来自已生成产物的自动保全，建议后续复核其文字表述与单位。"],
+                            }
+                        )
             except Exception as exc:
                 logger.warning("自动保全 CSV 结果失败 %s: %s", csv_path, exc)
         return results
@@ -446,6 +600,13 @@ class CoderAgent(Agent):
             item for item in existing_key_results if isinstance(item, dict) and item.get("id") != blocked_id
         ]
         if not any(item.get("status") == "verified" for item in filtered_key_results if isinstance(item, dict)):
+            filtered_key_results.extend(
+                self._salvage_existing_payload_key_results(
+                    existing_payload,
+                    expected_result_file.name,
+                    subtask_title,
+                )
+            )
             filtered_key_results.extend(
                 self._salvage_artifact_key_results(self.work_dir, subtask_title)
             )
