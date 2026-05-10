@@ -52,6 +52,23 @@ class CoderAgent(Agent):
         return f"{self._sanitize_section_name(subtask_title)}_structured_results.json"
 
     @staticmethod
+    def _dedupe_jsonish_items(items: list[object]) -> list[object]:
+        deduped: list[object] = []
+        seen: set[str] = set()
+        for item in items:
+            if item is None or item == "":
+                continue
+            try:
+                marker = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+            except Exception:
+                marker = str(item)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(item)
+        return deduped
+
+    @staticmethod
     def _looks_like_non_mutating_summary_code(code: str) -> bool:
         normalized = (code or "").lower()
         if not normalized.strip():
@@ -391,8 +408,8 @@ class CoderAgent(Agent):
             "section": existing_payload.get("section") or subtask_title,
             "summary": summary,
             "key_results": filtered_key_results,
-            "generated_files": list(dict.fromkeys(str(item) for item in existing_generated_files if item)),
-            "warnings": list(dict.fromkeys([*existing_warnings, reason])),
+            "generated_files": self._dedupe_jsonish_items(existing_generated_files),
+            "warnings": self._dedupe_jsonish_items([*existing_warnings, reason]),
         }
         expected_result_file.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
