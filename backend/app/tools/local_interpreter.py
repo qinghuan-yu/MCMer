@@ -22,6 +22,17 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
     """本地 Jupyter Kernel 代码解释器"""
 
     _MATPLOTLIB_FONT_LIST = "['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'SimHei', 'Microsoft YaHei', 'PingFang SC', 'Arial Unicode MS', 'DejaVu Sans']"
+    _MATPLOTLIB_FONT_SETUP = f"""\
+try:
+    import matplotlib
+    from matplotlib import font_manager
+    font_manager._load_fontmanager(try_read_cache=False)
+    matplotlib.rcParams['font.family'] = 'sans-serif'
+    matplotlib.rcParams['font.sans-serif'] = {_MATPLOTLIB_FONT_LIST}
+    matplotlib.rcParams['axes.unicode_minus'] = False
+except Exception:
+    pass
+"""
 
     def __init__(self, work_dir: str):
         self.work_dir = work_dir
@@ -129,21 +140,52 @@ except Exception:
     @classmethod
     def _normalize_matplotlib_font_settings(cls, code: str) -> str:
         """把模型生成的字体配置重写为容器内可用的中文字体优先级。"""
-        if "rcParams" not in code:
+        matplotlib_tokens = (
+            "matplotlib",
+            "plt.",
+            "seaborn",
+            "sns.",
+        )
+        if not any(token in code for token in matplotlib_tokens):
             return code
 
         normalized = code
-        patterns = [
-            r"plt\.rcParams\[['\"]font\.sans-serif['\"]\]\s*=\s*\[[^\]]*\]",
-            r"matplotlib\.rcParams\[['\"]font\.sans-serif['\"]\]\s*=\s*\[[^\]]*\]",
-        ]
-        replacements = [
-            f"plt.rcParams['font.family'] = 'sans-serif'\nplt.rcParams['font.sans-serif'] = {cls._MATPLOTLIB_FONT_LIST}",
-            f"matplotlib.rcParams['font.family'] = 'sans-serif'\nmatplotlib.rcParams['font.sans-serif'] = {cls._MATPLOTLIB_FONT_LIST}",
+        rcparams_owner = r"((?:plt|matplotlib)\.rcParams)"
+        safe_replacements = [
+            (
+                rf"{rcparams_owner}\[['\"]font\.sans-serif['\"]\]\s*=\s*\[[^\]]*\]",
+                lambda match: f"{match.group(1)}['font.sans-serif'] = {cls._MATPLOTLIB_FONT_LIST}",
+            ),
+            (
+                rf"{rcparams_owner}\[['\"]font\.family['\"]\]\s*=\s*[^\n]+",
+                lambda match: f"{match.group(1)}['font.family'] = 'sans-serif'",
+            ),
+            (
+                rf"{rcparams_owner}\[['\"]axes\.unicode_minus['\"]\]\s*=\s*[^\n]+",
+                lambda match: f"{match.group(1)}['axes.unicode_minus'] = False",
+            ),
         ]
 
-        for pattern, replacement in zip(patterns, replacements):
+        for pattern, replacement in safe_replacements:
             normalized = re.sub(pattern, replacement, normalized)
+
+        font_setup = cls._MATPLOTLIB_FONT_SETUP.strip()
+        plot_call = re.search(
+            r"^(\s*)(?:[A-Za-z_][\w\s,]*=\s*)?"
+            r"(?:plt\.(?:figure|subplots|subplot|plot|scatter|bar|barh|hist)|"
+            r"sns\.(?:lineplot|scatterplot|barplot|histplot|heatmap|boxplot|violinplot|regplot|relplot|catplot))\(",
+            normalized,
+            flags=re.MULTILINE,
+        )
+        if plot_call and not plot_call.group(1):
+            normalized = (
+                normalized[:plot_call.start()]
+                + font_setup
+                + "\n"
+                + normalized[plot_call.start():]
+            )
+        else:
+            normalized = font_setup + "\n" + normalized
 
         return normalized
 
