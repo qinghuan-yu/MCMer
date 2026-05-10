@@ -12,6 +12,7 @@ from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT, get_reflection_prompt
 from app.utils.common_utils import get_current_files
 from pathlib import Path
+import csv
 import importlib.metadata
 import json
 import re
@@ -67,6 +68,63 @@ class CoderAgent(Agent):
             seen.add(marker)
             deduped.append(item)
         return deduped
+
+    @classmethod
+    def _salvage_artifact_key_results(cls, work_dir: str, subtask_title: str, limit: int = 40) -> list[dict[str, object]]:
+        results: list[dict[str, object]] = []
+        root = Path(work_dir)
+        if not root.exists():
+            return results
+
+        for csv_path in sorted(root.glob("*.csv")):
+            if len(results) >= limit:
+                break
+            try:
+                with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+                    reader = csv.DictReader(f)
+                    for row_index, row in enumerate(reader, start=1):
+                        if len(results) >= limit:
+                            break
+                        for column, value in row.items():
+                            if len(results) >= limit:
+                                break
+                            value_text = str(value or "").strip()
+                            if not value_text:
+                                continue
+                            result_id = cls._sanitize_section_name(f"{csv_path.stem}_{row_index}_{column}")
+                            results.append(
+                                {
+                                    "id": result_id,
+                                    "name": str(column or result_id),
+                                    "value": value_text,
+                                    "unit": "",
+                                    "formula": "",
+                                    "inputs": {},
+                                    "source_data": [csv_path.name],
+                                    "code_cell": "",
+                                    "evidence": f"从已生成结果文件 {csv_path.name} 第 {row_index} 行自动保全，避免工具预算阻断后丢失已计算结果。",
+                                    "source": "artifact_salvage",
+                                    "verified": True,
+                                    "status": "verified",
+                                    "warnings": ["结果来自已生成产物的自动保全，建议后续复核其文字表述与单位。"],
+                                }
+                            )
+            except Exception as exc:
+                logger.warning("自动保全 CSV 结果失败 %s: %s", csv_path, exc)
+        return results
+
+    @staticmethod
+    def _list_existing_artifacts(work_dir: str) -> list[str]:
+        root = Path(work_dir)
+        if not root.exists():
+            return []
+        suffixes = {".csv", ".json", ".txt", ".md", ".png", ".jpg", ".jpeg", ".svg"}
+        ignored = {"task_info.json", "problem_facts.json", "solve_spec.json", "verify_plan.json", "result_registry.json"}
+        return sorted(
+            path.name
+            for path in root.iterdir()
+            if path.is_file() and path.suffix.lower() in suffixes and path.name not in ignored
+        )
 
     @staticmethod
     def _looks_like_non_mutating_summary_code(code: str) -> bool:
@@ -387,11 +445,19 @@ class CoderAgent(Agent):
         filtered_key_results = [
             item for item in existing_key_results if isinstance(item, dict) and item.get("id") != blocked_id
         ]
+        if not any(item.get("status") == "verified" for item in filtered_key_results if isinstance(item, dict)):
+            filtered_key_results.extend(
+                self._salvage_artifact_key_results(self.work_dir, subtask_title)
+            )
         filtered_key_results.append(blocked_result)
 
         existing_generated_files = existing_payload.get("generated_files", [])
         if not isinstance(existing_generated_files, list):
             existing_generated_files = []
+        existing_generated_files = [
+            *existing_generated_files,
+            *self._list_existing_artifacts(self.work_dir),
+        ]
 
         existing_warnings = existing_payload.get("warnings", [])
         if not isinstance(existing_warnings, list):

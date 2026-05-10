@@ -26,6 +26,9 @@ class TaskManager:
         self._active_tasks: dict[str, dict] = {}
         self._workflow_tasks: dict[str, asyncio.Task] = {}
 
+    def _task_work_dir(self, task_id: str) -> str:
+        return os.path.join(settings.WORK_DIR, task_id)
+
     def create_task(
         self,
         question: str,
@@ -41,7 +44,7 @@ class TaskManager:
     ) -> str:
         """创建新任务（支持作为修订子任务）"""
         task_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
-        work_dir = os.path.join(settings.WORK_DIR, task_id)
+        work_dir = self._task_work_dir(task_id)
         os.makedirs(work_dir, exist_ok=True)
         os.makedirs(os.path.join(work_dir, "data"), exist_ok=True)
         os.makedirs(os.path.join(work_dir, "inputs"), exist_ok=True)
@@ -81,7 +84,10 @@ class TaskManager:
     def _save_task_info(self, task_id: str, info: dict) -> None:
         """持久化任务信息到 work_dir"""
         try:
-            info_path = os.path.join(info["work_dir"], "task_info.json")
+            work_dir = info.get("work_dir") or self._task_work_dir(task_id)
+            os.makedirs(work_dir, exist_ok=True)
+            info["work_dir"] = work_dir
+            info_path = os.path.join(work_dir, "task_info.json")
             with open(info_path, "w", encoding="utf-8") as f:
                 json.dump(info, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -89,6 +95,9 @@ class TaskManager:
 
     def _normalize_loaded_task(self, task_id: str, task: dict) -> dict:
         """将重启后遗留的运行中任务修正为失败，避免前端误判为仍在执行。"""
+        actual_work_dir = self._task_work_dir(task_id)
+        if task.get("work_dir") != actual_work_dir:
+            task["work_dir"] = actual_work_dir
         status = str(task.get("status", "")).strip().lower()
         if task_id in self._active_tasks:
             return task
