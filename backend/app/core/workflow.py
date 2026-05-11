@@ -349,6 +349,26 @@ def _resolve_workflow_mode(task: dict) -> str:
     return normalize_workflow_mode(task.get("workflow_mode") or settings.WORKFLOW_MODE)
 
 
+def _writer_mode_policy(workflow_mode: str) -> str:
+    mode = normalize_workflow_mode(workflow_mode)
+    if mode == "fast":
+        return (
+            "快速模式写作策略：优先快速产出可用模型方案和核心计算流程，正文保持短稿；"
+            "只写必要模型、关键公式、主要结果和风险提示，避免完整竞赛论文式展开。"
+        )
+    if mode == "strict":
+        return (
+            "严格模式写作策略：严格体现在数值、单位、公式口径、复核和证据链上，而不是长篇大论。"
+            "正文必须克制，禁止重复推导、泛泛背景、空洞优缺点和无证据扩写；"
+            "每个关键数值表必须能回指 result_registry 的 verified 证据。"
+            "若结果不可靠，应明确阻断或降级，不能用冗长文字掩盖。"
+        )
+    return (
+        "标准模式写作策略：在完整性与篇幅之间取中庸，保留必要建模说明、核心推导、关键表格、"
+        "结果分析和局限性，不做无关扩写。"
+    )
+
+
 def _review_has_blocking_issues(review_text: str) -> bool:
     keywords = ["无法求解", "定义缺失", "公式错误", "符号不一致", "逻辑跳跃", "证据不足"]
     text = str(review_text or "")
@@ -812,6 +832,16 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "题设锁定参数不得擅自修改。所有可写入论文的关键结果必须登记到结构化结果文件，供后续生成 result_registry.json。"
         )
 
+        common_solver_rules += (
+            "\n## Formula and unit consistency rules\n"
+            "- Never label a fitted slope as a physical coefficient unless the formula matches dimensionally.\n"
+            "- If the model uses T = K * P * d, then K must be computed as T / (P * d). "
+            "With T in N*m, P in kN, and d in mm, kN*mm equals N*m, so no extra factor is needed.\n"
+            "- P / T is only a slope or conversion rate, not the torque coefficient K in T = K * P * d. "
+            "If both are useful, save them with different names and formulas.\n"
+            "- Every key_result for a coefficient must include formula, unit, inputs, source_data, and a warning if the unit convention is ambiguous.\n\n"
+        )
+
         if _should_split_solver(workflow_mode, solve_spec):
             total_subproblems = len(subproblems)
             for index, subproblem in enumerate(subproblems, start=1):
@@ -1051,6 +1081,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         writer.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["final_writer"]
         final_prompt = (
             f"# 原题\n{question}\n\n"
+            f"# Workflow mode writing policy\n{_writer_mode_policy(workflow_mode)}\n\n"
             f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
             f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 12000)}\n\n"
             f"# 题目拆解\n{stage_outputs['breakdown']}\n\n"
@@ -1066,6 +1097,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。"
             "若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级，不能把已 verified 的结果整体写成未计算。"
             "参考文献必须来自 scholar 工具或用户材料。"
+            "严格模式不是加长正文；严格模式必须压缩套话，把篇幅留给可复核表格、公式口径和误差/阻断说明。"
         )
         final_paper = await _run_writer_stage(
             writer=writer,
@@ -1375,6 +1407,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             yield _progress(task_id, "writing", 0.985, f"论文组织与润色 Agent 正在根据第{audit_round}轮终审回退重写全文", current_subtask="终审回退-写作")
             revision_prompt = (
                 f"# 原题\n{question}\n\n"
+                f"# Workflow mode writing policy\n{_writer_mode_policy(workflow_mode)}\n\n"
                 f"# 已生成论文\n{final_paper}\n\n"
                 f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
                 f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
@@ -1390,6 +1423,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 返工路由\n{', '.join(repair_routes) if repair_routes else 'writer'}\n\n"
                 "请严格根据终审报告与返工后的最新结果重写全文。若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级，不能把已 verified 的结果整体写成未计算。"
                 "若某问题仍无法修正，必须在正文中降级措辞，不得忽略，也不得保留与复核报告冲突的确定性表述。"
+                "严格模式重写时必须删减套话和重复解释，只保留能提升数值正确性的内容。"
             )
             final_paper = await _run_writer_stage(
                 writer=writer,

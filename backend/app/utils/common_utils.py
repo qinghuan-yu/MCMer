@@ -3,6 +3,7 @@
 """
 import os
 import json
+import csv
 import re
 import tempfile
 from pathlib import Path
@@ -299,9 +300,9 @@ def _extract_legacy_key_result_metrics(
                 path_parts=path_parts,
                 raw_value=raw_value,
                 unit=metric_unit,
-                status="verified" if is_verification_payload else "verified",
-                verified=True,
-                warnings=["legacy_key_result_metric"],
+                status="verified" if is_verification_payload else "unverified",
+                verified=is_verification_payload,
+                warnings=["legacy_key_result_metric"] if is_verification_payload else ["legacy_key_result_metric_requires_verification"],
                 source="legacy_key_result_metric",
             )
         )
@@ -522,8 +523,9 @@ def _normalize_legacy_result_text(entry: str, section: str, source_file: str) ->
     value_match = re.search(r"(?P<value>[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*(?P<unit>[A-Za-z%°/·*^\-\d]+)?", text)
     formula_match = re.search(r"(?P<formula>[A-Za-zΑ-Ωα-ωPTEKσδfMRTLde_0-9\s\-+*/^().]+=[^，。；;]+)", text)
     blocked_hints = ["问题", "偏差", "不匹配", "无法", "失败", "警告", "风险", "待", "需", "需要", "谨慎"]
-    verified = not any(hint in text for hint in blocked_hints)
-    status = "verified" if verified else "blocked"
+    has_blocked_hint = any(hint in text for hint in blocked_hints)
+    verified = False
+    status = "blocked" if has_blocked_hint else "unverified"
     name = text[:60] or f"{section}_result"
 
     return {
@@ -545,7 +547,7 @@ def _normalize_legacy_result_text(entry: str, section: str, source_file: str) ->
         "generated_files": [],
         "status": status,
         "verified": verified,
-        "warnings": ["legacy_unstructured_result"] if verified else ["legacy_unstructured_result", "requires_structured_evidence"],
+        "warnings": ["legacy_unstructured_result", "requires_structured_evidence"],
     }
 
 
@@ -624,9 +626,9 @@ def normalize_result_registry_entry(entry: Any, section: str, source_file: str) 
 
     name = str(entry.get("name") or entry.get("id") or f"{section}_result").strip()
     entry_id = str(entry.get("id") or _slugify_identifier(f"{section}_{name}", "result")).strip()
-    status = str(entry.get("status") or ("verified" if entry.get("verified", True) else "unverified")).strip().lower()
+    status = str(entry.get("status") or ("verified" if entry.get("verified") is True else "unverified")).strip().lower()
     warnings = _normalize_result_warnings(entry.get("warnings"))
-    verified = bool(entry.get("verified", status not in {"mismatch", "blocked", "failed", "unverified"}))
+    verified = bool(entry.get("verified") is True or status == "verified")
     if warnings:
         verified = verified and all("无法确认" not in warning and "不可靠" not in warning for warning in warnings)
 
@@ -651,6 +653,117 @@ def normalize_result_registry_entry(entry: Any, section: str, source_file: str) 
         "verified": verified,
         "warnings": warnings,
     }
+
+
+def _parse_float_cell(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _pick_csv_column(columns: list[str], keywords: list[str], exact: set[str] | None = None) -> str:
+    exact = exact or set()
+    lowered_exact = {item.lower() for item in exact}
+    for column in columns:
+        normalized = str(column).strip()
+        if normalized in exact or normalized.lower() in lowered_exact:
+            return column
+    for column in columns:
+        lowered = str(column).strip().lower()
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return column
+    return ""
+
+
+def _close_relative(value: float, expected: float, tolerance: float = 0.015) -> bool:
+    if expected == 0:
+        return abs(value) <= tolerance
+    return abs(value - expected) / max(abs(expected), 1e-12) <= tolerance
+
+
+def _audit_torque_coefficient_artifacts(work_dir: str) -> list[dict[str, Any]]:
+    """Detect the common error of using P/T as K when the model states T=K*P*d."""
+    findings: list[dict[str, Any]] = []
+    root = Path(work_dir)
+    if not root.exists():
+        return findings
+
+    for csv_path in sorted(root.glob("*.csv")):
+        try:
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+                rows = list(csv.DictReader(file_obj))
+        except Exception:
+            continue
+        if not rows:
+            continue
+
+        columns = list(rows[0].keys())
+        k_col = _pick_csv_column(columns, ["扭矩系数", "k值", "k_"], {"K", "k", "K值"})
+        t_col = _pick_csv_column(columns, ["预紧力矩", "torque", "t_nm"], {"T", "t"})
+        p_col = _pick_csv_column(columns, ["预紧力", "pretension", "p_kn"], {"P", "p"})
+        d_col = _pick_csv_column(columns, ["直径", "diameter", "d_mm"], {"d", "D"})
+        if p_col == t_col:
+            p_col = next(
+                (
+                    column for column in columns
+                    if ("预紧力" in str(column) and "力矩" not in str(column)) or "p_" in str(column).lower()
+                ),
+                "",
+            )
+        if not (k_col and t_col and p_col and d_col):
+            continue
+
+        wrong_rows: list[str] = []
+        checked = 0
+        for index, row in enumerate(rows, start=2):
+            k_value = _parse_float_cell(row.get(k_col))
+            torque = _parse_float_cell(row.get(t_col))
+            pretension = _parse_float_cell(row.get(p_col))
+            diameter = _parse_float_cell(row.get(d_col))
+            if None in {k_value, torque, pretension, diameter} or not torque or not pretension or not diameter:
+                continue
+            checked += 1
+            correct_k = torque / (pretension * diameter)
+            slope_p_over_t = pretension / torque
+            if _close_relative(k_value, slope_p_over_t) and not _close_relative(k_value, correct_k):
+                wrong_rows.append(
+                    f"row {index}: {k_col}={k_value:g}, P/T={slope_p_over_t:g}, T/(P*d)={correct_k:g}"
+                )
+            if len(wrong_rows) >= 5:
+                break
+
+        if wrong_rows:
+            findings.append(
+                {
+                    "id": _slugify_identifier(f"{csv_path.stem}_torque_coefficient_formula_mismatch", "audit"),
+                    "name": f"{csv_path.name} torque coefficient formula mismatch",
+                    "section": "programmatic_result_audit",
+                    "value": "blocked",
+                    "paper_value": "",
+                    "unit": "",
+                    "formula": "If T = K * P * d, then K = T / (P * d), not P / T.",
+                    "formula_id": "torque_coefficient_dimensional_check",
+                    "inputs": {"checked_rows": checked, "k_column": k_col, "t_column": t_col, "p_column": p_col, "d_column": d_col},
+                    "unit_conversion": "N*m == kN*mm",
+                    "source_data": [csv_path.name],
+                    "code_cell": "programmatic csv dimensional audit",
+                    "evidence": "; ".join(wrong_rows),
+                    "source": "programmatic_result_audit",
+                    "source_file": csv_path.name,
+                    "generated_files": [],
+                    "status": "blocked",
+                    "verified": False,
+                    "warnings": ["K appears to equal P/T while the stated model requires K=T/(P*d)."],
+                }
+            )
+
+    return findings
 
 
 def build_result_registry(work_dir: str, structured_result_files: list[str]) -> dict[str, Any]:
@@ -687,6 +800,8 @@ def build_result_registry(work_dir: str, structured_result_files: list[str]) -> 
                 blocked_results.append(normalized_warning)
             else:
                 warning_results.append(normalized_warning)
+
+    blocked_results.extend(_audit_torque_coefficient_artifacts(work_dir))
 
     verified_results = _deduplicate_dict_rows(verified_results, ["id", "source_file"])
     blocked_results = _deduplicate_dict_rows(blocked_results, ["id", "source_file"])

@@ -156,9 +156,9 @@ class CoderAgent(Agent):
                     "code_cell": "",
                     "evidence": f"从阻断前已写入的结构化结果 {source_name} 中自动保全数值：{readable_path} = {value_text}",
                     "source": "existing_structured_payload_salvage",
-                    "verified": True,
-                    "status": "verified",
-                    "warnings": ["结果来自阻断前已生成的结构化结果自动保全，建议后续复核其文字表述与单位。"],
+                    "verified": False,
+                    "status": "unverified",
+                    "warnings": ["salvaged_from_interrupted_payload_requires_formula_and_unit_verification"],
                 }
             )
 
@@ -197,9 +197,9 @@ class CoderAgent(Agent):
                 f"预览前 {min(len(rows), max_preview_rows)} 行，供论文写作引用完整结果来源。"
             ),
             "source": "artifact_salvage_summary",
-            "verified": True,
-            "status": "verified",
-            "warnings": ["结果来自已生成产物的自动保全；完整数值请以 source_data 中的 CSV 文件为准。"],
+            "verified": False,
+            "status": "unverified",
+            "warnings": ["artifact_table_summary_requires_formula_and_unit_verification"],
         }
 
     @classmethod
@@ -258,9 +258,9 @@ class CoderAgent(Agent):
                                 "code_cell": "",
                                 "evidence": f"从已生成参数文件 {csv_path.name} 第 {row_index} 行自动保全，避免工具预算阻断后丢失已计算参数。",
                                 "source": "artifact_salvage",
-                                "verified": True,
-                                "status": "verified",
-                                "warnings": ["结果来自已生成产物的自动保全，建议后续复核其文字表述与单位。"],
+                                "verified": False,
+                                "status": "unverified",
+                                "warnings": ["artifact_scalar_salvage_requires_formula_and_unit_verification"],
                             }
                         )
             except Exception as exc:

@@ -81,8 +81,8 @@ def resolve_workflow_budget(mode: str) -> WorkflowBudget:
             ),
             writer=WriterStageBudget(
                 request_timeout=max(420, settings.LLM_REQUEST_TIMEOUT),
-                max_chat_turns=10,
-                sectioned=True,
+                max_chat_turns=8,
+                sectioned=False,
             ),
             allow_chart_recovery_without_verified_results=True,
         )
