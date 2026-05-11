@@ -692,6 +692,28 @@ def build_result_registry(work_dir: str, structured_result_files: list[str]) -> 
     blocked_results = _deduplicate_dict_rows(blocked_results, ["id", "source_file"])
     warning_results = _deduplicate_dict_rows(warning_results, ["id", "source_file"])
 
+    source_file_set = set(source_files)
+    verified_source_files = {str(entry.get("source_file", "")) for entry in verified_results if entry.get("source_file")}
+    blocked_source_files = {str(entry.get("source_file", "")) for entry in blocked_results if entry.get("source_file")}
+    denominator = len(source_file_set) or 1
+    coverage_ratio = round(len(verified_source_files) / denominator, 4)
+    if not verified_results:
+        coverage_status = "no_verified_results"
+    elif blocked_results:
+        coverage_status = "partial"
+    else:
+        coverage_status = "ready"
+
+    blocked_reasons: list[str] = []
+    for entry in blocked_results:
+        reason = str(entry.get("evidence") or entry.get("name") or "").strip()
+        if not reason:
+            continue
+        if reason not in blocked_reasons:
+            blocked_reasons.append(reason)
+        if len(blocked_reasons) >= 5:
+            break
+
     return {
         "registry_version": "0.2",
         "source_files": source_files,
@@ -703,6 +725,12 @@ def build_result_registry(work_dir: str, structured_result_files: list[str]) -> 
             "blocked_count": len(blocked_results),
             "warning_count": len([entry for entry in warning_results if entry.get("severity") == "warning"]),
             "info_count": len([entry for entry in warning_results if entry.get("severity") == "info"]),
+            "coverage_status": coverage_status,
+            "coverage_ratio": coverage_ratio,
+            "source_file_count": len(source_file_set),
+            "verified_source_file_count": len(verified_source_files),
+            "blocked_source_file_count": len(blocked_source_files),
+            "top_blocked_reasons": blocked_reasons,
         },
     }
 

@@ -508,19 +508,86 @@ def _should_split_solver(workflow_mode: str, solve_spec: dict[str, object]) -> b
     return normalize_workflow_mode(workflow_mode) != "fast" and len(_solve_spec_subproblems(solve_spec)) > 1
 
 
-def _solver_budget_for_subproblem(budget: WorkflowBudget) -> CoderStageBudget:
+def _subproblem_complexity_score(subproblem: dict[str, object]) -> int:
+    try:
+        text = json.dumps(subproblem, ensure_ascii=False).lower()
+    except Exception:
+        text = str(subproblem).lower()
+
+    score = 1
+    hint = str(subproblem.get("complexity_hint") or subproblem.get("complexity") or "").strip().lower()
+    priority = str(subproblem.get("priority") or "").strip().lower()
+    if hint in {"simple", "low", "低", "简单"}:
+        score = 1
+    elif hint in {"medium", "中", "中等", "标准"}:
+        score = 3
+    elif hint in {"complex", "high", "高", "复杂"}:
+        score = 6
+    if priority == "high" or priority == "高":
+        score += 1
+    input_files = subproblem.get("input_files", [])
+    steps = subproblem.get("steps", [])
+    expected_outputs = subproblem.get("expected_outputs", [])
+    if isinstance(input_files, list):
+        score += min(2, len(input_files) // 2)
+    if isinstance(steps, list):
+        score += min(2, len(steps) // 4)
+    if isinstance(expected_outputs, list):
+        score += min(1, len(expected_outputs) // 3)
+
+    complex_markers = [
+        "machine learning",
+        "random forest",
+        "svr",
+        "xgboost",
+        "lstm",
+        "neural",
+        "cross validation",
+        "交叉验证",
+        "网格搜索",
+        "优化",
+        "非线性",
+        "mice",
+        "插补",
+        "异常检测",
+        "预测",
+        "预警",
+        "变量组合",
+        "敏感性",
+        "monte carlo",
+    ]
+    medium_markers = ["回归", "拟合", "分类", "聚类", "变点", "滤波", "平滑", "参数估计", "误差分析"]
+    score += sum(1 for marker in complex_markers if marker in text)
+    score += min(2, sum(1 for marker in medium_markers if marker in text))
+    return max(1, min(score, 8))
+
+
+def _subproblem_budget_level(score: int) -> str:
+    if score >= 6:
+        return "complex"
+    if score >= 3:
+        return "medium"
+    return "simple"
+
+
+def _solver_budget_for_subproblem(budget: WorkflowBudget, subproblem: dict[str, object] | None = None) -> CoderStageBudget:
+    score = _subproblem_complexity_score(subproblem or {})
     if budget.mode == "strict":
+        tool_calls = 18 if score <= 2 else 26 if score <= 5 else min(36, budget.solver.max_total_tool_calls)
+        wall_seconds = 360 if score <= 2 else 540 if score <= 5 else budget.solver.max_wall_seconds
         return CoderStageBudget(
             max_chat_turns=budget.solver.max_chat_turns,
             max_retries=budget.solver.max_retries,
-            max_total_tool_calls=min(budget.solver.max_total_tool_calls, 24),
-            max_wall_seconds=budget.solver.max_wall_seconds,
+            max_total_tool_calls=min(max(tool_calls, budget.solver.max_total_tool_calls // 2), budget.solver.max_total_tool_calls),
+            max_wall_seconds=min(max(wall_seconds, budget.solver.max_wall_seconds // 2), budget.solver.max_wall_seconds),
         )
+    tool_calls = 10 if score <= 2 else 14 if score <= 5 else min(22, max(18, budget.solver.max_total_tool_calls + 4))
+    wall_seconds = 210 if score <= 2 else 330 if score <= 5 else min(540, max(420, budget.solver.max_wall_seconds))
     return CoderStageBudget(
         max_chat_turns=budget.solver.max_chat_turns,
         max_retries=budget.solver.max_retries,
-        max_total_tool_calls=min(max(12, budget.solver.max_total_tool_calls), 18),
-        max_wall_seconds=budget.solver.max_wall_seconds,
+        max_total_tool_calls=tool_calls,
+        max_wall_seconds=wall_seconds,
     )
 
 
@@ -702,6 +769,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "请把上述内容收敛成可执行 JSON 规格。"
                 "输出必须是单个 JSON 对象，不要附加解释。"
                 "JSON 顶层至少包含 subproblems 数组。每个 subproblem 至少包含：id、objective、input_files、input_columns、method、steps、expected_outputs、validation。"
+                "建议为每个 subproblem 增加 priority（high/medium/low）和 complexity_hint（simple/medium/complex），用于后端分配求解预算。"
                 "禁止写论文式长段落，重点给出可执行步骤和可校验输出。"
             )
             solve_spec_raw = await _run_text_agent(
@@ -729,7 +797,6 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         solver_images: list[str] = []
         solver_structured_files: list[str] = []
         solver_responses: list[str] = []
-        subproblem_budget = _solver_budget_for_subproblem(budget)
         subproblems = _solve_spec_subproblems(solve_spec)
 
         common_solver_rules = (
@@ -750,11 +817,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             for index, subproblem in enumerate(subproblems, start=1):
                 label = _subproblem_label(index, subproblem)
                 subtask_title = f"算法与编程求解_{label}"
+                subproblem_budget = _solver_budget_for_subproblem(budget, subproblem)
+                complexity_score = _subproblem_complexity_score(subproblem)
+                complexity_level = _subproblem_budget_level(complexity_score)
                 yield _progress(
                     task_id,
                     "solve",
                     0.42 + min(0.12, 0.12 * index / max(total_subproblems, 1)),
-                    f"算法求解 Agent 正在执行子问题 {index}/{total_subproblems}",
+                    f"算法求解 Agent 正在执行子问题 {index}/{total_subproblems}（{complexity_level}，预算 {subproblem_budget.max_total_tool_calls} 次工具调用）",
                     current_subtask=subtask_title,
                 )
                 solver = CoderAgent(
@@ -774,11 +844,12 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 subproblem_prompt = (
                     f"## 数学建模题目\n{question}\n\n"
                     f"## 当前只要求解的子问题 {index}/{total_subproblems}\n{_json_for_prompt(subproblem, 9000)}\n\n"
-                    f"## 完整 solve_spec 摘要\n{_json_for_prompt({'subproblem_count': total_subproblems, 'current_id': label}, 2000)}\n\n"
+                    f"## 完整 solve_spec 摘要\n{_json_for_prompt({'subproblem_count': total_subproblems, 'current_id': label, 'complexity_level': complexity_level, 'complexity_score': complexity_score, 'tool_budget': subproblem_budget.max_total_tool_calls}, 2000)}\n\n"
                     f"## problem_facts.json\n{_json_for_prompt(problem_facts, 8000)}\n\n"
                     f"## 数据文件\n{data_context}\n\n"
                     f"{completed_context}"
                     f"{common_solver_rules}"
+                    "本轮预算是按当前子问题复杂度分配的；复杂度较低时应避免探索式多轮试错，复杂度较高时仍必须优先产出可写入论文的关键表格。"
                     "本轮只解决当前子问题，不要尝试完成其他子问题；若需要前序结果，只读取已完成结构化结果文件。"
                     "必须把当前子问题的 key_results、generated_files、warnings 写入本轮结构化结果文件。"
                 )
@@ -1341,6 +1412,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             result_payload={
                 "question": question,
                 "data_context": data_context,
+                "result_coverage": result_registry.get("summary", {}),
                 "stages": stage_outputs,
             },
             code_interpreter=code_interpreter,

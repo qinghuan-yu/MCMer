@@ -539,10 +539,18 @@ class CoderAgent(Agent):
         expected_result_file: Path,
     ) -> None:
         remaining = self.max_total_tool_calls - total_tool_calls
+        minimum_delivery_contract = (
+            "最小可交付结果必须包含："
+            "1) 已经算出的关键数值表或参数表；"
+            "2) 每个数值对应的 source_data；"
+            "3) 已生成文件清单；"
+            "4) 未完成项和原因。"
+            "如果完整模型尚未完成，也要先交付这些已确认结果，禁止把整题概括为全部未计算。"
+        )
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(
-                content=f"代码手接近工具调用上限，剩余 {remaining} 次，将优先落盘结构化结果并停止非必要收尾。",
+                content=f"代码手接近工具调用上限，剩余 {remaining} 次，将进入最小数值交付模式。",
                 type="warning",
                 agent="coder",
             ),
@@ -552,7 +560,9 @@ class CoderAgent(Agent):
                 "role": "user",
                 "content": (
                     f"你距离工具调用上限只剩 {remaining} 次。"
-                    f"请立即优先把当前已经确认的 key_results、generated_files、warnings 写入 {expected_result_file.name}。"
+                    "现在必须切换到最小数值交付模式。"
+                    f"下一次 execute_code 必须优先写入或修复 {expected_result_file.name}，而不是继续探索模型、出图或打印检查。"
+                    f"{minimum_delivery_contract}"
                     "禁止为了字体、标签语言、图例位置、排版美观、重复打印检查或重复读取整张工作表而再次调用 execute_code。"
                     "如果已有图已经生成，不要仅因中文字体警告或样式问题重新出图。"
                     f"若 {subtask_title} 仍有未完成子问题，只保留真正影响最终数值结论的必要计算。"

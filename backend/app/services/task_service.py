@@ -260,6 +260,14 @@ class TaskManager:
             # 检查是否有修订版本
             revisions = list(task_dir.glob("res_v*.md"))
             can_stop = self.is_task_executing(task_info.get("task_id", task_dir.name), task_info)
+            result_summary = {}
+            registry_path = task_dir / "result_registry.json"
+            if registry_path.exists():
+                try:
+                    with open(registry_path, "r", encoding="utf-8") as f:
+                        result_summary = (json.load(f).get("summary") or {})
+                except Exception:
+                    result_summary = {}
 
             tasks.append({
                 "task_id": task_info.get("task_id", task_dir.name),
@@ -275,6 +283,7 @@ class TaskManager:
                 "parent_task_id": task_info.get("parent_task_id", ""),
                 "can_stop": can_stop,
                 "can_delete": not can_stop,
+                "result_coverage": result_summary,
             })
 
         # 也加入当前活跃但可能在磁盘上的任务
@@ -295,6 +304,7 @@ class TaskManager:
                     "parent_task_id": info.get("parent_task_id", ""),
                     "can_stop": can_stop,
                     "can_delete": not can_stop,
+                    "result_coverage": {},
                 })
 
         return tasks

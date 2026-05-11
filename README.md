@@ -2,6 +2,8 @@
 
 MCMer 是一个面向数学建模场景的多 Agent 全栈系统，支持从题目输入、数据上传、建模求解、结果复核、论文生成到历史项目回看的完整链路。
 
+本项目在工程实现上参照了 [MathModelAgent](https://github.com/jihe520/MathModelAgent)。
+
 ## 项目预览
 
 ![MCMer 首页预览](docs/homepage.png) 
@@ -36,6 +38,23 @@ MCMer 是一个面向数学建模场景的多 Agent 全栈系统，支持从题�
 - 代码手必须输出结构化结果文件，不能只给自然语言总结。
 - 写作链路已加入数值复核与更严格的最终审查。
 - DOCX 导出支持公式与本地图片兜底嵌入。
+
+## 工作流模式与数值结果保障
+
+写作任务支持三种工作流模式：
+
+- `fast`：优先速度，跳过部分独立建模、复核或图表补救环节，适合快速草稿。
+- `standard`：默认模式，会按 `solve_spec.subproblems` 拆分算法求解，每个子问题独立预算并立即落盘结构化结果。
+- `strict`：更长超时、更高工具预算，并启用更严格的复核和终审，适合正式交付前检查。
+
+算法求解阶段会优先生成 `result_registry.json`。其中 `summary` 会记录：
+
+- `verified_count` / `blocked_count`：可写入论文的已验证结果数与阻断项数。
+- `coverage_status`：`ready`、`partial` 或 `no_verified_results`。
+- `coverage_ratio`：有 verified 结果的结构化结果文件占比。
+- `top_blocked_reasons`：主要阻断原因，常见为工具调用次数、执行时间或缺少可复核数据。
+
+当代码手接近工具调用上限时，会进入“最小数值交付模式”：优先把已算出的关键数值表、参数表、来源文件和未完成原因写入结构化结果文件，避免整篇论文因为某个子问题被阻断而完全缺少数值。
 
 ## 技术栈
 
