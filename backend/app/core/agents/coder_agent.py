@@ -264,7 +264,7 @@ class CoderAgent(Agent):
                             }
                         )
             except Exception as exc:
-                logger.warning("自动保全 CSV 结果失败 %s: %s", csv_path, exc)
+                logger.warning("自动保全 CSV 结果失败 {}: {}", csv_path, exc)
         return results
 
     @staticmethod

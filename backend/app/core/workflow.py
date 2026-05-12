@@ -376,6 +376,15 @@ def _review_has_blocking_issues(review_text: str) -> bool:
 
 
 def _build_verify_plan(result_registry: dict[str, object]) -> dict[str, object]:
+    def is_blank_result(value: object) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return not value.strip()
+        if isinstance(value, (list, tuple, set, dict)):
+            return len(value) == 0
+        return False
+
     items: list[dict[str, object]] = []
     for entry in (result_registry.get("verified_results", []) or []) + (result_registry.get("blocked_results", []) or []):
         if not isinstance(entry, dict):
@@ -383,7 +392,7 @@ def _build_verify_plan(result_registry: dict[str, object]) -> dict[str, object]:
         value = entry.get("value", "")
         paper_value = entry.get("paper_value", "")
         computed_value = entry.get("computed_value", "")
-        if value in {"", None} and paper_value in {"", None} and computed_value in {"", None}:
+        if is_blank_result(value) and is_blank_result(paper_value) and is_blank_result(computed_value):
             continue
         items.append(
             {
