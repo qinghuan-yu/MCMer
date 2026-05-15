@@ -89,18 +89,18 @@ def resolve_workflow_budget(mode: str) -> WorkflowBudget:
 
     return WorkflowBudget(
         mode="standard",
-        llm_timeout=settings.LLM_REQUEST_TIMEOUT,
+        llm_timeout=max(240, settings.LLM_REQUEST_TIMEOUT),
         coder=CoderStageBudget(
-            max_chat_turns=settings.MAX_CHAT_TURNS,
-            max_retries=settings.MAX_RETRIES,
-            max_total_tool_calls=settings.CODER_MAX_TOTAL_TOOL_CALLS,
-            max_wall_seconds=settings.CODER_MAX_WALL_SECONDS,
+            max_chat_turns=max(36, settings.MAX_CHAT_TURNS),
+            max_retries=max(6, settings.MAX_RETRIES),
+            max_total_tool_calls=max(16, settings.CODER_MAX_TOTAL_TOOL_CALLS),
+            max_wall_seconds=max(300, settings.CODER_MAX_WALL_SECONDS),
         ),
         solver=CoderStageBudget(
-            max_chat_turns=settings.MAX_CHAT_TURNS,
-            max_retries=settings.MAX_RETRIES,
-            max_total_tool_calls=settings.SOLVE_CODER_MAX_TOTAL_TOOL_CALLS,
-            max_wall_seconds=settings.SOLVE_CODER_MAX_WALL_SECONDS,
+            max_chat_turns=max(48, settings.MAX_CHAT_TURNS),
+            max_retries=max(8, settings.MAX_RETRIES),
+            max_total_tool_calls=max(28, settings.SOLVE_CODER_MAX_TOTAL_TOOL_CALLS),
+            max_wall_seconds=max(720, settings.SOLVE_CODER_MAX_WALL_SECONDS),
         ),
         writer=WriterStageBudget(
             request_timeout=max(300, settings.LLM_REQUEST_TIMEOUT),

@@ -23,14 +23,18 @@ services:
       HOST: 0.0.0.0
       PORT: 8000
       REDIS_URL: redis://redis:6379/0
+      WORK_DIR: /app/work_dir
       TZ: Asia/Shanghai
+      WATCHFILES_FORCE_POLLING: "true"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
     ports:
       - "8000:8000"
     depends_on:
       redis:
         condition: service_healthy
     volumes:
-      - ./backend/project/work_dir:/app/project/work_dir
+      - ./backend:/app
+      - ./work_dir:/app/work_dir
       - ./backend/.local:/app/.local
       - ./backend/logs:/app/logs
     healthcheck:

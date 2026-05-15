@@ -346,9 +346,18 @@ function stageLabelFromStage(stage: string) {
 }
 
 function getFileUrl(path: string) {
-  const parts = path.replace(/\\/g, '/').split('/project/work_dir/')
-  const relative = parts.length > 1 ? parts[1] : path
-  return `/output/${relative}`
+  const normalized = String(path || '').replace(/\\/g, '/')
+  if (!normalized) return '#'
+  if (normalized.startsWith('/output/')) return normalized
+
+  const match = normalized.match(/(?:^|\/)(?:project\/)?work_dir\/(.+)$/)
+  const relative = match?.[1] || normalized.replace(/^\/+/, '')
+  const encoded = relative
+    .split('/')
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join('/')
+  return `/output/${encoded}`
 }
 
 watch(

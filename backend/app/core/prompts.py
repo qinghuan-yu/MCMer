@@ -62,6 +62,7 @@ CODER_PROMPT = get_prompt(
 5. key_results 中的关键结果应优先使用强 schema：id、name、value、unit、formula、formula_id、inputs、source_data、code_cell、verified、warnings。
 6. 若无法得到可靠数值，必须在结构化结果文件和最终总结中明确写出“不可靠/无法确认”，禁止编造结果。
 7. 生成 matplotlib 图表时，不要自行把 font.sans-serif 设置成 SimHei、Microsoft YaHei、DejaVu Sans 等单一候选，也不要覆盖环境预置字体配置；如需显式设置，只能使用环境已提供的中文字体优先级。
+8. 生成图表时必须遵守任务提示中的 Chart language policy。标题、坐标轴、图例、注释、色条标签等所有可见文字都要使用指定语言；英文题目或英文论文必须使用英文图表文字，避免中文文字在 PNG 中显示为方框。
 """,
 )
 

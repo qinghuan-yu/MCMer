@@ -15,6 +15,7 @@ frontend/.vite
 
 backend/.local
 backend/project
+work_dir
 backend/logs
 backend/.env.dev
 backend/.env.prod

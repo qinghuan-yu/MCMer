@@ -76,6 +76,35 @@ def _resolve_question(task: dict) -> str:
     return question
 
 
+def _detect_document_language(*texts: str) -> str:
+    combined = "\n".join(text for text in texts if text)
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", combined))
+    latin_words = len(re.findall(r"\b[A-Za-z][A-Za-z0-9'-]*\b", combined))
+
+    if latin_words >= 80 and latin_words >= cjk_count * 2:
+        return "English"
+    if cjk_count >= 30 and cjk_count > latin_words:
+        return "Simplified Chinese"
+    return "English" if latin_words > cjk_count else "Simplified Chinese"
+
+
+def _chart_language_policy(document_language: str) -> str:
+    if document_language == "English":
+        return (
+            "## Chart language policy\n"
+            "- The document/problem language is English. All visible chart text must be English: titles, axis labels, legends, annotations, colorbar labels, and in-figure captions.\n"
+            "- Do not use Chinese labels in generated figures for this task.\n"
+            "- Prefer ASCII English labels to avoid missing-font boxes in PNG output.\n"
+        )
+    return (
+        "## Chart language policy\n"
+        "- The document/problem language is Simplified Chinese. All visible chart text must use Simplified Chinese: titles, axis labels, legends, annotations, colorbar labels, tick-category labels, and in-figure captions.\n"
+        "- Translate generic labels such as Time, Distance, Speed, Heading, Shading duration, Solution, Parameter, Value, Unit, UAV, and Missile into Chinese. Keep units such as m, s, m/s, rad, and kg unchanged.\n"
+        "- Do not leave English-only chart labels in figures for Chinese tasks.\n"
+        "- Keep labels short and rely on the environment's preset matplotlib font configuration.\n"
+    )
+
+
 def _image_manifest_text(image_manifest: list[dict] | None) -> str:
     if not image_manifest:
         return "未提供图片资源"
@@ -434,11 +463,19 @@ def _should_run_chart_agent(
     budget: WorkflowBudget,
 ) -> bool:
     verified_count = len(result_registry.get("verified_results", []) or [])
-    if verified_count <= 0:
-        return False
     if verified_count > 0:
         return workflow_mode == "strict" or not solver_images
-    return False
+    if not budget.allow_chart_recovery_without_verified_results:
+        return False
+    recoverable_entries = (
+        list(result_registry.get("blocked_results", []) or [])
+        + list(result_registry.get("warning_results", []) or [])
+    )
+    has_registered_artifacts = any(
+        isinstance(entry, dict) and (entry.get("source_data") or entry.get("generated_files"))
+        for entry in recoverable_entries
+    )
+    return bool(solver_images or has_registered_artifacts)
 
 
 def _extract_json_object(text: str) -> dict[str, object] | None:
@@ -610,8 +647,8 @@ def _solver_budget_for_subproblem(budget: WorkflowBudget, subproblem: dict[str, 
             max_total_tool_calls=min(max(tool_calls, budget.solver.max_total_tool_calls // 2), budget.solver.max_total_tool_calls),
             max_wall_seconds=min(max(wall_seconds, budget.solver.max_wall_seconds // 2), budget.solver.max_wall_seconds),
         )
-    tool_calls = 10 if score <= 2 else 14 if score <= 5 else min(22, max(18, budget.solver.max_total_tool_calls + 4))
-    wall_seconds = 210 if score <= 2 else 330 if score <= 5 else min(540, max(420, budget.solver.max_wall_seconds))
+    tool_calls = 16 if score <= 2 else 22 if score <= 5 else min(32, max(28, budget.solver.max_total_tool_calls + 4))
+    wall_seconds = 360 if score <= 2 else 540 if score <= 5 else min(900, max(720, budget.solver.max_wall_seconds))
     return CoderStageBudget(
         max_chat_turns=budget.solver.max_chat_turns,
         max_retries=budget.solver.max_retries,
@@ -668,6 +705,8 @@ async def _finalize_outputs(
 
 async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, None]:
     question = _resolve_question(task)
+    chart_language = _detect_document_language(question)
+    chart_language_policy = _chart_language_policy(chart_language)
     work_dir = task["work_dir"]
     workflow_mode = _resolve_workflow_mode(task)
     budget = resolve_workflow_budget(workflow_mode)
@@ -710,6 +749,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["problem_facts"] = problem_facts
         stage_outputs["problem_facts_file"] = os.path.basename(problem_facts_path)
         stage_outputs["workflow_mode"] = workflow_mode
+        stage_outputs["chart_language"] = chart_language
         yield _message("breakdown", _preview(str(stage_outputs["breakdown"])))
         if workflow_mode == "fast":
             stage_outputs["modeling"] = "Fast 模式跳过独立建模阶段，求解直接基于题目拆解与题设事实执行。"
@@ -834,7 +874,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "每执行一次代码得到新数值结论，就必须立即更新结构化结果文件，不要等所有子问题完成再一次性写入。\n\n"
             "若规格与实际数据不符，可以做最小必要修正，但必须在结构化结果文件 warnings 中说明。"
             "生成 matplotlib 图表时，不要手动把 rcParams['font.sans-serif'] 设为 SimHei、Microsoft YaHei 或 DejaVu Sans 的单一/简化列表；优先使用环境预置字体配置。"
-            "禁止为了字体缺失、标签中英文切换、图例样式、排版美化、重复打印检查或截图式确认而重复执行出图代码。"
+            "禁止为了字体缺失、图例样式、排版美化、重复打印检查或截图式确认而重复执行出图代码；如果图表文字违反 Chart language policy 且该图会进入最终论文，允许重画一次修正语言。"
             "若图已成功生成，只允许在其影响数值结论或文件缺失时重画；单纯视觉优化一律禁止。"
             "禁止反复完整读取同一工作簿或重复打印整表；完成列名识别后应转入建模与结果登记。"
             "每次出图前先自问：这张图的数值结论是否已经登记到结构化结果文件？如果还没有，先写结果再画图。"
@@ -842,6 +882,11 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
 
         common_solver_rules += (
+            f"\n{chart_language_policy}\n"
+            "\n## Tool-call discipline\n"
+            "- Prefer one complete execute_code call per subproblem: load inputs, compute results, save CSV/JSON artifacts, save figures, and write the structured result file in that same call.\n"
+            "- Use a second execute_code call only to fix a concrete runtime error or to repair a missing structured result file. Do not split exploration, plotting, and JSON writing across many small tool calls.\n"
+            "- Once the structured result file and required artifacts exist, stop running code for that subproblem unless a blocking numerical error is found.\n"
             "\n## Formula and unit consistency rules\n"
             "- Never label a fitted slope as a physical coefficient unless the formula matches dimensionally.\n"
             "- If the model uses T = K * P * d, then K must be computed as T / (P * d). "
@@ -1041,6 +1086,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"## 求解结果\n{solver_result.coder_response}\n\n"
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                 f"## 模型符号与假设\n{stage_outputs.get('modeling', '')}\n\n"
+                f"{chart_language_policy}\n"
+                "图表恢复规则：如果 verified_results 为空，但 result_registry 中存在 artifact_salvage、artifact_salvage_summary、source_data、generated_files 或求解阶段图片，仍需执行仅限图表的恢复/审查，不要直接跳过。"
+                "只能复用这些已登记文件和已落盘产物，禁止重新求解数学模型。"
+                "逐项检查图题、坐标轴、图例、注释、色条、分类刻度是否符合 Chart language policy；只有语言错误或已有源数据可直接出图时才重绘。"
                 "请优先复用求解阶段已经登记的 generated_files 和已确认结果。"
                 "禁止重新设计模型、禁止重新做整题求解、禁止引入新的数值口径。"
                 "只有在论文所需图表缺失且能够直接基于 verified_results 或已登记源数据补图时，才允许补充绘图。"
@@ -1286,6 +1335,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     f"## 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
                     f"## 最终审查报告\n{audit_report}\n\n"
                     f"## 数据文件\n{data_context}\n\n"
+                    f"{chart_language_policy}\n"
                     "请只针对终审阻断项重新计算、修正结果并更新结构化结果文件，禁止保留无法复现的旧结论。"
                     "必须按修复条目分步执行；每修好一类结果，就立即把当前已确认的 key_results、generated_files 和 warnings 写回结构化结果文件，"
                     "不要等全部修复完成后再统一落盘。"
@@ -1394,8 +1444,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                         f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                         f"## 模型符号与假设\n{stage_outputs['modeling']}\n\n"
                         f"## 终审阻断项\n{delivery_audit_result.coder_response}\n\n"
+                        f"{chart_language_policy}\n"
                         "请只修正与终审阻断项相关的图表或一致性问题。"
-                        "优先复用已经登记的 generated_files 和 verified_results。"
+                        "若 verified_results 为空但存在 artifact_salvage、source_data、generated_files 或求解阶段图片，仍需执行仅限图表的恢复/审查，禁止直接跳过。"
+                        "优先复用已经登记的 generated_files、source_data 和 verified_results。"
                         "禁止重新设计模型、禁止重新做整题求解、禁止引入新的数值口径。"
                         "只有在对应图表缺失且能够直接基于 verified_results 或已登记源数据补图时，才允许更新图片，并输出格式一致性校验清单。"
                     )
@@ -1504,6 +1556,8 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
     paper_content = task.get("paper_content", "")
     if not paper_content and task.get("parent_task_id"):
         paper_content = task_manager.load_paper(task.get("parent_task_id", "")) or ""
+    chart_language = _detect_document_language(question, paper_content)
+    chart_language_policy = _chart_language_policy(chart_language)
     requirements = task.get("polishing_requirements", "") or task.get("feedback", "")
     data_context = get_current_files(work_dir, "data")
     image_manifest = task.get("source_image_manifest", [])
@@ -1539,6 +1593,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             "润色拆解",
         )
         stage_outputs["workflow_mode"] = workflow_mode
+        stage_outputs["chart_language"] = chart_language
         yield _message("breakdown", _preview(str(stage_outputs["breakdown"])))
 
         if workflow_mode == "fast":
@@ -1587,6 +1642,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
                 f"## 一致性问题\n{stage_outputs['consistency']}\n\n"
                 f"## 可用数据文件\n{data_context}\n\n"
                 f"## 图片资源清单\n{image_manifest_text}\n\n"
+                f"{chart_language_policy}\n"
                 "请重新跑表格、拟合、图像或关键数值；若图片异常且可重绘，请直接生成替代图并说明替换建议。输出必须遵守系统提示中的固定结构。"
             )
             recalculation_result = await recalculation_agent.run(

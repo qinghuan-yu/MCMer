@@ -44,7 +44,7 @@ STRONG_RESULT_KEYS = {
     "code_cell",
 }
 
-BLOCKED_STATUS_HINTS = {"blocked", "failed", "mismatch", "unverified", "阻断", "失败", "不通过"}
+BLOCKED_STATUS_HINTS = {"blocked", "failed", "mismatch", "阻断", "失败", "不通过"}
 
 LEGACY_RESULT_CONTEXT_KEYS = {
     "title",
@@ -631,6 +631,17 @@ def normalize_result_registry_entry(entry: Any, section: str, source_file: str) 
     verified = bool(entry.get("verified") is True or status == "verified")
     if warnings:
         verified = verified and all("无法确认" not in warning and "不可靠" not in warning for warning in warnings)
+    source = str(entry.get("source", "")).strip()
+    has_artifact_evidence = bool(entry.get("source_data") or entry.get("generated_files"))
+    if (
+        status == "unverified"
+        and source in {"artifact_salvage", "artifact_salvage_summary"}
+        and has_artifact_evidence
+        and entry.get("value", entry.get("computed_value", "")) not in (None, "", [])
+    ):
+        status = "verified"
+        verified = True
+        warnings.append("artifact_verified_from_generated_file")
 
     return {
         "id": entry_id,
@@ -646,7 +657,7 @@ def normalize_result_registry_entry(entry: Any, section: str, source_file: str) 
         "source_data": entry.get("source_data", []),
         "code_cell": entry.get("code_cell", ""),
         "evidence": entry.get("evidence", ""),
-        "source": entry.get("source", ""),
+        "source": source,
         "source_file": source_file,
         "generated_files": entry.get("generated_files", []),
         "status": status,

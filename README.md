@@ -207,7 +207,7 @@ Copy-Item .\backend\runtime_config.example.json .\backend\.local\runtime_config.
 
 说明：
 
-- Compose 会把 `backend/project/work_dir`、`backend/.local` 和 `backend/logs` 挂载到容器内，方便保留任务产物、运行时配置和日志。
+- Compose 会把项目根目录下的 `work_dir`、`backend/.local` 和 `backend/logs` 挂载到容器内，方便保留任务产物、运行时配置和日志。
 - Compose 内部会自动把后端 Redis 地址改为 `redis://redis:6379/0`，不需要手动改 `.env.dev`。
 
 #### 2. 一键启动
@@ -215,6 +215,8 @@ Copy-Item .\backend\runtime_config.example.json .\backend\.local\runtime_config.
 ```powershell
 docker compose up --build
 ```
+
+日常修改后端 Python 代码时不需要重新构建镜像。Compose 会把 `./backend` 挂载到容器内 `/app`，后端以 `uvicorn --reload` 启动；保存 `.py` 文件后容器会自动重载。只有修改 `backend/Dockerfile`、`backend/pyproject.toml` 或新增系统/ Python 依赖时，才需要重新执行 `docker compose up -d --build`。
 
 启动后可访问：
 
@@ -298,7 +300,7 @@ cd backend
 
 ## 产物说明
 
-每个任务都会在 `backend/project/work_dir/<task_id>/` 下生成运行产物，通常包括：
+每个任务都会在项目根目录的 `work_dir/<task_id>/` 下生成运行产物，通常包括：
 
 - `res.md`：论文 Markdown
 - `res.docx`：导出的 Word 文档
