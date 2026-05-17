@@ -2,6 +2,8 @@
 import json
 import os
 import re
+import shutil
+from pathlib import Path
 from typing import AsyncGenerator
 
 from app.config.setting import settings
@@ -24,12 +26,20 @@ from app.utils.common_utils import (
     build_paper_audit_manifest,
     build_problem_facts,
     build_result_registry,
+    finalize_markdown_export,
     get_current_files,
     load_json,
-    md_to_docx,
     normalize_math_markdown,
     save_json,
     validate_paper_audit_report,
+)
+from app.utils.figure_artifacts import (
+    FIGURE_MANIFEST,
+    figure_artifact_path,
+    is_image_path,
+    is_verified_paper_figure,
+    load_figure_manifest,
+    normalize_artifact_path,
 )
 from app.utils.log_util import logger
 
@@ -57,6 +67,193 @@ def _unique_structured_result_files(*file_groups: list[str]) -> list[str]:
             if filename
         )
     )
+
+
+def _generated_file_path(item: object) -> str:
+    return figure_artifact_path(item)
+
+
+def _is_image_path(path: str) -> bool:
+    return is_image_path(path)
+
+
+def _registered_generated_files(work_dir: str, structured_result_files: list[str]) -> set[str]:
+    root = Path(work_dir)
+    registered: set[str] = set()
+    for filename in structured_result_files:
+        payload = load_json(str(root / filename))
+        if not isinstance(payload, dict):
+            continue
+        generated_files = payload.get("generated_files", [])
+        if not isinstance(generated_files, list):
+            continue
+        for item in generated_files:
+            raw = _generated_file_path(item)
+            if raw:
+                registered.add(raw)
+    return registered
+
+
+def _language_verified_generated_images(
+    work_dir: str,
+    structured_result_files: list[str],
+    document_language: str,
+) -> list[str]:
+    allowed: list[str] = []
+    seen: set[str] = set()
+
+    def maybe_add(item: object, source: str) -> None:
+        path = _generated_file_path(item)
+        if not path or path in seen:
+            return
+        if not is_verified_paper_figure(item, document_language, work_dir):
+            if path and _is_image_path(path):
+                logger.warning("Excluded image from paper FigureArtifact gate ({}): {}", source, item)
+            return
+        allowed.append(path)
+        seen.add(path)
+
+    for manifest_item in load_figure_manifest(work_dir):
+        maybe_add(manifest_item, FIGURE_MANIFEST)
+
+    root = Path(work_dir)
+    for filename in structured_result_files:
+        payload = load_json(str(root / filename))
+        if not isinstance(payload, dict):
+            continue
+        generated_files = payload.get("generated_files", [])
+        if not isinstance(generated_files, list):
+            continue
+        for item in generated_files:
+            maybe_add(item, filename)
+    return allowed
+
+
+def _quarantine_unregistered_output_images(work_dir: str, structured_result_files: list[str]) -> list[str]:
+    root = Path(work_dir)
+    if not root.exists():
+        return []
+    registered = _registered_generated_files(work_dir, structured_result_files)
+    debug_dir = root / "debug_artifacts"
+    moved: list[str] = []
+    candidates: list[Path] = []
+    for candidate in root.iterdir():
+        if candidate.is_file() and _is_image_path(candidate.name):
+            candidates.append(candidate)
+    for dirname in ("output", "results"):
+        folder = root / dirname
+        if folder.exists():
+            candidates.extend(path for path in folder.rglob("*") if path.is_file() and _is_image_path(path.name))
+
+    for image_path in sorted(candidates):
+        rel = image_path.relative_to(root).as_posix()
+        if rel in registered or rel.startswith("debug_artifacts/"):
+            continue
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        target = debug_dir / image_path.name
+        if target.exists():
+            target = debug_dir / f"{image_path.stem}_{len(moved) + 1}{image_path.suffix}"
+        shutil.move(str(image_path), str(target))
+        moved.append(rel)
+    if moved:
+        logger.info("Moved unregistered exploratory charts to debug_artifacts: {}", moved)
+    return moved
+
+
+def _has_generated_image_evidence(
+    work_dir: str,
+    structured_result_files: list[str],
+    created_images: list[str] | None = None,
+) -> bool:
+    return bool(_generated_image_evidence_paths(work_dir, structured_result_files, created_images))
+
+
+def _generated_image_evidence_paths(
+    work_dir: str,
+    structured_result_files: list[str],
+    created_images: list[str] | None = None,
+) -> list[str]:
+    evidence: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str) -> None:
+        normalized = normalize_artifact_path(path)
+        if not normalized or normalized in seen or not _is_image_path(normalized):
+            return
+        evidence.append(normalized)
+        seen.add(normalized)
+
+    for path in created_images or []:
+        add(path)
+    if load_figure_manifest(work_dir):
+        for item in load_figure_manifest(work_dir):
+            add(_generated_file_path(item))
+    root = Path(work_dir)
+    for filename in structured_result_files:
+        payload = load_json(str(root / filename))
+        if not isinstance(payload, dict):
+            continue
+        generated_files = payload.get("generated_files", [])
+        if isinstance(generated_files, list):
+            for item in generated_files:
+                add(_generated_file_path(item))
+        artifact_evidence = payload.get("artifact_evidence", [])
+        if isinstance(artifact_evidence, list):
+            for item in artifact_evidence:
+                add(_generated_file_path(item))
+
+    debug_dir = root / "debug_artifacts"
+    if debug_dir.exists():
+        for path in sorted(debug_dir.rglob("*")):
+            if path.is_file() and _is_image_path(path.name):
+                add(path.relative_to(root).as_posix())
+
+    return evidence
+
+
+def _normalize_paper_image_references(
+    work_dir: str,
+    markdown_text: str,
+    allowed_images: list[str] | None = None,
+) -> str:
+    root = Path(work_dir)
+    if not markdown_text or not root.exists():
+        return markdown_text
+    if allowed_images is None:
+        return markdown_text
+
+    allowed = {normalize_artifact_path(item) for item in allowed_images if str(item).strip()}
+    by_name = {Path(item).name: item for item in allowed}
+    image_pattern = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+    def replacement(match: re.Match[str]) -> str:
+        alt_text = match.group(1)
+        raw_target = normalize_artifact_path(match.group(2).strip().strip("<>"))
+        if raw_target in allowed:
+            return match.group(0)
+        rel = by_name.get(Path(raw_target).name)
+        if rel:
+            return f"![{alt_text}]({rel})"
+        return match.group(0)
+
+    return image_pattern.sub(replacement, markdown_text)
+
+
+def _enforce_paper_image_whitelist(markdown_text: str, allowed_images: list[str] | None) -> str:
+    if allowed_images is None:
+        return markdown_text
+    allowed = {normalize_artifact_path(item) for item in allowed_images if str(item).strip()}
+    if not allowed:
+        return re.sub(r"(?m)^\s*!\[[^\]]*\]\([^)]+\)\s*$\n?", "", markdown_text or "")
+
+    def replacement(match: re.Match[str]) -> str:
+        raw_target = normalize_artifact_path(match.group(2).strip().strip("<>"))
+        if raw_target in allowed:
+            return match.group(0)
+        logger.warning("Removed non-whitelisted image from final paper: {}", raw_target)
+        return ""
+
+    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replacement, markdown_text or "")
 
 
 def _resolve_question(task: dict) -> str:
@@ -103,6 +300,56 @@ def _chart_language_policy(document_language: str) -> str:
         "- Do not leave English-only chart labels in figures for Chinese tasks.\n"
         "- Keep labels short and rely on the environment's preset matplotlib font configuration.\n"
     )
+
+
+def _strict_chart_artifact_contract(document_language: str) -> str:
+    expected = "English" if document_language == "English" else "Simplified Chinese"
+    return (
+        "## Strict chart artifact contract\n"
+        "- Use save_paper_figure(fig, filename, visible_text_audit=[...]) for every final paper figure. Do not use plt.savefig/fig.savefig for deliverable images.\n"
+        "- Final paper images must be registered in generated_files as objects, not bare strings.\n"
+        "- Required schema for each final image: "
+        "{\"path\":\"output/figure.png\",\"kind\":\"figure\",\"paper_ready\":true,"
+        f"\"visible_text_language\":\"{expected}\",\"chart_language_verified\":true,"
+        "\"visible_text_audit\":[\"title\",\"axis labels\",\"legend\",\"annotations\",\"colorbar\",\"tick labels\"]}.\n"
+        "- If any visible chart text does not match the Chart language policy, set paper_ready=false and save the file under debug_artifacts/ or redraw it before registration.\n"
+        "- The writer will only receive images that pass this metadata gate; unverified images are intentionally withheld from the paper.\n"
+    )
+
+
+def _chart_language_context(document_language: str) -> dict[str, object]:
+    if document_language == "English":
+        return {
+            "document_language": "English",
+            "chart_language": "English",
+            "required_visible_text": "English",
+            "final_image_contract": {
+                "paper_ready": True,
+                "visible_text_language": "English",
+                "chart_language_verified": True,
+            },
+            "rules": [
+                "All visible chart text must be English.",
+                "Do not cite or register Chinese-labeled figures as paper_ready.",
+                "Use save_paper_figure for final figures.",
+            ],
+        }
+    return {
+        "document_language": "Simplified Chinese",
+        "chart_language": "Simplified Chinese",
+        "required_visible_text": "Simplified Chinese",
+        "font_policy": "Use container Chinese fonts configured by LocalCodeInterpreter.",
+        "final_image_contract": {
+            "paper_ready": True,
+            "visible_text_language": "Simplified Chinese",
+            "chart_language_verified": True,
+        },
+        "rules": [
+            "All visible chart text must be Simplified Chinese.",
+            "English is allowed only for units, formulas, and established symbols.",
+            "Use save_paper_figure for final figures.",
+        ],
+    }
 
 
 def _image_manifest_text(image_manifest: list[dict] | None) -> str:
@@ -657,10 +904,10 @@ def _solver_budget_for_subproblem(budget: WorkflowBudget, subproblem: dict[str, 
     )
 
 
-def _build_code_interpreter(work_dir: str):
+def _build_code_interpreter(work_dir: str, chart_language: str = "English"):
     if settings.CODE_INTERPRETER == "e2b" and settings.E2B_API_KEY:
         return E2BCodeInterpreter(api_key=settings.E2B_API_KEY, work_dir=work_dir)
-    return LocalCodeInterpreter(work_dir=work_dir)
+    return LocalCodeInterpreter(work_dir=work_dir, chart_language=chart_language)
 
 
 async def _run_text_agent(
@@ -682,16 +929,17 @@ async def _finalize_outputs(
     paper_content: str,
     result_payload: dict,
     code_interpreter,
+    allowed_images: list[str] | None = None,
 ) -> tuple[str, str, str]:
     notebook_path = os.path.join(work_dir, "notebook.ipynb")
     if code_interpreter is not None:
         await code_interpreter.save_notebook(notebook_path)
 
     normalized_paper = normalize_math_markdown(paper_content)
+    normalized_paper = _normalize_paper_image_references(work_dir, normalized_paper, allowed_images)
+    normalized_paper = _enforce_paper_image_whitelist(normalized_paper, allowed_images)
 
     paper_path = os.path.join(work_dir, "res.md")
-    with open(paper_path, "w", encoding="utf-8") as f:
-        f.write(normalized_paper)
 
     result_payload["task_id"] = task_id
     result_payload["task_type"] = task_type
@@ -699,7 +947,7 @@ async def _finalize_outputs(
     save_json(result_payload, os.path.join(work_dir, "res.json"))
 
     docx_path = os.path.join(work_dir, "res.docx")
-    docx_generated = md_to_docx(paper_path, docx_path)
+    docx_generated = finalize_markdown_export(paper_path, normalized_paper, docx_path, allowed_images)
     return paper_path, docx_path if docx_generated else "", notebook_path
 
 
@@ -707,6 +955,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
     question = _resolve_question(task)
     chart_language = _detect_document_language(question)
     chart_language_policy = _chart_language_policy(chart_language)
+    chart_language_context = _chart_language_context(chart_language)
     work_dir = task["work_dir"]
     workflow_mode = _resolve_workflow_mode(task)
     budget = resolve_workflow_budget(workflow_mode)
@@ -716,7 +965,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         raise ValueError("写作任务缺少原始题目内容，请输入题目或上传 docx/pdf 原题文件")
 
     models = _build_models(budget)
-    code_interpreter = _build_code_interpreter(work_dir)
+    code_interpreter = _build_code_interpreter(work_dir, chart_language)
     scholar = OpenAlexScholar()
 
     data_context = get_current_files(work_dir, "data")
@@ -733,6 +982,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
     try:
         yield _progress(task_id, "breakdown", 0.06, "题目拆解 Agent 正在分析赛题", current_subtask="题目拆解")
         breakdown_prompt = (
+            f"# Document and chart language lock\n{_json_for_prompt(chart_language_context, 4000)}\n\n"
+            "The task breakdown must explicitly carry this language lock forward. All later modeling, solver code, chart code, generated_files metadata, and writing must follow it.\n\n"
             f"# 用户题目\n{question}\n\n"
             f"# 当前数据文件\n{data_context}\n\n"
             "请严格按要求完成结构化题目拆解，为后续建模和求解提供输入。"
@@ -745,6 +996,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "题目拆解",
         )
         problem_facts = build_problem_facts(question, str(stage_outputs["breakdown"]))
+        problem_facts["document_language"] = chart_language
+        problem_facts["chart_language"] = chart_language
+        problem_facts["chart_language_context"] = chart_language_context
+        problem_facts["chart_language_policy"] = chart_language_policy
         save_json(problem_facts, problem_facts_path)
         stage_outputs["problem_facts"] = problem_facts
         stage_outputs["problem_facts_file"] = os.path.basename(problem_facts_path)
@@ -858,6 +1113,11 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs["solve_spec_raw"] = solve_spec_raw
             yield _message("solve_spec", _preview(str(solve_spec_raw)), section="求解规格")
 
+        if isinstance(solve_spec, dict):
+            solve_spec["document_language"] = chart_language
+            solve_spec["chart_language"] = chart_language
+            solve_spec["chart_language_context"] = chart_language_context
+            solve_spec["chart_language_policy"] = chart_language_policy
         save_json(solve_spec, solve_spec_path)
         stage_outputs["solve_spec"] = solve_spec
         stage_outputs["solve_spec_file"] = os.path.basename(solve_spec_path)
@@ -882,7 +1142,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
 
         common_solver_rules += (
+            f"\n## Locked chart language context from problem_facts.json\n{_json_for_prompt(chart_language_context, 4000)}\n"
             f"\n{chart_language_policy}\n"
+            f"{_strict_chart_artifact_contract(chart_language)}\n"
             "\n## Tool-call discipline\n"
             "- Prefer one complete execute_code call per subproblem: load inputs, compute results, save CSV/JSON artifacts, save figures, and write the structured result file in that same call.\n"
             "- Use a second execute_code call only to fix a concrete runtime error or to repair a missing structured result file. Do not split exploration, plotting, and JSON writing across many small tool calls.\n"
@@ -942,6 +1204,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 solver_images.extend(sub_result.created_images)
                 solver_structured_files.extend(sub_result.structured_result_files)
                 solver_structured_files = _unique_structured_result_files(solver_structured_files)
+                _quarantine_unregistered_output_images(work_dir, solver_structured_files)
                 partial_registry = build_result_registry(work_dir, solver_structured_files)
                 save_json(partial_registry, result_registry_path)
                 yield _message("solve", _preview(sub_result.coder_response), section=subtask_title)
@@ -975,6 +1238,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             solver_result = await solver.run(prompt=solver_prompt, subtask_title="算法与编程求解")
         stage_outputs["solve"] = solver_result.model_dump()
         solver_images = solver_result.created_images
+        _quarantine_unregistered_output_images(work_dir, solver_result.structured_result_files)
         result_registry = build_result_registry(work_dir, solver_result.structured_result_files)
         save_json(result_registry, result_registry_path)
         stage_outputs["result_registry"] = result_registry
@@ -1087,6 +1351,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                 f"## 模型符号与假设\n{stage_outputs.get('modeling', '')}\n\n"
                 f"{chart_language_policy}\n"
+                f"{_strict_chart_artifact_contract(chart_language)}\n"
                 "图表恢复规则：如果 verified_results 为空，但 result_registry 中存在 artifact_salvage、artifact_salvage_summary、source_data、generated_files 或求解阶段图片，仍需执行仅限图表的恢复/审查，不要直接跳过。"
                 "只能复用这些已登记文件和已落盘产物，禁止重新求解数学模型。"
                 "逐项检查图题、坐标轴、图例、注释、色条、分类刻度是否符合 Chart language policy；只有语言错误或已有源数据可直接出图时才重绘。"
@@ -1098,6 +1363,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             chart_result = await chart_agent.run(prompt=chart_prompt, subtask_title="图表与一致性")
             chart_images = chart_result.created_images
             stage_outputs["charts"] = chart_result.model_dump()
+            _quarantine_unregistered_output_images(
+                work_dir,
+                _unique_structured_result_files(
+                    solver_result.structured_result_files,
+                    verification_result.structured_result_files,
+                    chart_result.structured_result_files,
+                ),
+            )
             result_registry = build_result_registry(
                 work_dir,
                 _unique_structured_result_files(
@@ -1137,6 +1410,83 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             scholar=scholar,
         )
         writer.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["final_writer"]
+        structured_result_files_for_figures = _unique_structured_result_files(
+            solver_result.structured_result_files,
+            verification_result.structured_result_files,
+            chart_result.structured_result_files,
+        )
+        paper_ready_images = _language_verified_generated_images(
+            work_dir,
+            structured_result_files_for_figures,
+            chart_language,
+        )
+        image_evidence_paths = _generated_image_evidence_paths(
+            work_dir,
+            structured_result_files_for_figures,
+            [*solver_images, *chart_images],
+        )
+        if not paper_ready_images and image_evidence_paths:
+            pre_recovery_image_evidence = [*solver_images, *chart_images]
+            yield _progress(
+                task_id,
+                "charts",
+                0.84,
+                "Figure artifacts failed the language gate; repairing charts.",
+                current_subtask="Figure artifact repair",
+            )
+            recovery_agent = CoderAgent(
+                task_id=task_id,
+                model=models["coder"],
+                work_dir=work_dir,
+                max_chat_turns=budget.coder.max_chat_turns,
+                max_retries=budget.coder.max_retries,
+                max_total_tool_calls=max(3, budget.coder.max_total_tool_calls),
+                max_wall_seconds=budget.coder.max_wall_seconds,
+                code_interpreter=code_interpreter,
+            )
+            recovery_prompt = (
+                f"## Locked chart language context\n{_json_for_prompt(chart_language_context, 4000)}\n\n"
+                f"{chart_language_policy}\n"
+                f"{_strict_chart_artifact_contract(chart_language)}\n"
+                "The previous run produced image files, but none passed the FigureArtifact gate. "
+                "Repair this by creating final paper figures with save_paper_figure(...). "
+                "Do not call plt.savefig for final paper images. Do not redo the numerical solve; reuse result_registry.json, existing CSV/JSON outputs, and verified data only.\n\n"
+                f"## Existing image evidence\n{_json_for_prompt(image_evidence_paths, 4000)}\n\n"
+                f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
+                f"## Structured result files\n{', '.join(structured_result_files_for_figures) if structured_result_files_for_figures else 'none'}\n\n"
+                "Write a structured result JSON for this repair stage. Every final figure in generated_files must be the exact object returned by save_paper_figure."
+            )
+            recovery_result = await recovery_agent.run(
+                prompt=recovery_prompt,
+                subtask_title="Figure artifact repair",
+            )
+            chart_result = recovery_result
+            chart_images = recovery_result.created_images
+            stage_outputs["chart_recovery"] = recovery_result.model_dump()
+            structured_result_files_for_figures = _unique_structured_result_files(
+                structured_result_files_for_figures,
+                recovery_result.structured_result_files,
+            )
+            _quarantine_unregistered_output_images(work_dir, structured_result_files_for_figures)
+            result_registry = build_result_registry(work_dir, structured_result_files_for_figures)
+            save_json(result_registry, result_registry_path)
+            stage_outputs["result_registry"] = result_registry
+            paper_ready_images = _language_verified_generated_images(
+                work_dir,
+                structured_result_files_for_figures,
+                chart_language,
+            )
+            yield _message("charts", _preview(recovery_result.coder_response), section="Figure artifact repair")
+        if not paper_ready_images and _has_generated_image_evidence(
+            work_dir,
+            structured_result_files_for_figures,
+            [*(locals().get("pre_recovery_image_evidence", [])), *solver_images, *chart_images],
+        ):
+            raise ValueError(
+                "Generated figures exist, but none passed the strict FigureArtifact language gate. "
+                "The workflow stopped instead of silently producing a paper with missing or unverified figures."
+            )
+        stage_outputs["paper_ready_images"] = paper_ready_images
         final_prompt = (
             f"# 原题\n{question}\n\n"
             f"# Workflow mode writing policy\n{_writer_mode_policy(workflow_mode)}\n\n"
@@ -1160,7 +1510,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         final_paper = await _run_writer_stage(
             writer=writer,
             prompt=final_prompt,
-            available_images=solver_images + chart_images,
+            available_images=paper_ready_images,
             sub_title="论文组织与润色",
             budget=budget,
         )
@@ -1466,6 +1816,25 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     yield _message("charts", _preview(chart_result.coder_response), section=f"终审回退图表一致性第{audit_round}轮")
 
             yield _progress(task_id, "writing", 0.985, f"论文组织与润色 Agent 正在根据第{audit_round}轮终审回退重写全文", current_subtask="终审回退-写作")
+            structured_result_files_for_figures = _unique_structured_result_files(
+                solver_result.structured_result_files,
+                verification_result.structured_result_files,
+                chart_result.structured_result_files,
+            )
+            paper_ready_images = _language_verified_generated_images(
+                work_dir,
+                structured_result_files_for_figures,
+                chart_language,
+            )
+            stage_outputs[f"paper_ready_images_round_{audit_round}"] = paper_ready_images
+            if not paper_ready_images and _has_generated_image_evidence(
+                work_dir,
+                structured_result_files_for_figures,
+                [*solver_images, *chart_images],
+            ):
+                raise ValueError(
+                    "Audit repair produced figures, but none passed the strict FigureArtifact language gate."
+                )
             revision_prompt = (
                 f"# 原题\n{question}\n\n"
                 f"# Workflow mode writing policy\n{_writer_mode_policy(workflow_mode)}\n\n"
@@ -1489,7 +1858,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             final_paper = await _run_writer_stage(
                 writer=writer,
                 prompt=revision_prompt,
-                available_images=solver_images + chart_images,
+                available_images=paper_ready_images,
                 sub_title=f"审查后修订第{audit_round}轮",
                 budget=budget,
             )
@@ -1511,6 +1880,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "stages": stage_outputs,
             },
             code_interpreter=code_interpreter,
+            allowed_images=paper_ready_images,
         )
 
         task_manager.update_status(task_id, TaskStatus.COMPLETED)
@@ -1558,6 +1928,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         paper_content = task_manager.load_paper(task.get("parent_task_id", "")) or ""
     chart_language = _detect_document_language(question, paper_content)
     chart_language_policy = _chart_language_policy(chart_language)
+    chart_language_context = _chart_language_context(chart_language)
     requirements = task.get("polishing_requirements", "") or task.get("feedback", "")
     data_context = get_current_files(work_dir, "data")
     image_manifest = task.get("source_image_manifest", [])
@@ -1567,7 +1938,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         raise ValueError("润色任务缺少论文正文，请粘贴 Markdown 内容或上传 zip/docx/pdf 论文源文件")
 
     models = _build_models(budget)
-    code_interpreter = _build_code_interpreter(work_dir)
+    code_interpreter = _build_code_interpreter(work_dir, chart_language)
     scholar = OpenAlexScholar()
     stage_outputs: dict[str, object] = {}
 
@@ -1594,6 +1965,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         )
         stage_outputs["workflow_mode"] = workflow_mode
         stage_outputs["chart_language"] = chart_language
+        stage_outputs["chart_language_context"] = chart_language_context
         yield _message("breakdown", _preview(str(stage_outputs["breakdown"])))
 
         if workflow_mode == "fast":
@@ -1643,6 +2015,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
                 f"## 可用数据文件\n{data_context}\n\n"
                 f"## 图片资源清单\n{image_manifest_text}\n\n"
                 f"{chart_language_policy}\n"
+                f"{_strict_chart_artifact_contract(chart_language)}\n"
                 "请重新跑表格、拟合、图像或关键数值；若图片异常且可重绘，请直接生成替代图并说明替换建议。输出必须遵守系统提示中的固定结构。"
             )
             recalculation_result = await recalculation_agent.run(
@@ -1679,6 +2052,20 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             scholar=scholar,
         )
         writer.system_prompt = POLISH_STAGE_SYSTEM_PROMPTS["wording"]
+        paper_ready_images = _language_verified_generated_images(
+            work_dir,
+            recalculation_result.structured_result_files,
+            chart_language,
+        )
+        if not paper_ready_images and _has_generated_image_evidence(
+            work_dir,
+            recalculation_result.structured_result_files,
+            recalculation_result.created_images,
+        ):
+            raise ValueError(
+                "Polish generated replacement figures, but none passed the strict FigureArtifact language gate."
+            )
+        stage_outputs["paper_ready_images"] = paper_ready_images
         wording_prompt = (
             f"# 原始题目\n{question or '未提供'}\n\n"
             f"# 原论文\n{paper_content}\n\n"
@@ -1694,7 +2081,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         final_paper = await _run_writer_stage(
             writer=writer,
             prompt=wording_prompt,
-            available_images=recalculation_result.created_images,
+            available_images=paper_ready_images,
             sub_title="论文措辞修订",
             budget=budget,
         )
@@ -1737,6 +2124,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
                 "stages": stage_outputs,
             },
             code_interpreter=code_interpreter,
+            allowed_images=paper_ready_images,
         )
 
         task_manager.update_status(task_id, TaskStatus.COMPLETED)

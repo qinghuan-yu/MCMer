@@ -11,6 +11,12 @@ from app.core.llm.llm import LLM
 from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT, get_reflection_prompt
 from app.utils.common_utils import get_current_files
+from app.utils.figure_artifacts import (
+    PAPER_FIGURE_DIRS,
+    is_image_path,
+    is_verified_paper_figure,
+    normalize_artifact_path,
+)
 from pathlib import Path
 import csv
 import importlib.metadata
@@ -281,6 +287,22 @@ class CoderAgent(Agent):
         )
 
     @staticmethod
+    def _list_existing_image_evidence(work_dir: str) -> list[str]:
+        root = Path(work_dir)
+        if not root.exists():
+            return []
+        suffixes = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
+        evidence: list[str] = []
+        for dirname in ("debug_artifacts", "output", "figures", "final_results"):
+            folder = root / dirname
+            if not folder.exists():
+                continue
+            for path in sorted(folder.rglob("*")):
+                if path.is_file() and path.suffix.lower() in suffixes:
+                    evidence.append(path.relative_to(root).as_posix())
+        return evidence
+
+    @staticmethod
     def _looks_like_non_mutating_summary_code(code: str) -> bool:
         normalized = (code or "").lower()
         if not normalized.strip():
@@ -398,6 +420,52 @@ class CoderAgent(Agent):
         if not isinstance(payload.get("warnings"), list):
             return False, "warnings 必须是数组"
 
+        final_image_prefixes = PAPER_FIGURE_DIRS
+        for index, generated_file in enumerate(payload.get("generated_files", []), start=1):
+            raw_path = ""
+            if isinstance(generated_file, str):
+                raw_path = generated_file
+            elif isinstance(generated_file, dict):
+                raw_path = (
+                    generated_file.get("path")
+                    or generated_file.get("filename")
+                    or generated_file.get("file")
+                    or generated_file.get("name")
+                    or ""
+                )
+            else:
+                return False, f"generated_files[{index}] must be a string or object"
+
+            normalized_path = normalize_artifact_path(raw_path)
+            if not normalized_path:
+                return False, f"generated_files[{index}] is missing a file path"
+            if not is_image_path(normalized_path):
+                continue
+
+            if isinstance(generated_file, str):
+                return False, (
+                    f"generated_files[{index}] image entries must be objects with "
+                    "path/kind/paper_ready/visible_text_language/chart_language_verified/"
+                    "visible_text_audit; bare image paths are not accepted"
+                )
+
+            paper_ready = bool(generated_file.get("paper_ready"))
+            is_final_dir = normalized_path.startswith(final_image_prefixes)
+            if paper_ready and not is_final_dir:
+                return False, f"generated_files[{index}] paper_ready images must be under output/, figures/, or final_results/"
+            if paper_ready and normalized_path.startswith("debug_artifacts/"):
+                return False, f"generated_files[{index}] paper_ready images cannot be under debug_artifacts/"
+
+            if is_final_dir or paper_ready:
+                expected_language = (
+                    str(generated_file.get("expected_chart_language") or generated_file.get("document_language") or "").strip()
+                    or str(generated_file.get("visible_text_language") or "").strip()
+                )
+                if not expected_language:
+                    return False, f"generated_files[{index}] final image is missing visible_text_language"
+                if not is_verified_paper_figure(generated_file, expected_language, file_path.parent):
+                    return False, f"generated_files[{index}] final image must satisfy the FigureArtifact contract"
+
         if payload.get("section") != expected_section:
             return False, f"section 字段必须为 {expected_section}"
 
@@ -486,7 +554,10 @@ class CoderAgent(Agent):
             "7. 若当前子任务不是数值复核，则每个 key_result 至少应包含 id、name、value、unit、formula、inputs、source_data、code_cell、evidence、source、verified、status、warnings。\n"
             "8. 若当前子任务是数值复核，则每个 key_result 至少应包含 id、name、paper_value、computed_value 或 value、unit、source_data、verified、status、warnings。\n"
             "9. 对 status=verified 的条目，禁止使用 见论文/无法确认 这类占位值；必须给出真实 value 和 source_data。\n"
-            "10. 若结果不可靠，必须写入 warnings，并在 key_results 中显式标注 mismatch 或 blocked。"
+            "10. generated_files 只能列出最终可交付产物，不能把结构化结果 JSON 自身列入 generated_files；最终图表必须显式列出相对路径，例如 output/final_chart.png。\n"
+            "11. Final paper figures must be saved with save_paper_figure(fig, filename, visible_text_audit=[...]). Do not use plt.savefig(...) for deliverable images; plt.savefig is only allowed for debug_artifacts/ diagnostics with paper_ready=false.\n"
+            "12. Strict FigureArtifact rule: every image in generated_files must be an object, not a bare path string. Final/paper images must include path, kind='figure', paper_ready=true, visible_text_language, chart_language_verified=true, and visible_text_audit. Temporary or diagnostic images must be paper_ready=false and saved under debug_artifacts/.\n"
+            "13. 若结果不可靠，必须写入 warnings，并在 key_results 中显式标注 mismatch 或 blocked。"
         )
         await self.append_chat_history({"role": "user", "content": contract_prompt})
 
@@ -626,8 +697,18 @@ class CoderAgent(Agent):
         if not isinstance(existing_generated_files, list):
             existing_generated_files = []
         existing_generated_files = [
+            item
+            for item in existing_generated_files
+            if not is_image_path(normalize_artifact_path(item.get("path") if isinstance(item, dict) else item))
+        ]
+        salvage_files = [
+            item
+            for item in self._list_existing_artifacts(self.work_dir)
+            if not is_image_path(normalize_artifact_path(item))
+        ]
+        existing_generated_files = [
             *existing_generated_files,
-            *self._list_existing_artifacts(self.work_dir),
+            *salvage_files,
         ]
 
         existing_warnings = existing_payload.get("warnings", [])
@@ -646,6 +727,7 @@ class CoderAgent(Agent):
             "summary": summary,
             "key_results": filtered_key_results,
             "generated_files": self._dedupe_jsonish_items(existing_generated_files),
+            "artifact_evidence": self._dedupe_jsonish_items(self._list_existing_image_evidence(self.work_dir)),
             "warnings": self._dedupe_jsonish_items([*existing_warnings, reason]),
         }
         expected_result_file.write_text(
@@ -701,8 +783,117 @@ class CoderAgent(Agent):
         )
         return True
 
+    @staticmethod
+    def _chart_language_from_prompt(prompt: str) -> str:
+        if (
+            "document/problem language is Simplified Chinese" in prompt
+            or "visible_text_language\":\"Simplified Chinese" in prompt
+            or '"chart_language": "Simplified Chinese"' in prompt
+            or '"document_language": "Simplified Chinese"' in prompt
+        ):
+            return "Simplified Chinese"
+        if (
+            "document/problem language is English" in prompt
+            or "visible_text_language\":\"English" in prompt
+            or '"chart_language": "English"' in prompt
+            or '"document_language": "English"' in prompt
+        ):
+            return "English"
+        return ""
+
+    @staticmethod
+    def _english_chart_label_literals(code: str) -> list[str]:
+        label_patterns = [
+            r"(?:plt\.)?(?:title|xlabel|ylabel|suptitle)\(\s*f?[\"']([^\"']*[A-Za-z][^\"']*)[\"']",
+            r"\.(?:set_title|set_xlabel|set_ylabel)\(\s*f?[\"']([^\"']*[A-Za-z][^\"']*)[\"']",
+            r"\blabel\s*=\s*f?[\"']([^\"']*[A-Za-z][^\"']*)[\"']",
+        ]
+        allowed_fragments = {
+            "cm", "m", "s", "kg", "rad", "hz", "db", "rgb", "cmyk", "fft", "fp", "sic",
+            "si", "r", "r2", "aic", "bic", "rmse", "mae",
+        }
+        labels: list[str] = []
+        for pattern in label_patterns:
+            for match in re.finditer(pattern, code, flags=re.IGNORECASE):
+                text = match.group(1).strip()
+                words = re.findall(r"[A-Za-z]{2,}", text)
+                meaningful = [word for word in words if word.lower() not in allowed_fragments]
+                if meaningful:
+                    labels.append(text)
+        return labels
+
+    @staticmethod
+    def _chinese_chart_label_literals(code: str) -> list[str]:
+        label_patterns = [
+            r"(?:plt\.)?(?:title|xlabel|ylabel|suptitle)\(\s*f?[\"']([^\"']*[\u4e00-\u9fff][^\"']*)[\"']",
+            r"\.(?:set_title|set_xlabel|set_ylabel)\(\s*f?[\"']([^\"']*[\u4e00-\u9fff][^\"']*)[\"']",
+            r"\blabel\s*=\s*f?[\"']([^\"']*[\u4e00-\u9fff][^\"']*)[\"']",
+        ]
+        labels: list[str] = []
+        for pattern in label_patterns:
+            for match in re.finditer(pattern, code, flags=re.IGNORECASE):
+                labels.append(match.group(1).strip())
+        return labels
+
+    def _chart_language_guard_message(self, code: str, expected_chart_language: str) -> str:
+        if re.search(r"\bdef\s+save_paper_figure\b|\bsave_paper_figure\s*=", code):
+            return (
+                "FigureArtifact guard blocked this execute_code call: save_paper_figure is a protected "
+                "kernel helper and must not be redefined, shadowed, or monkey-patched. Use the injected helper directly."
+            )
+
+        savefig_targets = [
+            match.group(1).replace("\\", "/").lstrip("./")
+            for match in re.finditer(
+                r"(?:\.savefig|savefig)\(\s*f?[\"']([^\"']+\.(?:png|jpg|jpeg|svg|webp))[\"']",
+                code,
+                flags=re.IGNORECASE,
+            )
+        ]
+        writes_deliverable_image = any(
+            not target.startswith("debug_artifacts/")
+            for target in savefig_targets
+        )
+        savefig_calls = re.findall(r"(?:[\w.]+\.)?savefig\s*\(", code, flags=re.IGNORECASE)
+        has_unparsed_savefig = bool(savefig_calls) and len(savefig_targets) < len(savefig_calls)
+        uses_paper_figure_helper = "save_paper_figure(" in code
+        if not writes_deliverable_image and not uses_paper_figure_helper:
+            if has_unparsed_savefig:
+                return (
+                    "FigureArtifact guard blocked this execute_code call: savefig calls with variable or "
+                    "non-literal targets are not allowed. Use save_paper_figure for final figures, or save "
+                    "diagnostics with an explicit debug_artifacts/... literal path."
+                )
+            return ""
+        if writes_deliverable_image or has_unparsed_savefig:
+            return (
+                "FigureArtifact guard blocked this execute_code call: final paper images must be saved "
+                "with save_paper_figure(fig, filename, visible_text_audit=[...]) so language metadata is registered. "
+                "Use plt.savefig/fig.savefig only for diagnostics under debug_artifacts/."
+            )
+        if expected_chart_language == "Simplified Chinese":
+            english_labels = self._english_chart_label_literals(code)
+            if english_labels:
+                preview = "; ".join(english_labels[:8])
+                return (
+                    "Chart language guard blocked this execute_code call: the task requires Simplified Chinese "
+                    "visible chart text, but deliverable image code contains English chart labels: "
+                    f"{preview}. Rewrite titles, axis labels, legends, annotations and tick/category labels in Chinese."
+                )
+        if expected_chart_language == "English":
+            chinese_labels = self._chinese_chart_label_literals(code)
+            if chinese_labels:
+                preview = "; ".join(chinese_labels[:8])
+                return (
+                    "Chart language guard blocked this execute_code call: the task requires English "
+                    "visible chart text, but deliverable image code contains Chinese chart labels: "
+                    f"{preview}. Rewrite titles, axis labels, legends, annotations and tick/category labels in English."
+                )
+        return ""
+
     async def run(self, prompt: str, subtask_title: str) -> CoderToWriter:
         logger.info(f"{self.__class__.__name__}:开始:执行子任务: {subtask_title}")
+        expected_chart_language = self._chart_language_from_prompt(prompt)
         if self.code_interpreter:
             self.code_interpreter.add_section(subtask_title)
         self.current_chat_turns = 0
@@ -827,6 +1018,24 @@ class CoderAgent(Agent):
                             continue
 
                         if await self._handle_repeated_code(code, subtask_title):
+                            continue
+
+                        chart_guard_message = self._chart_language_guard_message(code, expected_chart_language)
+                        if chart_guard_message:
+                            await self.append_chat_history(
+                                {
+                                    "role": "user",
+                                    "content": chart_guard_message,
+                                }
+                            )
+                            await redis_manager.publish_message(
+                                self.task_id,
+                                SystemMessage(
+                                    content=chart_guard_message,
+                                    type="warning",
+                                    agent="coder",
+                                ),
+                            )
                             continue
 
                         await redis_manager.publish_message(

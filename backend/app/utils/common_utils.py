@@ -1078,6 +1078,9 @@ def _resolve_markdown_image_path(md_path: str, image_target: str) -> Path | None
             [
                 md_dir / raw_candidate,
                 md_dir / raw_candidate.name,
+                md_dir / "output" / raw_candidate.name,
+                md_dir / "final_results" / raw_candidate.name,
+                md_dir / "debug_artifacts" / raw_candidate.name,
                 md_dir / "charts" / raw_candidate.name,
                 md_dir / "images" / raw_candidate.name,
                 md_dir / "figures" / raw_candidate.name,
@@ -1093,7 +1096,7 @@ def _resolve_markdown_image_path(md_path: str, image_target: str) -> Path | None
             return resolved
 
     if not raw_candidate.is_absolute() and raw_candidate.name:
-        for folder_name in ["charts", "images", "figures"]:
+        for folder_name in ["output", "final_results", "debug_artifacts", "charts", "images", "figures"]:
             folder = md_dir / folder_name
             if not folder.exists() or not folder.is_dir():
                 continue
@@ -1428,7 +1431,11 @@ def md_to_docx(md_path: str, docx_path: str) -> bool:
             "docx",
             outputfile=docx_path,
             extra_args=[
-                f"--resource-path={Path(md_path).parent}{os.pathsep}{Path(md_path).parent / 'charts'}"
+                "--resource-path="
+                + os.pathsep.join(
+                    str(Path(md_path).parent / folder)
+                    for folder in ["", "output", "figures", "final_results", "charts", "images"]
+                )
             ],
         )
         # pypandoc 在 outputfile 模式下通常返回空字符串
@@ -1566,3 +1573,32 @@ def md_to_docx(md_path: str, docx_path: str) -> bool:
     except Exception:
         return False
     return os.path.exists(docx_path)
+
+
+def enforce_markdown_image_whitelist(markdown_text: str, allowed_images: list[str] | None) -> str:
+    """Remove Markdown image references that are not explicitly allowed."""
+    if allowed_images is None:
+        return markdown_text
+    allowed = {str(item).strip().replace("\\", "/").lstrip("./") for item in allowed_images if str(item).strip()}
+    if not allowed:
+        return re.sub(r"(?m)^\s*!\[[^\]]*\]\([^)]+\)\s*$\n?", "", markdown_text or "")
+
+    def replacement(match: re.Match[str]) -> str:
+        raw_target = match.group(2).strip().strip("<>").replace("\\", "/").lstrip("./")
+        return match.group(0) if raw_target in allowed else ""
+
+    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replacement, markdown_text or "")
+
+
+def finalize_markdown_export(
+    paper_path: str,
+    paper_content: str,
+    docx_path: str,
+    allowed_images: list[str] | None = None,
+) -> bool:
+    """Write normalized Markdown and export DOCX through the shared image gate."""
+    normalized_paper = normalize_math_markdown(paper_content)
+    normalized_paper = enforce_markdown_image_whitelist(normalized_paper, allowed_images)
+    with open(paper_path, "w", encoding="utf-8") as f:
+        f.write(normalized_paper)
+    return md_to_docx(paper_path, docx_path)

@@ -15,7 +15,7 @@ from app.core.workflow_budget import normalize_workflow_mode
 from app.schemas.enums import TaskStatus
 from app.schemas.response import TaskProgress
 from app.services.redis_manager import redis_manager
-from app.utils.common_utils import md_to_docx, normalize_math_markdown
+from app.utils.common_utils import finalize_markdown_export, normalize_math_markdown
 from app.utils.log_util import logger
 
 
@@ -350,10 +350,23 @@ class TaskManager:
         task_dir = os.path.join(settings.WORK_DIR, task_id)
         paper_path = os.path.join(task_dir, f"res_v{version}.md")
         normalized_paper = normalize_math_markdown(paper_content)
-        with open(paper_path, "w", encoding="utf-8") as f:
-            f.write(normalized_paper)
+        allowed_images = None
+        result_path = os.path.join(task_dir, "res.json")
+        if os.path.exists(result_path):
+            try:
+                with open(result_path, "r", encoding="utf-8") as f:
+                    result_payload = json.load(f)
+                stages = result_payload.get("stages", {}) if isinstance(result_payload, dict) else {}
+                allowed_images = stages.get("paper_ready_images") if isinstance(stages, dict) else None
+            except Exception:
+                allowed_images = None
 
-        md_to_docx(paper_path, os.path.join(task_dir, f"res_v{version}.docx"))
+        finalize_markdown_export(
+            paper_path,
+            normalized_paper,
+            os.path.join(task_dir, f"res_v{version}.docx"),
+            allowed_images,
+        )
         logger.info(f"修订版论文已保存: {paper_path}")
         return paper_path
 

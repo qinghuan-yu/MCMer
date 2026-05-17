@@ -7,7 +7,9 @@ import glob
 import asyncio
 import ast
 import importlib.util
+import json
 import re
+from pathlib import Path
 from typing import Optional
 
 import nbformat
@@ -34,8 +36,9 @@ except Exception:
     pass
 """
 
-    def __init__(self, work_dir: str):
+    def __init__(self, work_dir: str, chart_language: str = "English"):
         self.work_dir = work_dir
+        self.chart_language = chart_language if chart_language in {"English", "Simplified Chinese"} else "English"
         self.kernel_manager: Optional[AsyncKernelManager] = None
         self.kernel_client = None
         self.notebook = nbf.new_notebook()
@@ -43,9 +46,11 @@ except Exception:
         self._initialized = False
 
     @staticmethod
-    def _kernel_bootstrap_code(work_dir: str) -> str:
+    def _kernel_bootstrap_code(work_dir: str, chart_language: str = "English") -> str:
+        language_json = json.dumps(chart_language if chart_language in {"English", "Simplified Chinese"} else "English")
         return f"""
 import os
+import json
 os.chdir(r'''{work_dir}''')
 
 try:
@@ -67,6 +72,155 @@ try:
     matplotlib.rcParams['axes.unicode_minus'] = False
 except Exception:
     pass
+
+MCMER_CHART_LANGUAGE = {language_json}
+MCMER_FIGURE_MANIFEST = 'figure_artifacts.json'
+MCMER_ALLOWED_LATIN_TOKENS = {{
+    'cm', 'm', 's', 'kg', 'rad', 'hz', 'db', 'si', 'sic', 'fp', 'fft',
+    'r', 'r2', 'aic', 'bic', 'rmse', 'mae', 'cos', 'sin', 'tan', 'log',
+    'ln', 'pi', 'nm', 'mm', 'uv', 'ir', 'f', 'p', 'n', 'd'
+}}
+
+def _mcmer_figure_language_ok(visible_text_language):
+    value = str(visible_text_language or '').strip().lower()
+    if MCMER_CHART_LANGUAGE == 'English':
+        return value in {{'english', 'en', 'en-us', 'en_gb', 'ascii english'}}
+    return value in {{'simplified chinese', 'chinese', 'zh', 'zh-cn', 'zh_cn', '中文', '简体中文', '简体'}}
+
+def _mcmer_collect_figure_text(fig):
+    texts = []
+    try:
+        for text_obj in fig.findobj(lambda obj: hasattr(obj, 'get_text')):
+            text = str(text_obj.get_text() or '').strip()
+            if text:
+                texts.append(text)
+    except Exception:
+        pass
+    return texts
+
+def _mcmer_has_meaningful_latin(text):
+    import re
+    words = re.findall(r'[A-Za-z]{{2,}}', str(text or ''))
+    return any(word.lower() not in MCMER_ALLOWED_LATIN_TOKENS for word in words)
+
+def _mcmer_has_cjk(text):
+    import re
+    return bool(re.search(r'[\u4e00-\u9fff]', str(text or '')))
+
+def _mcmer_available_font_names():
+    try:
+        from matplotlib import font_manager
+        font_manager._load_fontmanager(try_read_cache=False)
+        return {{f.name for f in font_manager.fontManager.ttflist}}
+    except Exception:
+        return set()
+
+def _mcmer_configure_paper_fonts():
+    try:
+        import matplotlib
+        from matplotlib import font_manager
+        font_manager._load_fontmanager(try_read_cache=False)
+        available = {{f.name for f in font_manager.fontManager.ttflist}}
+        chinese_fonts = [
+            'WenQuanYi Micro Hei',
+            'WenQuanYi Zen Hei',
+            'Noto Sans CJK SC',
+            'Noto Sans CJK JP',
+            'Source Han Sans SC',
+            'SimHei',
+            'Microsoft YaHei',
+            'PingFang SC',
+            'Arial Unicode MS',
+        ]
+        chosen = [name for name in chinese_fonts if name in available]
+        if MCMER_CHART_LANGUAGE == 'Simplified Chinese' and not chosen:
+            raise RuntimeError(
+                'No CJK font is available in the container. Install WenQuanYi or Noto Sans CJK '
+                'before generating Chinese paper figures.'
+            )
+        matplotlib.rcParams['font.family'] = 'sans-serif'
+        matplotlib.rcParams['font.sans-serif'] = chosen + ['DejaVu Sans']
+        matplotlib.rcParams['axes.unicode_minus'] = False
+        matplotlib.rcParams['mathtext.fontset'] = 'dejavusans'
+        return chosen
+    except Exception:
+        raise
+
+def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text_audit=None, directory='output', dpi=300, **savefig_kwargs):
+    \"\"\"Save a final paper figure and register its FigureArtifact metadata.
+
+    Use this helper for every figure that may be cited in the paper. Temporary
+    diagnostics should be saved under debug_artifacts and must not be registered
+    as paper_ready=True.
+    \"\"\"
+    from pathlib import Path
+    if fig is None:
+        try:
+            import matplotlib.pyplot as plt
+            fig = plt.gcf()
+        except Exception as exc:
+            raise ValueError('save_paper_figure requires a matplotlib figure') from exc
+
+    directory = str(directory or 'output').strip().replace('\\\\', '/').strip('/')
+    if directory not in {{'output', 'figures', 'final_results'}}:
+        raise ValueError("paper figures must be saved under output/, figures/, or final_results/")
+    target_language = visible_text_language or MCMER_CHART_LANGUAGE
+    if not _mcmer_figure_language_ok(target_language):
+        raise ValueError(f"visible_text_language={{target_language!r}} does not match required chart language {{MCMER_CHART_LANGUAGE}}")
+
+    _mcmer_configure_paper_fonts()
+
+    collected_text = _mcmer_collect_figure_text(fig)
+    audit = visible_text_audit or collected_text
+    if isinstance(audit, str):
+        audit = [audit]
+    if not isinstance(audit, list) or not audit:
+        raise ValueError('visible_text_audit must be a non-empty list of actual visible text strings')
+    text_audit = [str(item or '').strip() for item in audit if str(item or '').strip()]
+    generic_markers = {{'title', 'axis labels', 'legend', 'annotations', 'colorbar', 'tick labels', 'legend/annotations/colorbar/tick labels'}}
+    if not text_audit or all(item.lower() in generic_markers for item in text_audit):
+        raise ValueError('visible_text_audit must include actual visible text strings, not only generic field names')
+    combined_text = '\\n'.join([*collected_text, *text_audit])
+    if any(marker in combined_text for marker in ['□', '�', '\\ufffd']):
+        raise ValueError('visible chart text contains missing-font/tofu markers; fix fonts or labels before saving')
+    if MCMER_CHART_LANGUAGE == 'Simplified Chinese':
+        if _mcmer_has_meaningful_latin(combined_text) and not _mcmer_has_cjk(combined_text):
+            raise ValueError('Chinese paper figures must not use English-only visible labels')
+    elif _mcmer_has_cjk(combined_text):
+        raise ValueError('English paper figures must not contain Chinese visible labels')
+
+    filename = str(filename or '').strip().replace('\\\\', '/').lstrip('./')
+    if not filename:
+        raise ValueError('filename is required')
+    if '/' in filename:
+        filename = Path(filename).name
+    if Path(filename).suffix.lower() not in {{'.png', '.jpg', '.jpeg', '.svg', '.webp'}}:
+        filename = filename + '.png'
+
+    target_dir = Path(directory)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / filename
+    fig.savefig(path, dpi=dpi, bbox_inches='tight', **savefig_kwargs)
+    rel_path = path.as_posix()
+    artifact = {{
+        'path': rel_path,
+        'kind': 'figure',
+        'paper_ready': True,
+        'visible_text_language': MCMER_CHART_LANGUAGE,
+        'chart_language_verified': True,
+        'visible_text_audit': text_audit,
+    }}
+
+    manifest_path = Path(MCMER_FIGURE_MANIFEST)
+    try:
+        payload = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else {{}}
+    except Exception:
+        payload = {{}}
+    figures = payload.get('figures', []) if isinstance(payload, dict) else []
+    figures = [item for item in figures if isinstance(item, dict) and item.get('path') != rel_path]
+    figures.append(artifact)
+    manifest_path.write_text(json.dumps({{'figures': figures}}, ensure_ascii=False, indent=2), encoding='utf-8')
+    return artifact
 """.strip()
 
     async def _run_kernel_code(self, code: str, timeout: int = 30) -> tuple[str, bool, str]:
@@ -118,7 +272,7 @@ except Exception:
 
         # 设置工作目录并补齐 Matplotlib 中文字体配置
         init_result, init_error, init_error_message = await self._run_kernel_code(
-            self._kernel_bootstrap_code(self.work_dir)
+            self._kernel_bootstrap_code(self.work_dir, self.chart_language)
         )
         if init_error:
             self._initialized = False
@@ -278,12 +432,24 @@ except Exception:
             return error_msg, True, error_msg
 
     def _list_images(self) -> list[str]:
-        """列出 work_dir 中所有图片文件"""
-        patterns = ["*.png", "*.jpg", "*.jpeg", "*.svg", "*.pdf"]
-        images = []
-        for pat in patterns:
-            images.extend(glob.glob(os.path.join(self.work_dir, pat)))
-        return [os.path.basename(p) for p in images]
+        """列出 work_dir 中可交付图片文件，返回相对路径。"""
+        root = Path(self.work_dir)
+        if not root.exists():
+            return []
+        suffixes = {".png", ".jpg", ".jpeg", ".svg", ".pdf", ".webp"}
+        ignored_parts = {"debug_artifacts", "inputs", "data", "source_bundle", "results"}
+        allowed_top_level_dirs = {"output", "figures", "final_results"}
+        images: list[str] = []
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in suffixes:
+                continue
+            rel = path.relative_to(root)
+            if any(part in ignored_parts for part in rel.parts):
+                continue
+            if not rel.parts or rel.parts[0] not in allowed_top_level_dirs:
+                continue
+            images.append(rel.as_posix())
+        return images
 
     @staticmethod
     def _find_unavailable_imports(code: str) -> list[str]:
