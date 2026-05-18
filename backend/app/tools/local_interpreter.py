@@ -228,20 +228,33 @@ def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text
     target_dir = Path(directory)
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / filename
+
+    # --- Validate semantic binding BEFORE writing to disk ---
+    # Normalize and validate linked_result_ids
+    if linked_result_ids is None:
+        raise ValueError('linked_result_ids is required and must be a non-empty list of verified result IDs (e.g. linked_result_ids=["遮蔽时长"])')
+    if isinstance(linked_result_ids, str):
+        linked_result_ids = [linked_result_ids]
+    if not isinstance(linked_result_ids, list) or not linked_result_ids:
+        raise ValueError('linked_result_ids must be a non-empty list')
+    linked_result_ids = [str(rid).strip() for rid in linked_result_ids if str(rid).strip()]
+    if not linked_result_ids:
+        raise ValueError('linked_result_ids must contain at least one non-empty result ID')
+
+    # Normalize and validate source_data
+    if source_data is None:
+        raise ValueError('source_data is required and must be a non-empty list of data source paths (e.g. source_data=["result_registry.json"])')
+    if isinstance(source_data, str):
+        source_data = [source_data]
+    if not isinstance(source_data, list) or not source_data:
+        raise ValueError('source_data must be a non-empty list')
+    source_data = [str(s).strip() for s in source_data if str(s).strip()]
+    if not source_data:
+        raise ValueError('source_data must contain at least one non-empty data source path')
+
+    # All validations passed — now write the file.
     fig.savefig(path, dpi=dpi, bbox_inches='tight', **savefig_kwargs)
     rel_path = path.as_posix()
-
-    # Normalize linked_result_ids to list
-    if linked_result_ids is None:
-        linked_result_ids = []
-    elif isinstance(linked_result_ids, str):
-        linked_result_ids = [linked_result_ids]
-
-    # Normalize source_data to list
-    if source_data is None:
-        source_data = []
-    elif isinstance(source_data, str):
-        source_data = [source_data]
 
     artifact = {{
         'path': rel_path,

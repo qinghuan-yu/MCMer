@@ -38,9 +38,16 @@ dependencies = [
 e2b = ["e2b>=1.0.0"]
 daytona = ["daytona>=0.1.0"]
 
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "ruff>=0.5.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

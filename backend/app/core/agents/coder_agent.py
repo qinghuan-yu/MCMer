@@ -37,6 +37,7 @@ class CoderAgent(Agent):
         max_total_tool_calls: int = settings.CODER_MAX_TOTAL_TOOL_CALLS,
         max_wall_seconds: int = settings.CODER_MAX_WALL_SECONDS,
         code_interpreter: BaseCodeInterpreter = None,
+        figure_mode: str = "paper_required",
     ) -> None:
         super().__init__(task_id, model, max_chat_turns)
         self.work_dir = work_dir
@@ -48,6 +49,13 @@ class CoderAgent(Agent):
         self.code_interpreter = code_interpreter
         self.last_executed_code = ""
         self.same_code_repeat_count = 0
+        # figure_mode controls what figure-related code is allowed:
+        #   "none"           — no figures at all (numeric-only tasks)
+        #   "diagnostic_only" — only debug_artifacts/ diagnostics allowed
+        #   "paper_required"  — full FigureArtifact contract (default)
+        if figure_mode not in {"none", "diagnostic_only", "paper_required"}:
+            figure_mode = "paper_required"
+        self.figure_mode = figure_mode
 
     @staticmethod
     def _sanitize_section_name(section: str) -> str:
@@ -555,10 +563,18 @@ class CoderAgent(Agent):
             "8. 若当前子任务是数值复核，则每个 key_result 至少应包含 id、name、paper_value、computed_value 或 value、unit、source_data、verified、status、warnings。\n"
             "9. 对 status=verified 的条目，禁止使用 见论文/无法确认 这类占位值；必须给出真实 value 和 source_data。\n"
             "10. generated_files 只能列出最终可交付产物，不能把结构化结果 JSON 自身列入 generated_files；最终图表必须显式列出相对路径，例如 output/final_chart.png。\n"
-            "11. Final paper figures must be saved with save_paper_figure(fig, filename, visible_text_audit=[...]). Do not use plt.savefig(...) for deliverable images; plt.savefig is only allowed for debug_artifacts/ diagnostics with paper_ready=false.\n"
-            "12. Strict FigureArtifact rule: every image in generated_files must be an object, not a bare path string. Final/paper images must include path, kind='figure', paper_ready=true, visible_text_language, chart_language_verified=true, and visible_text_audit. Temporary or diagnostic images must be paper_ready=false and saved under debug_artifacts/.\n"
             "13. 若结果不可靠，必须写入 warnings，并在 key_results 中显式标注 mismatch 或 blocked。"
         )
+        if self.figure_mode == "paper_required":
+            contract_prompt += (
+                "\n11. Final paper figures must be saved with save_paper_figure(fig, filename, visible_text_audit=[...], linked_result_ids=[...], source_data=[...]). Do not use plt.savefig(...) for deliverable images; plt.savefig is only allowed for debug_artifacts/ diagnostics with paper_ready=false.\n"
+                "12. Strict FigureArtifact rule: every image in generated_files must be an object, not a bare path string. Final/paper images must include path, kind='figure', paper_ready=true, visible_text_language, chart_language_verified=true, visible_text_audit, created_by='save_paper_figure', helper_version>=3, linked_result_ids, and source_data. Temporary or diagnostic images must be paper_ready=false and saved under debug_artifacts/.\n"
+            )
+        elif self.figure_mode == "none":
+            contract_prompt += (
+                "\n11. 当前子任务是纯数值任务，禁止生成任何图表。不要调用 save_paper_figure、plt.savefig、fig.savefig 或任何图像保存函数。generated_files 只允许 JSON/CSV/XLSX/TXT 文件。\n"
+                "12. 禁止 import matplotlib.pyplot 或任何绘图库用于生成图表。数值计算和结构化结果是唯一目标。\n"
+            )
         await self.append_chat_history({"role": "user", "content": contract_prompt})
 
     async def _soft_reset_retry_limit(self, last_error_message: str):
@@ -680,7 +696,8 @@ class CoderAgent(Agent):
         filtered_key_results = [
             item for item in existing_key_results if isinstance(item, dict) and item.get("id") != blocked_id
         ]
-        if not any(item.get("status") == "verified" for item in filtered_key_results if isinstance(item, dict)):
+        has_verified = any(item.get("status") == "verified" for item in filtered_key_results if isinstance(item, dict))
+        if not has_verified:
             filtered_key_results.extend(
                 self._salvage_existing_payload_key_results(
                     existing_payload,
@@ -691,7 +708,14 @@ class CoderAgent(Agent):
             filtered_key_results.extend(
                 self._salvage_artifact_key_results(self.work_dir, subtask_title)
             )
-        filtered_key_results.append(blocked_result)
+            has_verified = any(item.get("status") == "verified" for item in filtered_key_results if isinstance(item, dict))
+
+        # Only add the blocked sentinel when there are NO verified results.
+        # When verified results exist, preserve them and add a warning instead.
+        if has_verified:
+            blocked_result = None  # type: ignore[assignment]
+        else:
+            filtered_key_results.append(blocked_result)
 
         existing_generated_files = existing_payload.get("generated_files", [])
         if not isinstance(existing_generated_files, list):
@@ -716,7 +740,13 @@ class CoderAgent(Agent):
             existing_warnings = []
 
         existing_summary = str(existing_payload.get("summary", "") or "").strip()
-        blocked_summary = f"{subtask_title} 被阻断：{reason}"
+        if has_verified:
+            blocked_summary = f"{subtask_title} 部分完成：已有 verified 结果被保留，但因 {reason} 未能继续生成附加材料"
+            # Sanitize warning text to avoid blocker keyword classification
+            warning_reason = f"工具调用达到上限，已保留已验证结果，未继续生成附加材料"
+        else:
+            blocked_summary = f"{subtask_title} 被阻断：{reason}"
+            warning_reason = reason
         if existing_summary and blocked_summary not in existing_summary:
             summary = f"{existing_summary}\n\n{blocked_summary}"
         else:
@@ -728,7 +758,7 @@ class CoderAgent(Agent):
             "key_results": filtered_key_results,
             "generated_files": self._dedupe_jsonish_items(existing_generated_files),
             "artifact_evidence": self._dedupe_jsonish_items(self._list_existing_image_evidence(self.work_dir)),
-            "warnings": self._dedupe_jsonish_items([*existing_warnings, reason]),
+            "warnings": self._dedupe_jsonish_items([*existing_warnings, warning_reason]),
         }
         expected_result_file.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -744,8 +774,12 @@ class CoderAgent(Agent):
         )
         # 被阻断时仍返回当前工作目录中已有的图片，避免丢失已生成的图表
         blocked_images = await self.code_interpreter.get_created_images(subtask_title) if self.code_interpreter else []
+        if has_verified:
+            response_text = f"{subtask_title} 部分完成：已有 verified 结果被保留，因 {reason} 未能继续生成附加材料"
+        else:
+            response_text = f"{subtask_title} 已阻断：{reason}"
         return CoderToWriter(
-            coder_response=f"{subtask_title} 已阻断：{reason}",
+            coder_response=response_text,
             created_images=blocked_images,
             structured_result_files=[expected_result_file.name],
         )
@@ -836,11 +870,31 @@ class CoderAgent(Agent):
         return labels
 
     def _chart_language_guard_message(self, code: str, expected_chart_language: str) -> str:
+        # --- Helper exploration blocking (all modes) ---
         if re.search(r"\bdef\s+save_paper_figure\b|\bsave_paper_figure\s*=", code):
             return (
                 "FigureArtifact guard blocked this execute_code call: save_paper_figure is a protected "
                 "kernel helper and must not be redefined, shadowed, or monkey-patched. Use the injected helper directly."
             )
+        if re.search(r"inspect\.signature|inspect\.getsource|pkgutil\.iter_modules|importlib\.import_module.*mcmer", code):
+            return (
+                "Guard blocked: do not inspect or explore helper modules. save_paper_figure is already "
+                "injected into the kernel — call it directly when needed. Focus on computation, not environment exploration."
+            )
+
+        # --- figure_mode=none: block ALL figure code ---
+        if self.figure_mode == "none":
+            figure_signals = re.findall(
+                r"savefig|save_paper_figure|pyplot|plt\.show|fig\.savefig|\.savefig|imshow|plt\.",
+                code, flags=re.IGNORECASE,
+            )
+            if figure_signals:
+                return (
+                    "当前子任务是纯数值任务 (figure_mode=none)，禁止生成任何图表。"
+                    "请删除所有绘图/保存图像代码，只输出数值和结构化结果。"
+                    "不要 import matplotlib.pyplot，不要调用 savefig/save_paper_figure。"
+                )
+            return ""
 
         savefig_targets = [
             match.group(1).replace("\\", "/").lstrip("./")
@@ -868,9 +922,103 @@ class CoderAgent(Agent):
         if writes_deliverable_image or has_unparsed_savefig:
             return (
                 "FigureArtifact guard blocked this execute_code call: final paper images must be saved "
-                "with save_paper_figure(fig, filename, visible_text_audit=[...]) so language metadata is registered. "
+                "with save_paper_figure(fig, filename, visible_text_audit=[...], linked_result_ids=[...], source_data=[...]) so language metadata is registered. "
                 "Use plt.savefig/fig.savefig only for diagnostics under debug_artifacts/."
             )
+        # --- Pre-validate save_paper_figure() call arguments (AST-based) ---
+        if uses_paper_figure_helper:
+            import ast as _ast
+            from app.utils.figure_artifacts import is_placeholder_filename as _is_ph, contains_placeholder_text as _has_ph
+            try:
+                tree = _ast.parse(code)
+            except SyntaxError:
+                tree = None
+            if tree is not None:
+                for node in _ast.walk(tree):
+                    if not isinstance(node, _ast.Call):
+                        continue
+                    # Match save_paper_figure(...) calls
+                    func = node.func
+                    if isinstance(func, _ast.Name) and func.id == "save_paper_figure":
+                        pass
+                    elif isinstance(func, _ast.Attribute) and func.attr == "save_paper_figure":
+                        pass
+                    else:
+                        continue
+
+                    # Extract keyword arguments
+                    kw_map = {kw.arg: kw.value for kw in node.keywords}
+
+                    # --- filename (2nd positional arg) ---
+                    fname = None
+                    if len(node.args) >= 2:
+                        a = node.args[1]
+                        if isinstance(a, _ast.Constant) and isinstance(a.value, str):
+                            fname = a.value
+                    if fname and _is_ph(fname):
+                        return (
+                            f"FigureArtifact guard blocked: filename '{fname}' matches placeholder/test pattern. "
+                            "Use a descriptive name like problem1_trajectory.png."
+                        )
+
+                    # --- Helper: check that a kwarg is a literal non-empty list ---
+                    def _require_literal_list(node: object, param_name: str) -> str | None:
+                        if not isinstance(node, _ast.List):
+                            return (
+                                f"FigureArtifact guard blocked: '{param_name}' must be a literal list, not a variable or expression. "
+                                "Inline the values directly so the guard can validate them."
+                            )
+                        if len(node.elts) == 0:
+                            return (
+                                f"FigureArtifact guard blocked: {param_name}=[] is empty. "
+                                "Must contain at least one entry."
+                            )
+                        return None
+
+                    # --- linked_result_ids ---
+                    if "linked_result_ids" not in kw_map:
+                        return (
+                            "FigureArtifact guard blocked: save_paper_figure() call is missing required 'linked_result_ids' parameter. "
+                            "Add linked_result_ids=['result_id'] referencing verified results."
+                        )
+                    err = _require_literal_list(kw_map["linked_result_ids"], "linked_result_ids")
+                    if err:
+                        return err
+
+                    # --- source_data ---
+                    if "source_data" not in kw_map:
+                        return (
+                            "FigureArtifact guard blocked: save_paper_figure() call is missing required 'source_data' parameter. "
+                            "Add source_data=['result_registry.json'] listing data sources."
+                        )
+                    err = _require_literal_list(kw_map["source_data"], "source_data")
+                    if err:
+                        return err
+
+                    # --- visible_text_audit ---
+                    if "visible_text_audit" in kw_map:
+                        va_node = kw_map["visible_text_audit"]
+                        if not isinstance(va_node, _ast.List):
+                            return (
+                                "FigureArtifact guard blocked: 'visible_text_audit' must be a literal list, not a variable or expression. "
+                                "Inline the actual visible text strings directly."
+                            )
+                        if len(va_node.elts) < 2:
+                            return (
+                                "FigureArtifact guard blocked: visible_text_audit must contain at least 2 real visible text strings "
+                                "(e.g. ['波长/nm', '反射率/%']), not just one generic field name."
+                            )
+                        # Check if all elements are generic markers
+                        _generic_markers = {"title", "axis labels", "legend", "annotations", "colorbar", "tick labels"}
+                        vals = []
+                        for elt in va_node.elts:
+                            if isinstance(elt, _ast.Constant) and isinstance(elt.value, str):
+                                vals.append(elt.value.strip().lower())
+                        if vals and all(v in _generic_markers for v in vals):
+                            return (
+                                "FigureArtifact guard blocked: visible_text_audit contains only generic field names "
+                                f"({vals}). Must contain actual visible text strings like ['波长/nm', '反射率/%']."
+                            )
         if expected_chart_language == "Simplified Chinese":
             english_labels = self._english_chart_label_literals(code)
             if english_labels:
@@ -925,6 +1073,7 @@ class CoderAgent(Agent):
         last_error_message = ""
         structured_result_retry_count = 0
         near_tool_budget_warned = False
+        minimal_delivery_forced = False
         expected_result_file = Path(self.work_dir) / self._structured_result_filename(subtask_title)
         started_at = time.monotonic()
 
@@ -988,27 +1137,11 @@ class CoderAgent(Agent):
 
                     if tool_call.function.name == "execute_code":
                         logger.info(f"调用工具: {tool_call.function.name}")
-                        total_tool_calls += 1
-                        if (
-                            not near_tool_budget_warned
-                            and total_tool_calls >= max(2, self.max_total_tool_calls - 3)
-                        ):
-                            near_tool_budget_warned = True
-                            await self._warn_near_tool_budget(
-                                total_tool_calls,
-                                subtask_title,
-                                expected_result_file,
-                            )
-                        await redis_manager.publish_message(
-                            self.task_id,
-                            SystemMessage(
-                                content=f"代码手调用{tool_call.function.name}工具",
-                                agent="coder",
-                            ),
-                        )
 
                         code = json.loads(tool_call.function.arguments)["code"]
 
+                        # --- Pre-execution guards (run BEFORE counting tool calls) ---
+                        # If a guard blocks, the call is rejected without consuming budget.
                         if await self._handle_completion_loop(
                             code,
                             subtask_title,
@@ -1038,12 +1171,42 @@ class CoderAgent(Agent):
                             )
                             continue
 
+                        # --- All guards passed — now count and execute ---
+                        total_tool_calls += 1
+                        budget_ratio = total_tool_calls / max(self.max_total_tool_calls, 1)
+                        if (
+                            not near_tool_budget_warned
+                            and budget_ratio >= 0.5
+                        ):
+                            near_tool_budget_warned = True
+                            await self._warn_near_tool_budget(
+                                total_tool_calls,
+                                subtask_title,
+                                expected_result_file,
+                            )
+                        if (
+                            not minimal_delivery_forced
+                            and budget_ratio >= 0.7
+                        ):
+                            minimal_delivery_forced = True
+                            await self.append_chat_history(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"工具调用已用 {total_tool_calls}/{self.max_total_tool_calls} 次（{budget_ratio:.0%}）。"
+                                        "已强制进入最小数值交付模式：\n"
+                                        f"- 下一次 execute_code 只允许写入 {expected_result_file.name}。\n"
+                                        "- 禁止读目录、查函数签名、画图、打印检查。\n"
+                                        "- 禁止探索新算法或重新加载数据。\n"
+                                        "- 只输出已确认的 key_results 和 generated_files。"
+                                    ),
+                                }
+                            )
                         await redis_manager.publish_message(
                             self.task_id,
-                            InterpreterMessage(
-                                type="code",
-                                content=code,
-                                section=subtask_title,
+                            SystemMessage(
+                                content=f"代码手调用{tool_call.function.name}工具",
+                                agent="coder",
                             ),
                         )
 

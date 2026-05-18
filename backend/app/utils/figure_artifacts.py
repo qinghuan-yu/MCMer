@@ -103,7 +103,22 @@ def normalize_figure_artifact(item: object) -> dict[str, Any] | None:
     return normalized
 
 
-def is_verified_paper_figure(item: object, document_language: str, work_dir: str | Path | None = None) -> bool:
+def is_verified_paper_figure(
+    item: object,
+    document_language: str,
+    work_dir: str | Path | None = None,
+    verified_result_ids: set[str] | None = None,
+) -> bool:
+    """Validate that an artifact is a legitimate paper-ready figure.
+
+    Parameters
+    ----------
+    verified_result_ids:
+        When provided, ``linked_result_ids`` on the artifact must be non-empty
+        and every entry must exist in this set.  Pass ``None`` to skip the
+        semantic-binding check (used by the per-file coder_agent guard which
+        does not have access to the global result registry).
+    """
     artifact = normalize_figure_artifact(item)
     if artifact is None:
         return False
@@ -119,11 +134,13 @@ def is_verified_paper_figure(item: object, document_language: str, work_dir: str
         return False
     if artifact.get("chart_language_verified") is not True:
         return False
-    # Backward compatibility: only enforce created_by when helper_version is
-    # present (i.e. artifact was produced by the new save_paper_figure helper).
-    # Old artifacts without these fields still pass; hand-written artifacts that
-    # include helper_version but omit created_by are rejected.
-    if artifact.get("helper_version") is not None and artifact.get("created_by") != "save_paper_figure":
+    # All new paper figures MUST come from the save_paper_figure helper.
+    # Old artifacts without helper_version/created_by are rejected — the
+    # helper has been mandatory since helper_version 3.
+    if artifact.get("created_by") != "save_paper_figure":
+        return False
+    helper_version = artifact.get("helper_version")
+    if not isinstance(helper_version, (int, float)) or helper_version < 3:
         return False
     # Reject placeholder/test figures by filename or explicit flag.
     if artifact.get("is_placeholder") is True:
@@ -150,6 +167,22 @@ def is_verified_paper_figure(item: object, document_language: str, work_dir: str
     audit = artifact.get("visible_text_audit")
     if not isinstance(audit, list) or not audit:
         return False
+
+    # Semantic binding: linked_result_ids must reference verified results,
+    # and source_data must be non-empty (proves what the figure is based on).
+    if verified_result_ids is not None:
+        linked = artifact.get("linked_result_ids")
+        if not isinstance(linked, list) or not linked:
+            return False
+        for rid in linked:
+            if str(rid) not in verified_result_ids:
+                return False
+        source = artifact.get("source_data")
+        if not isinstance(source, list) or not source:
+            return False
+        for entry in source:
+            if not str(entry).strip():
+                return False
 
     if work_dir is not None and not (Path(work_dir) / path).exists():
         return False

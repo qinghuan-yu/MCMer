@@ -662,8 +662,50 @@ def normalize_result_registry_entry(entry: Any, section: str, source_file: str) 
         "generated_files": entry.get("generated_files", []),
         "status": status,
         "verified": verified,
+        "confidence_level": _determine_confidence_level(entry, status, verified, source, warnings),
         "warnings": warnings,
     }
+
+
+def _determine_confidence_level(
+    entry: dict[str, Any],
+    status: str,
+    verified: bool,
+    source: str,
+    warnings: list[str],
+) -> str:
+    """Determine the confidence level of a result.
+
+    Levels:
+    - verified_exact: independently recalculated and matched
+    - verified_source: from registered data files, not independently verified
+    - verified_baseline: timeout degradation estimate
+    - salvaged_pending_review: from artifact salvage, needs explicit review
+    - unverified: not verified
+    - blocked: blocked by error or mismatch
+    """
+    if status == "blocked":
+        return "blocked"
+
+    if not verified:
+        return "unverified"
+
+    # Check for salvage origin
+    if source in {"artifact_salvage", "artifact_salvage_summary"}:
+        return "salvaged_pending_review"
+
+    # Check for timeout/degradation warnings
+    timeout_hints = {"超时", "timeout", "降级", "degraded", "coarse", "粗略", "估算", "estimate"}
+    if any(any(hint in w.lower() for hint in timeout_hints) for w in warnings):
+        return "verified_baseline"
+
+    # Check if independently verified (has verification evidence)
+    has_verification = bool(entry.get("code_cell") or entry.get("evidence"))
+    if has_verification:
+        return "verified_exact"
+
+    # Default: from source data
+    return "verified_source"
 
 
 def _parse_float_cell(value: Any) -> float | None:
