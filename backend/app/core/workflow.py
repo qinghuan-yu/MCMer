@@ -26,6 +26,7 @@ from app.utils.common_utils import (
     build_paper_audit_manifest,
     build_problem_facts,
     build_result_registry,
+    enforce_markdown_image_whitelist,
     finalize_markdown_export,
     get_current_files,
     load_json,
@@ -80,6 +81,11 @@ def _is_image_path(path: str) -> bool:
 def _registered_generated_files(work_dir: str, structured_result_files: list[str]) -> set[str]:
     root = Path(work_dir)
     registered: set[str] = set()
+    # Include entries from figure_artifacts.json manifest as registered sources
+    for manifest_item in load_figure_manifest(work_dir):
+        raw = _generated_file_path(manifest_item)
+        if raw:
+            registered.add(raw)
     for filename in structured_result_files:
         payload = load_json(str(root / filename))
         if not isinstance(payload, dict):
@@ -239,23 +245,6 @@ def _normalize_paper_image_references(
     return image_pattern.sub(replacement, markdown_text)
 
 
-def _enforce_paper_image_whitelist(markdown_text: str, allowed_images: list[str] | None) -> str:
-    if allowed_images is None:
-        return markdown_text
-    allowed = {normalize_artifact_path(item) for item in allowed_images if str(item).strip()}
-    if not allowed:
-        return re.sub(r"(?m)^\s*!\[[^\]]*\]\([^)]+\)\s*$\n?", "", markdown_text or "")
-
-    def replacement(match: re.Match[str]) -> str:
-        raw_target = normalize_artifact_path(match.group(2).strip().strip("<>"))
-        if raw_target in allowed:
-            return match.group(0)
-        logger.warning("Removed non-whitelisted image from final paper: {}", raw_target)
-        return ""
-
-    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replacement, markdown_text or "")
-
-
 def _resolve_question(task: dict) -> str:
     question = (task.get("question") or "").strip()
     source_question = (task.get("source_question") or "").strip()
@@ -308,10 +297,14 @@ def _strict_chart_artifact_contract(document_language: str) -> str:
         "## Strict chart artifact contract\n"
         "- Use save_paper_figure(fig, filename, visible_text_audit=[...]) for every final paper figure. Do not use plt.savefig/fig.savefig for deliverable images.\n"
         "- Final paper images must be registered in generated_files as objects, not bare strings.\n"
-        "- Required schema for each final image: "
+        "- You MUST use the exact dict returned by save_paper_figure() as the generated_files entry. "
+        "Do NOT hand-write or fabricate the artifact object — the pipeline verifies created_by and helper_version fields "
+        "that only save_paper_figure() can produce.\n"
+        "- Expected return value shape: "
         "{\"path\":\"output/figure.png\",\"kind\":\"figure\",\"paper_ready\":true,"
         f"\"visible_text_language\":\"{expected}\",\"chart_language_verified\":true,"
-        "\"visible_text_audit\":[\"title\",\"axis labels\",\"legend\",\"annotations\",\"colorbar\",\"tick labels\"]}.\n"
+        "\"visible_text_audit\":[\"title\",\"axis labels\",\"legend\",\"annotations\",\"colorbar\",\"tick labels\"],"
+        "\"created_by\":\"save_paper_figure\",\"helper_version\":2}.\n"
         "- If any visible chart text does not match the Chart language policy, set paper_ready=false and save the file under debug_artifacts/ or redraw it before registration.\n"
         "- The writer will only receive images that pass this metadata gate; unverified images are intentionally withheld from the paper.\n"
     )
@@ -821,6 +814,39 @@ def _should_split_solver(workflow_mode: str, solve_spec: dict[str, object]) -> b
     return normalize_workflow_mode(workflow_mode) != "fast" and len(_solve_spec_subproblems(solve_spec)) > 1
 
 
+_FIGURE_KEYWORDS = re.compile(
+    r"(?:图表|作图|绘图|制图|画图|插图|示意图|流程图|架构图|拓扑图|"
+    r"折线图|散点图|柱状图|饼图|箱线图|热力图|等高线图|雷达图|直方图|"
+    r"figure|chart|plot|graph|diagram|visualization|visuali[sz]e|"
+    r"scatter|histogram|heatmap|contour|boxplot|bar\s*chart|pie\s*chart|"
+    r"折线|柱状|散点|热力|等高线|箱线|雷达|可视化)",
+    re.IGNORECASE,
+)
+
+
+def _solve_spec_expects_figures(
+    solve_spec: dict[str, object],
+    question: str,
+    breakdown: str,
+) -> bool:
+    """Heuristic check: does the task context indicate figures are expected?
+
+    Resolution order:
+    1. Explicit ``requires_figures`` bool in solve_spec (agent-declared).
+    2. Previously computed ``expected_figures`` bool in solve_spec (cached).
+    3. Keyword matching on question + breakdown text only — deliberately
+       excludes solve_spec JSON to avoid meta-field self-trigger
+       (e.g. ``expected_figures`` key containing the word "figure").
+    """
+    if isinstance(solve_spec, dict):
+        for key in ("requires_figures", "expected_figures"):
+            val = solve_spec.get(key)
+            if isinstance(val, bool):
+                return val
+    combined = "\n".join(filter(None, [question, breakdown]))
+    return bool(_FIGURE_KEYWORDS.search(combined))
+
+
 def _subproblem_complexity_score(subproblem: dict[str, object]) -> int:
     try:
         text = json.dumps(subproblem, ensure_ascii=False).lower()
@@ -937,7 +963,7 @@ async def _finalize_outputs(
 
     normalized_paper = normalize_math_markdown(paper_content)
     normalized_paper = _normalize_paper_image_references(work_dir, normalized_paper, allowed_images)
-    normalized_paper = _enforce_paper_image_whitelist(normalized_paper, allowed_images)
+    normalized_paper = enforce_markdown_image_whitelist(normalized_paper, allowed_images)
 
     paper_path = os.path.join(work_dir, "res.md")
 
@@ -1094,6 +1120,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "输出必须是单个 JSON 对象，不要附加解释。"
                 "JSON 顶层至少包含 subproblems 数组。每个 subproblem 至少包含：id、objective、input_files、input_columns、method、steps、expected_outputs、validation。"
                 "建议为每个 subproblem 增加 priority（high/medium/low）和 complexity_hint（simple/medium/complex），用于后端分配求解预算。"
+                "如果题目需要生成图表/可视化，JSON 顶层必须包含 requires_figures: true。如果题目纯文本/纯数值不需要图，则 requires_figures: false。"
                 "禁止写论文式长段落，重点给出可执行步骤和可校验输出。"
             )
             solve_spec_raw = await _run_text_agent(
@@ -1118,6 +1145,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             solve_spec["chart_language"] = chart_language
             solve_spec["chart_language_context"] = chart_language_context
             solve_spec["chart_language_policy"] = chart_language_policy
+            solve_spec["expected_figures"] = _solve_spec_expects_figures(
+                solve_spec, question, str(stage_outputs.get("breakdown", ""))
+            )
         save_json(solve_spec, solve_spec_path)
         stage_outputs["solve_spec"] = solve_spec
         stage_outputs["solve_spec_file"] = os.path.basename(solve_spec_path)
@@ -1486,6 +1516,12 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "Generated figures exist, but none passed the strict FigureArtifact language gate. "
                 "The workflow stopped instead of silently producing a paper with missing or unverified figures."
             )
+        if not paper_ready_images and _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))):
+            raise ValueError(
+                "The task context indicates figures/charts are expected, but no verified paper figures were produced. "
+                "The workflow stopped instead of silently producing a paper with missing figures. "
+                "Ensure the solver/chart stage generates at least one figure via save_paper_figure()."
+            )
         stage_outputs["paper_ready_images"] = paper_ready_images
         final_prompt = (
             f"# 原题\n{question}\n\n"
@@ -1834,6 +1870,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             ):
                 raise ValueError(
                     "Audit repair produced figures, but none passed the strict FigureArtifact language gate."
+                )
+            if not paper_ready_images and _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))):
+                raise ValueError(
+                    "Audit round {}: task expects figures but no verified paper figures were produced.".format(audit_round)
                 )
             revision_prompt = (
                 f"# 原题\n{question}\n\n"

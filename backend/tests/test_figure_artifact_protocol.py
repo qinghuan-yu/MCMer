@@ -140,3 +140,64 @@ def test_artifact_evidence_field_counts_as_image_evidence(tmp_path: Path) -> Non
         ["solve_structured_results.json"],
         [],
     ) == ["debug_artifacts/blocked.png"]
+
+
+def test_helper_artifact_with_created_by_passes(tmp_path: Path) -> None:
+    """Positive case: artifact produced by save_paper_figure() passes the gate."""
+    _write_png(tmp_path / "output" / "figure.png")
+    artifact = {
+        "path": "output/figure.png",
+        "kind": "figure",
+        "paper_ready": True,
+        "visible_text_language": "Simplified Chinese",
+        "chart_language_verified": True,
+        "visible_text_audit": ["标题", "横轴", "纵轴"],
+        "created_by": "save_paper_figure",
+        "helper_version": 2,
+    }
+    assert is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
+
+
+def test_old_artifact_without_created_by_still_passes(tmp_path: Path) -> None:
+    """Backward compatibility: old artifacts without helper_version pass."""
+    _write_png(tmp_path / "output" / "old_figure.png")
+    artifact = {
+        "path": "output/old_figure.png",
+        "kind": "figure",
+        "paper_ready": True,
+        "visible_text_language": "Simplified Chinese",
+        "chart_language_verified": True,
+        "visible_text_audit": ["标题", "横轴"],
+    }
+    assert is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
+
+
+def test_artifact_with_helper_version_but_no_created_by_rejected(tmp_path: Path) -> None:
+    """Agent hand-wrote helper_version but forgot created_by → rejected."""
+    _write_png(tmp_path / "output" / "fake.png")
+    artifact = {
+        "path": "output/fake.png",
+        "kind": "figure",
+        "paper_ready": True,
+        "visible_text_language": "Simplified Chinese",
+        "chart_language_verified": True,
+        "visible_text_audit": ["标题"],
+        "helper_version": 2,
+    }
+    assert not is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
+
+
+def test_helper_artifact_english_task(tmp_path: Path) -> None:
+    """Positive case: English task with proper helper artifact."""
+    _write_png(tmp_path / "output" / "en_fig.png")
+    artifact = {
+        "path": "output/en_fig.png",
+        "kind": "figure",
+        "paper_ready": True,
+        "visible_text_language": "English",
+        "chart_language_verified": True,
+        "visible_text_audit": ["Title", "X axis", "Y axis"],
+        "created_by": "save_paper_figure",
+        "helper_version": 2,
+    }
+    assert is_verified_paper_figure(artifact, "English", tmp_path)

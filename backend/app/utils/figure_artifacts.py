@@ -49,25 +49,14 @@ def has_cjk_text(text: str) -> bool:
 
 def has_meaningful_latin_text(text: str) -> bool:
     allowed = {
-        "cm",
-        "m",
-        "s",
-        "kg",
-        "rad",
-        "hz",
-        "db",
-        "rgb",
-        "cmyk",
-        "fft",
-        "fp",
-        "sic",
-        "si",
-        "r",
-        "r2",
-        "aic",
-        "bic",
-        "rmse",
-        "mae",
+        # Units
+        "cm", "m", "s", "kg", "rad", "hz", "db", "si", "sic", "fp", "fft",
+        "nm", "mm", "uv", "ir", "ml", "mg", "kv", "mw", "ghz", "mhz",
+        "kpa", "mpa", "gpa", "nmm", "cms", "ms", "kmh", "rads",
+        "rgb", "cmyk",
+        # Math/statistics abbreviations
+        "r", "r2", "aic", "bic", "rmse", "mae", "cos", "sin", "tan", "log",
+        "ln", "pi", "max", "min", "avg", "std", "var", "sum",
     }
     words = re.findall(r"[A-Za-z]{2,}", text or "")
     return any(word.lower() not in allowed for word in words)
@@ -108,6 +97,12 @@ def is_verified_paper_figure(item: object, document_language: str, work_dir: str
     if artifact.get("paper_ready") is not True:
         return False
     if artifact.get("chart_language_verified") is not True:
+        return False
+    # Backward compatibility: only enforce created_by when helper_version is
+    # present (i.e. artifact was produced by the new save_paper_figure helper).
+    # Old artifacts without these fields still pass; hand-written artifacts that
+    # include helper_version but omit created_by are rejected.
+    if artifact.get("helper_version") is not None and artifact.get("created_by") != "save_paper_figure":
         return False
 
     language = str(

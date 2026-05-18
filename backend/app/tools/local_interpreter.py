@@ -76,9 +76,16 @@ except Exception:
 MCMER_CHART_LANGUAGE = {language_json}
 MCMER_FIGURE_MANIFEST = 'figure_artifacts.json'
 MCMER_ALLOWED_LATIN_TOKENS = {{
+    # Units
     'cm', 'm', 's', 'kg', 'rad', 'hz', 'db', 'si', 'sic', 'fp', 'fft',
+    'nm', 'mm', 'uv', 'ir', 'ml', 'mg', 'kv', 'mw', 'ghz', 'mhz',
+    'kpa', 'mpa', 'gpa', 'nmm', 'cms', 'ms', 'kmh', 'rads',
+    # Math/statistics abbreviations
     'r', 'r2', 'aic', 'bic', 'rmse', 'mae', 'cos', 'sin', 'tan', 'log',
-    'ln', 'pi', 'nm', 'mm', 'uv', 'ir', 'f', 'p', 'n', 'd'
+    'ln', 'pi', 'max', 'min', 'avg', 'std', 'var', 'sum',
+    # Single-letter variables commonly used in formulas
+    'f', 'p', 'n', 'd', 't', 'x', 'y', 'z', 'a', 'b', 'c', 'e', 'g', 'h',
+    'k', 'l', 'q', 'u', 'v', 'w',
 }}
 
 def _mcmer_figure_language_ok(visible_text_language):
@@ -184,8 +191,8 @@ def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text
     if any(marker in combined_text for marker in ['□', '�', '\\ufffd']):
         raise ValueError('visible chart text contains missing-font/tofu markers; fix fonts or labels before saving')
     if MCMER_CHART_LANGUAGE == 'Simplified Chinese':
-        if _mcmer_has_meaningful_latin(combined_text) and not _mcmer_has_cjk(combined_text):
-            raise ValueError('Chinese paper figures must not use English-only visible labels')
+        if _mcmer_has_meaningful_latin(combined_text):
+            raise ValueError('Chinese paper figures must not contain meaningful English labels; translate all visible text to Chinese (units, formulas, and whitelisted variable tokens are exempt)')
     elif _mcmer_has_cjk(combined_text):
         raise ValueError('English paper figures must not contain Chinese visible labels')
 
@@ -209,6 +216,8 @@ def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text
         'visible_text_language': MCMER_CHART_LANGUAGE,
         'chart_language_verified': True,
         'visible_text_audit': text_audit,
+        'created_by': 'save_paper_figure',
+        'helper_version': 2,
     }}
 
     manifest_path = Path(MCMER_FIGURE_MANIFEST)

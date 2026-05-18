@@ -1583,8 +1583,26 @@ def enforce_markdown_image_whitelist(markdown_text: str, allowed_images: list[st
     if not allowed:
         return re.sub(r"(?m)^\s*!\[[^\]]*\]\([^)]+\)\s*$\n?", "", markdown_text or "")
 
+    def _strip_image_title(raw: str) -> str:
+        """Extract the URL portion from inside ![alt](...), handling:
+        - bare path:             output/foo.png
+        - path + title:          output/foo.png "title"
+        - angle-bracket + title: <output/foo bar.png> "title"
+        """
+        target = raw.strip()
+        # Angle-bracket URL: <url> [optional title]
+        if target.startswith("<"):
+            end = target.find(">")
+            if end != -1:
+                return target[1:end].strip()
+        # Bare path, possibly followed by a title separated by " or '
+        for sep in (' "', " '"):
+            if sep in target:
+                return target.split(sep, 1)[0].strip()
+        return target
+
     def replacement(match: re.Match[str]) -> str:
-        raw_target = match.group(2).strip().strip("<>").replace("\\", "/").lstrip("./")
+        raw_target = _strip_image_title(match.group(2)).replace("\\", "/").lstrip("./")
         return match.group(0) if raw_target in allowed else ""
 
     return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replacement, markdown_text or "")
