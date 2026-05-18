@@ -4,9 +4,9 @@ import zipfile
 from pathlib import Path
 
 from app.core.agents.coder_agent import CoderAgent
-from app.core.workflow import _generated_image_evidence_paths, _has_generated_image_evidence, _language_verified_generated_images
+from app.core.workflow import _generated_image_evidence_paths, _has_generated_image_evidence, _language_verified_generated_images, _quality_gate_before_writing
 from app.utils.common_utils import finalize_markdown_export
-from app.utils.figure_artifacts import is_verified_paper_figure
+from app.utils.figure_artifacts import is_verified_paper_figure, is_placeholder_filename, contains_placeholder_text
 
 
 PNG_1X1 = base64.b64decode(
@@ -153,7 +153,7 @@ def test_helper_artifact_with_created_by_passes(tmp_path: Path) -> None:
         "chart_language_verified": True,
         "visible_text_audit": ["标题", "横轴", "纵轴"],
         "created_by": "save_paper_figure",
-        "helper_version": 2,
+        "helper_version": 3,
     }
     assert is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
 
@@ -182,7 +182,7 @@ def test_artifact_with_helper_version_but_no_created_by_rejected(tmp_path: Path)
         "visible_text_language": "Simplified Chinese",
         "chart_language_verified": True,
         "visible_text_audit": ["标题"],
-        "helper_version": 2,
+        "helper_version": 3,
     }
     assert not is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
 
@@ -198,6 +198,130 @@ def test_helper_artifact_english_task(tmp_path: Path) -> None:
         "chart_language_verified": True,
         "visible_text_audit": ["Title", "X axis", "Y axis"],
         "created_by": "save_paper_figure",
-        "helper_version": 2,
+        "helper_version": 3,
     }
     assert is_verified_paper_figure(artifact, "English", tmp_path)
+
+
+# --- Placeholder filename and text tests ---
+
+def test_placeholder_filename_rejected(tmp_path: Path) -> None:
+    """Placeholder filenames must be rejected by is_verified_paper_figure."""
+    _write_png(tmp_path / "output" / "test_plot.png")
+    artifact = {
+        "path": "output/test_plot.png",
+        "kind": "figure",
+        "paper_ready": True,
+        "visible_text_language": "Simplified Chinese",
+        "chart_language_verified": True,
+        "visible_text_audit": ["标题", "横轴"],
+        "created_by": "save_paper_figure",
+        "helper_version": 3,
+    }
+    assert not is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
+
+
+def test_placeholder_filename_detection() -> None:
+    """is_placeholder_filename correctly identifies test/demo names."""
+    assert is_placeholder_filename("output/test_plot.png")
+    assert is_placeholder_filename("output/demo_figure.png")
+    assert is_placeholder_filename("output/example_chart.png")
+    assert is_placeholder_filename("output/sample_result.png")
+    assert is_placeholder_filename("output/placeholder.png")
+    assert is_placeholder_filename("output/正弦图.png")
+    assert is_placeholder_filename("output/示例图.png")
+    assert not is_placeholder_filename("output/problem1_trajectory.png")
+    assert not is_placeholder_filename("output/result_comparison.png")
+    assert not is_placeholder_filename("output/figure1_convergence.png")
+
+
+def test_placeholder_text_detection() -> None:
+    """contains_placeholder_text correctly identifies placeholder content."""
+    assert contains_placeholder_text("This is a test plot")
+    assert contains_placeholder_text("demo figure")
+    assert contains_placeholder_text("示例图表")
+    assert contains_placeholder_text("正弦曲线")
+    assert not contains_placeholder_text("问题1轨迹图")
+    assert not contains_placeholder_text("收敛性分析")
+
+
+def test_placeholder_audit_text_rejected(tmp_path: Path) -> None:
+    """Artifacts with placeholder text in audit are rejected."""
+    _write_png(tmp_path / "output" / "real_figure.png")
+    artifact = {
+        "path": "output/real_figure.png",
+        "kind": "figure",
+        "paper_ready": True,
+        "visible_text_language": "Simplified Chinese",
+        "chart_language_verified": True,
+        "visible_text_audit": ["test plot", "横轴", "纵轴"],
+        "created_by": "save_paper_figure",
+        "helper_version": 3,
+    }
+    assert not is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
+
+
+def test_is_placeholder_flag_rejected(tmp_path: Path) -> None:
+    """Artifacts with is_placeholder=True are rejected."""
+    _write_png(tmp_path / "output" / "figure.png")
+    artifact = {
+        "path": "output/figure.png",
+        "kind": "figure",
+        "paper_ready": True,
+        "visible_text_language": "Simplified Chinese",
+        "chart_language_verified": True,
+        "visible_text_audit": ["标题"],
+        "created_by": "save_paper_figure",
+        "helper_version": 3,
+        "is_placeholder": True,
+    }
+    assert not is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
+
+
+# --- Quality gate tests ---
+
+def test_quality_gate_blocks_zero_verified() -> None:
+    """Quality gate must fail when verified_count == 0."""
+    registry = {
+        "verified_results": [],
+        "blocked_results": [{"id": "r1", "status": "blocked"}],
+        "summary": {"verified_count": 0, "blocked_count": 1},
+    }
+    passed, reason = _quality_gate_before_writing(registry, [], False, "standard")
+    assert not passed
+    assert "verified_count=0" in reason
+
+
+def test_quality_gate_passes_with_verified_results() -> None:
+    """Quality gate passes when verified_count > 0 and no figures expected."""
+    registry = {
+        "verified_results": [{"id": "r1", "status": "verified"}],
+        "blocked_results": [],
+        "summary": {"verified_count": 1, "blocked_count": 0},
+    }
+    passed, reason = _quality_gate_before_writing(registry, [], False, "standard")
+    assert passed
+    assert reason == ""
+
+
+def test_quality_gate_blocks_expected_figures_missing() -> None:
+    """Quality gate fails when expected_figures=True but no images."""
+    registry = {
+        "verified_results": [{"id": "r1", "status": "verified"}],
+        "blocked_results": [],
+        "summary": {"verified_count": 1, "blocked_count": 0},
+    }
+    passed, reason = _quality_gate_before_writing(registry, [], True, "standard")
+    assert not passed
+    assert "expected_figures=true" in reason
+
+
+def test_quality_gate_passes_with_verified_and_images() -> None:
+    """Quality gate passes when verified and images present."""
+    registry = {
+        "verified_results": [{"id": "r1", "status": "verified"}],
+        "blocked_results": [],
+        "summary": {"verified_count": 1, "blocked_count": 0},
+    }
+    passed, reason = _quality_gate_before_writing(registry, ["output/fig.png"], True, "standard")
+    assert passed

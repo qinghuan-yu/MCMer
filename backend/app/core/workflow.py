@@ -78,6 +78,93 @@ def _is_image_path(path: str) -> bool:
     return is_image_path(path)
 
 
+# ---------------------------------------------------------------------------
+# Quality gate: verify that the workflow has produced enough verified results
+# before allowing formal paper writing.  When the gate fails we emit a
+# failure report instead of a paper that would contain no real data.
+# ---------------------------------------------------------------------------
+
+def _quality_gate_before_writing(
+    result_registry: dict[str, object],
+    paper_ready_images: list[str],
+    expected_figures: bool,
+    workflow_mode: str,
+) -> tuple[bool, str]:
+    """Return (passed, reason). If passed is False, reason explains why."""
+    summary = result_registry.get("summary", {}) if isinstance(result_registry, dict) else {}
+    verified_count = summary.get("verified_count", 0) if isinstance(summary, dict) else 0
+    blocked_count = summary.get("blocked_count", 0) if isinstance(summary, dict) else 0
+
+    if verified_count == 0:
+        return False, (
+            f"verified_count=0（blocked_count={blocked_count}）。"
+            "无法输出正式论文，因为没有任何经过验证的数值结果。"
+            "请检查求解阶段是否正确产出 key_results 并标记为 verified。"
+        )
+
+    if expected_figures and not paper_ready_images:
+        return False, (
+            "任务预期有图表（expected_figures=true），但没有通过 FigureArtifact 门控的合格图。"
+            "请检查图表阶段是否正确使用 save_paper_figure() 产出并注册图表。"
+        )
+
+    return True, ""
+
+
+def _generate_failure_report(
+    question: str,
+    result_registry: dict[str, object],
+    stage_outputs: dict[str, object],
+    gate_reason: str,
+    work_dir: str,
+) -> str:
+    """Generate a structured failure report in Markdown when quality gate fails."""
+    summary = result_registry.get("summary", {}) if isinstance(result_registry, dict) else {}
+    verified_count = summary.get("verified_count", 0) if isinstance(summary, dict) else 0
+    blocked_count = summary.get("blocked_count", 0) if isinstance(summary, dict) else 0
+    blocked_results = result_registry.get("blocked_results", []) if isinstance(result_registry, dict) else []
+
+    lines = [
+        "# 求解失败报告 / Solver Failure Report",
+        "",
+        "## 质量门禁未通过 / Quality Gate Failed",
+        "",
+        f"**原因**: {gate_reason}",
+        "",
+        "## 求解统计 / Solver Statistics",
+        "",
+        f"| 指标 | 值 |",
+        f"| --- | --- |",
+        f"| verified_count | {verified_count} |",
+        f"| blocked_count | {blocked_count} |",
+        "",
+    ]
+
+    if blocked_results:
+        lines.append("## 阻断项详情 / Blocked Results")
+        lines.append("")
+        for i, entry in enumerate(blocked_results[:10], 1):
+            if isinstance(entry, dict):
+                name = entry.get("name") or entry.get("id") or f"item_{i}"
+                status = entry.get("status", "unknown")
+                warnings = entry.get("warnings", [])
+                warn_text = "; ".join(str(w) for w in warnings[:3]) if warnings else "none"
+                lines.append(f"{i}. **{name}** — status: {status}, warnings: {warn_text}")
+            else:
+                lines.append(f"{i}. {entry}")
+        lines.append("")
+
+    lines.append("## 建议 / Recommendations")
+    lines.append("")
+    lines.append("1. 检查求解脚本是否正确加载数据并计算关键结果。")
+    lines.append("2. 确认 key_results 的 status 字段被标记为 `verified` 而非 `blocked`。")
+    lines.append("3. 如果存在 Excel 列名不匹配，请先打印 sheet/columns 再适配。")
+    lines.append("4. 如果优化超时，降级为 coarse search + verified baseline。")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def _registered_generated_files(work_dir: str, structured_result_files: list[str]) -> set[str]:
     root = Path(work_dir)
     registered: set[str] = set()
@@ -295,8 +382,8 @@ def _strict_chart_artifact_contract(document_language: str) -> str:
     expected = "English" if document_language == "English" else "Simplified Chinese"
     return (
         "## Strict chart artifact contract\n"
-        "- Use save_paper_figure(fig, filename, visible_text_audit=[...]) for every final paper figure. Do not use plt.savefig/fig.savefig for deliverable images.\n"
-        "- Final paper images must be registered in generated_files as objects, not bare strings.\n"
+        "- Use save_paper_figure(fig, filename, visible_text_audit=[...], linked_result_ids=[...], source_data=[...]) for every final paper figure.\n"
+        "- Do not use plt.savefig/fig.savefig for deliverable images.\n"
         "- You MUST use the exact dict returned by save_paper_figure() as the generated_files entry. "
         "Do NOT hand-write or fabricate the artifact object — the pipeline verifies created_by and helper_version fields "
         "that only save_paper_figure() can produce.\n"
@@ -304,7 +391,9 @@ def _strict_chart_artifact_contract(document_language: str) -> str:
         "{\"path\":\"output/figure.png\",\"kind\":\"figure\",\"paper_ready\":true,"
         f"\"visible_text_language\":\"{expected}\",\"chart_language_verified\":true,"
         "\"visible_text_audit\":[\"title\",\"axis labels\",\"legend\",\"annotations\",\"colorbar\",\"tick labels\"],"
-        "\"created_by\":\"save_paper_figure\",\"helper_version\":2}.\n"
+        "\"created_by\":\"save_paper_figure\",\"helper_version\":3,"
+        "\"is_placeholder\":false,\"figure_role\":\"result_summary\","
+        "\"linked_result_ids\":[\"result_id_1\"],\"source_data\":[\"result_registry.json\"]}.\n"
         "- If any visible chart text does not match the Chart language policy, set paper_ready=false and save the file under debug_artifacts/ or redraw it before registration.\n"
         "- The writer will only receive images that pass this metadata gate; unverified images are intentionally withheld from the paper.\n"
     )
@@ -320,11 +409,17 @@ def _chart_language_context(document_language: str) -> dict[str, object]:
                 "paper_ready": True,
                 "visible_text_language": "English",
                 "chart_language_verified": True,
+                "is_placeholder": False,
+                "figure_role": "result_summary",
+                "linked_result_ids": [],
+                "source_data": [],
             },
             "rules": [
                 "All visible chart text must be English.",
                 "Do not cite or register Chinese-labeled figures as paper_ready.",
                 "Use save_paper_figure for final figures.",
+                "Every figure must have linked_result_ids referencing verified results.",
+                "Placeholder/test figures (test_plot.png, demo.png, etc.) are forbidden.",
             ],
         }
     return {
@@ -336,11 +431,17 @@ def _chart_language_context(document_language: str) -> dict[str, object]:
             "paper_ready": True,
             "visible_text_language": "Simplified Chinese",
             "chart_language_verified": True,
+            "is_placeholder": False,
+            "figure_role": "result_summary",
+            "linked_result_ids": [],
+            "source_data": [],
         },
         "rules": [
             "All visible chart text must be Simplified Chinese.",
             "English is allowed only for units, formulas, and established symbols.",
             "Use save_paper_figure for final figures.",
+            "Every figure must have linked_result_ids referencing verified results.",
+            "Placeholder/test figures (test_plot.png, demo.png, etc.) are forbidden.",
         ],
     }
 
@@ -1179,6 +1280,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "- Prefer one complete execute_code call per subproblem: load inputs, compute results, save CSV/JSON artifacts, save figures, and write the structured result file in that same call.\n"
             "- Use a second execute_code call only to fix a concrete runtime error or to repair a missing structured result file. Do not split exploration, plotting, and JSON writing across many small tool calls.\n"
             "- Once the structured result file and required artifacts exist, stop running code for that subproblem unless a blocking numerical error is found.\n"
+            "\n## Solver execution discipline (HARD RULES)\n"
+            "- The first 1-2 execute_code calls MUST produce the core computation script and save key_results to the structured result file. Do NOT spend tool calls on environment exploration, checking save_paper_figure docs, or drawing test plots.\n"
+            "- NEVER generate test_plot.png, demo.png, example.png, sample.png, or any file with placeholder/test naming as paper_ready figures. Use descriptive names like problem1_trajectory.png, result_comparison.png.\n"
+            "- When encountering Excel column name mismatches: FIRST call execute_code to print sheet names and column headers (pd.read_excel nrows=0, .columns.tolist()), THEN write a single adapter script. Do NOT guess column names across multiple attempts.\n"
+            "- When an optimization algorithm times out: IMMEDIATELY degrade to a coarse grid search or verified baseline estimate. Do NOT keep running PSO/GA/DE past the timeout. Save the coarse result as verified with a warning about precision.\n"
+            "- If two consecutive execute_code calls fail with errors: switch to a minimal runnable script. Do NOT continue with incremental patches on broken code.\n"
+            "- `save_paper_figure()` helper docs are already embedded in this prompt — do NOT call execute_code just to inspect the function signature or test it.\n"
             "\n## Formula and unit consistency rules\n"
             "- Never label a fitted slope as a physical coefficient unless the formula matches dimensionally.\n"
             "- If the model uses T = K * P * d, then K must be computed as T / (P * d). "
@@ -1417,9 +1525,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             if verified_count <= 0:
                 chart_result = CoderToWriter(
                     coder_response="result_registry 中没有 verified_results，已跳过独立图表阶段，避免重复求解和引入未验证图表。",
-                    created_images=solver_images,
+                    created_images=[],
                     structured_result_files=[],
                 )
+                chart_images = []
             else:
                 # verified_count > 0 但不需要单独运行图表 Agent（solver 已生成图片）
                 chart_result = CoderToWriter(
@@ -1427,7 +1536,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     created_images=solver_images,
                     structured_result_files=[],
                 )
-            chart_images = solver_images
+                chart_images = solver_images
             stage_outputs["charts"] = chart_result.model_dump()
             yield _message("charts", _preview(chart_result.coder_response), section="图表与一致性")
 
@@ -1523,6 +1632,40 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "Ensure the solver/chart stage generates at least one figure via save_paper_figure()."
             )
         stage_outputs["paper_ready_images"] = paper_ready_images
+
+        # --- Quality gate: block formal paper when verified_count == 0 ---
+        expected_figures = _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", "")))
+        gate_passed, gate_reason = _quality_gate_before_writing(
+            result_registry, paper_ready_images, expected_figures, workflow_mode,
+        )
+        if not gate_passed:
+            logger.warning("Quality gate failed: {}", gate_reason)
+            failure_report = _generate_failure_report(
+                question, result_registry, stage_outputs, gate_reason, work_dir,
+            )
+            failure_path = os.path.join(work_dir, "failure_report.md")
+            with open(failure_path, "w", encoding="utf-8") as f:
+                f.write(failure_report)
+            docx_fail_path = os.path.join(work_dir, "failure_report.docx")
+            finalize_markdown_export(failure_path, failure_report, docx_fail_path, allowed_images=None)
+            yield _message("writing", gate_reason, msg_type="error", section="质量门禁")
+
+            task_manager.update_status(task_id, TaskStatus.FAILED)
+            yield {
+                "type": "result",
+                "data": TaskResult(
+                    task_id=task_id,
+                    status="blocked_completed",
+                    task_type="writing",
+                    paper_path=failure_path,
+                    docx_path=docx_fail_path if os.path.exists(docx_fail_path) else "",
+                    notebook_path=os.path.join(work_dir, "notebook.ipynb"),
+                    work_dir=work_dir,
+                ).model_dump(),
+            }
+            yield _progress(task_id, "done", 1.0, "质量门禁未通过，已输出失败报告", status="blocked_completed")
+            return
+
         final_prompt = (
             f"# 原题\n{question}\n\n"
             f"# Workflow mode writing policy\n{_writer_mode_policy(workflow_mode)}\n\n"

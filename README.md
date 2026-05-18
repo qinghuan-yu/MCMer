@@ -2,7 +2,14 @@
 
 MCMer 是一个面向数学建模场景的多 Agent 全栈系统，支持从题目输入、数据上传、建模求解、结果复核、论文生成到历史项目回看的完整链路。
 
-本项目在工程实现上参照了 [MathModelAgent](https://github.com/jihe520/MathModelAgent)。
+## 致谢与说明
+
+MCMer 的产品方向受到 MathModelAgent 等数学建模 Agent 项目的启发。
+
+在调研和使用同类项目的过程中，我发现数学建模竞赛中的论文局部修改、润色复核、数值结果追踪、DOCX 导出、历史项目回看和本地工作流可控性仍有改进空间，因此重新设计并实现了 MCMer。
+
+MCMer 为独立实现，不是 MathModelAgent 的 fork，也不包含 MathModelAgent 的源代码或派生代码。
+感谢 MathModelAgent 对数学建模 Agent 方向的早期探索。
 
 ## 项目预览
 

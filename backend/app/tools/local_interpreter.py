@@ -153,7 +153,7 @@ def _mcmer_configure_paper_fonts():
     except Exception:
         raise
 
-def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text_audit=None, directory='output', dpi=300, **savefig_kwargs):
+def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text_audit=None, directory='output', figure_role=None, linked_result_ids=None, source_data=None, dpi=300, **savefig_kwargs):
     \"\"\"Save a final paper figure and register its FigureArtifact metadata.
 
     Use this helper for every figure that may be cited in the paper. Temporary
@@ -161,12 +161,25 @@ def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text
     as paper_ready=True.
     \"\"\"
     from pathlib import Path
+    import re as _re
     if fig is None:
         try:
             import matplotlib.pyplot as plt
             fig = plt.gcf()
         except Exception as exc:
             raise ValueError('save_paper_figure requires a matplotlib figure') from exc
+
+    # --- Placeholder filename blacklist ---
+    _placeholder_pats = [
+        _re.compile(r'test[_-]?', _re.I), _re.compile(r'demo[_-]?', _re.I),
+        _re.compile(r'example[_-]?', _re.I), _re.compile(r'placeholder', _re.I),
+        _re.compile(r'sample[_-]?', _re.I), _re.compile(r'dummy[_-]?', _re.I),
+        _re.compile(r'sine[_-]?', _re.I), _re.compile(r'正弦'),
+        _re.compile(r'示例'), _re.compile(r'占位'), _re.compile(r'调试'),
+    ]
+    _raw_name = Path(str(filename or '')).stem
+    if any(p.search(_raw_name) for p in _placeholder_pats):
+        raise ValueError(f'Filename {{_raw_name!r}} matches placeholder/test pattern; use a descriptive name like problem1_trajectory.png')
 
     directory = str(directory or 'output').strip().replace('\\\\', '/').strip('/')
     if directory not in {{'output', 'figures', 'final_results'}}:
@@ -187,6 +200,14 @@ def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text
     generic_markers = {{'title', 'axis labels', 'legend', 'annotations', 'colorbar', 'tick labels', 'legend/annotations/colorbar/tick labels'}}
     if not text_audit or all(item.lower() in generic_markers for item in text_audit):
         raise ValueError('visible_text_audit must include actual visible text strings, not only generic field names')
+
+    # --- Placeholder text check in audit ---
+    _placeholder_subs = ['test', 'demo', 'example', 'placeholder', 'sample', 'dummy', '正弦', '示例', '占位', '待补', 'TODO', 'TBD']
+    _audit_combined = ' '.join(text_audit).lower()
+    for _sub in _placeholder_subs:
+        if _sub.lower() in _audit_combined:
+            raise ValueError(f'visible_text_audit contains placeholder text {{_sub!r}}; use real descriptive labels')
+
     combined_text = '\\n'.join([*collected_text, *text_audit])
     if any(marker in combined_text for marker in ['□', '�', '\\ufffd']):
         raise ValueError('visible chart text contains missing-font/tofu markers; fix fonts or labels before saving')
@@ -209,6 +230,19 @@ def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text
     path = target_dir / filename
     fig.savefig(path, dpi=dpi, bbox_inches='tight', **savefig_kwargs)
     rel_path = path.as_posix()
+
+    # Normalize linked_result_ids to list
+    if linked_result_ids is None:
+        linked_result_ids = []
+    elif isinstance(linked_result_ids, str):
+        linked_result_ids = [linked_result_ids]
+
+    # Normalize source_data to list
+    if source_data is None:
+        source_data = []
+    elif isinstance(source_data, str):
+        source_data = [source_data]
+
     artifact = {{
         'path': rel_path,
         'kind': 'figure',
@@ -217,7 +251,11 @@ def save_paper_figure(fig, filename, *, visible_text_language=None, visible_text
         'chart_language_verified': True,
         'visible_text_audit': text_audit,
         'created_by': 'save_paper_figure',
-        'helper_version': 2,
+        'helper_version': 3,
+        'is_placeholder': False,
+        'figure_role': figure_role or 'result_summary',
+        'linked_result_ids': linked_result_ids,
+        'source_data': source_data,
     }}
 
     manifest_path = Path(MCMER_FIGURE_MANIFEST)

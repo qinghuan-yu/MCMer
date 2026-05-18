@@ -13,6 +13,27 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
 PAPER_FIGURE_DIRS = ("output/", "figures/", "final_results/")
 DEBUG_FIGURE_DIR = "debug_artifacts/"
 
+# Filenames that indicate test/placeholder figures — must never enter a paper.
+PLACEHOLDER_FILENAME_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"test[_-]?", re.IGNORECASE),
+    re.compile(r"demo[_-]?", re.IGNORECASE),
+    re.compile(r"example[_-]?", re.IGNORECASE),
+    re.compile(r"placeholder", re.IGNORECASE),
+    re.compile(r"sample[_-]?", re.IGNORECASE),
+    re.compile(r"dummy[_-]?", re.IGNORECASE),
+    re.compile(r"sine[_-]?", re.IGNORECASE),
+    re.compile(r"正弦", re.IGNORECASE),
+    re.compile(r"示例", re.IGNORECASE),
+    re.compile(r"占位", re.IGNORECASE),
+    re.compile(r"调试", re.IGNORECASE),
+]
+
+# Title/audit text substrings that indicate placeholder content.
+PLACEHOLDER_TEXT_SUBSTRINGS: list[str] = [
+    "test", "demo", "example", "placeholder", "sample", "dummy",
+    "正弦", "示例", "占位", "待补", "TODO", "TBD",
+]
+
 
 def normalize_artifact_path(value: object) -> str:
     return str(value or "").strip().replace("\\", "/").lstrip("./")
@@ -104,6 +125,17 @@ def is_verified_paper_figure(item: object, document_language: str, work_dir: str
     # include helper_version but omit created_by are rejected.
     if artifact.get("helper_version") is not None and artifact.get("created_by") != "save_paper_figure":
         return False
+    # Reject placeholder/test figures by filename or explicit flag.
+    if artifact.get("is_placeholder") is True:
+        return False
+    if is_placeholder_filename(path):
+        return False
+    # Reject placeholder content in audit text.
+    audit_texts = artifact.get("visible_text_audit") or []
+    if isinstance(audit_texts, list):
+        combined_audit = " ".join(str(t) for t in audit_texts)
+        if contains_placeholder_text(combined_audit):
+            return False
 
     language = str(
         artifact.get("visible_text_language")
@@ -122,6 +154,18 @@ def is_verified_paper_figure(item: object, document_language: str, work_dir: str
     if work_dir is not None and not (Path(work_dir) / path).exists():
         return False
     return True
+
+
+def is_placeholder_filename(path: str) -> bool:
+    """Check whether a filename suggests test/demo/placeholder content."""
+    name = Path(path).stem
+    return any(pat.search(name) for pat in PLACEHOLDER_FILENAME_PATTERNS)
+
+
+def contains_placeholder_text(text: str) -> bool:
+    """Check whether text contains placeholder-related substrings."""
+    lower = text.lower()
+    return any(sub.lower() in lower for sub in PLACEHOLDER_TEXT_SUBSTRINGS)
 
 
 def load_figure_manifest(work_dir: str | Path) -> list[dict[str, Any]]:
