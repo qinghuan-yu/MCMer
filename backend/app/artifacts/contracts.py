@@ -7,6 +7,7 @@ read this contract instead of re-detecting language or inferring figure needs.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,7 @@ class ProblemContract:
 
         # Heuristic: if the question mentions tables/表格
         requires_tables = bool(
-            __import__("re").search(
+            re.search(
                 r"(?:表格|表\s*\d|table\s*\d|数据表|汇总表)", question, re.IGNORECASE
             )
         ) if question else False

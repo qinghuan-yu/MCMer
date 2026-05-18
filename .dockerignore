@@ -15,9 +15,15 @@ frontend/.vite
 
 backend/.local
 backend/project
-work_dir
+backend/work_dir
+backend/__pycache__
+backend/**/*.pyc
+backend/.pytest_cache
 backend/logs
 backend/.env.dev
+backend/mcmer_backend.egg-info
+
+work_dir
 backend/.env.prod
 
 *.log

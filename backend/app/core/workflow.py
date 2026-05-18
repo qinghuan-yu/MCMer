@@ -1270,9 +1270,6 @@ async def _finalize_outputs(
 
 async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, None]:
     question = _resolve_question(task)
-    chart_language = _detect_document_language(question)
-    chart_language_policy = _chart_language_policy(chart_language)
-    chart_language_context = _chart_language_context(chart_language)
     work_dir = task["work_dir"]
     workflow_mode = _resolve_workflow_mode(task)
     budget = resolve_workflow_budget(workflow_mode)
@@ -1282,10 +1279,17 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         raise ValueError("写作任务缺少原始题目内容，请输入题目或上传 docx/pdf 原题文件")
 
     # ── Create ProblemContract (immutable language + requirements) ──────
+    # Initial contract with best-effort figure detection; will be upgraded
+    # after solve_spec is generated.
     contract = ProblemContract.from_question(question, workflow_mode=workflow_mode)
     contract.save(work_dir)
     logger.info("ProblemContract created: lang={}, figures={}, mode={}",
                 contract.chart_language, contract.paper_requires_figures, contract.workflow_mode)
+
+    # Derive all language fields from contract (single source of truth)
+    chart_language = contract.chart_language
+    chart_language_policy = _chart_language_policy(chart_language)
+    chart_language_context = contract.chart_language_context
 
     models = _build_models(budget)
     code_interpreter = _build_code_interpreter(work_dir, chart_language)
@@ -1306,6 +1310,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 
     try:
         yield _progress(task_id, "breakdown", 0.06, "题目拆解 Agent 正在分析赛题", current_subtask="题目拆解")
+        import time as _time
+        _stage_start = _time.monotonic()
         breakdown_prompt = (
             f"# Document and chart language lock\n{_json_for_prompt(chart_language_context, 4000)}\n\n"
             "The task breakdown must explicitly carry this language lock forward. All later modeling, solver code, chart code, generated_files metadata, and writing must follow it.\n\n"
@@ -1330,6 +1336,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["problem_facts_file"] = os.path.basename(problem_facts_path)
         stage_outputs["workflow_mode"] = workflow_mode
         stage_outputs["chart_language"] = chart_language
+        trace.add_stage("breakdown", "completed", "题目拆解完成", _time.monotonic() - _stage_start)
         yield _message("breakdown", _preview(str(stage_outputs["breakdown"])))
         if workflow_mode == "fast":
             stage_outputs["modeling"] = "Fast 模式跳过独立建模阶段，求解直接基于题目拆解与题设事实执行。"
@@ -1444,9 +1451,28 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             solve_spec["chart_language"] = chart_language
             solve_spec["chart_language_context"] = chart_language_context
             solve_spec["chart_language_policy"] = chart_language_policy
-            solve_spec["expected_figures"] = _solve_spec_expects_figures(
+            expected_figures = _solve_spec_expects_figures(
                 solve_spec, question, str(stage_outputs.get("breakdown", ""))
             )
+            solve_spec["expected_figures"] = expected_figures
+
+            # Upgrade ProblemContract with definitive figure requirement
+            # from solve_spec (more accurate than initial heuristic)
+            if expected_figures != contract.paper_requires_figures:
+                contract = ProblemContract(
+                    document_language=contract.document_language,
+                    chart_language=contract.chart_language,
+                    allowed_visible_text_language=contract.allowed_visible_text_language,
+                    font_profile=contract.font_profile,
+                    paper_requires_figures=expected_figures,
+                    paper_requires_tables=contract.paper_requires_tables,
+                    workflow_mode=contract.workflow_mode,
+                    chart_language_aliases=contract.chart_language_aliases,
+                    allowed_latin_tokens=contract.allowed_latin_tokens,
+                )
+                contract.save(work_dir)
+                logger.info("ProblemContract upgraded: paper_requires_figures={}", expected_figures)
+
         save_json(solve_spec, solve_spec_path)
         stage_outputs["solve_spec"] = solve_spec
         stage_outputs["solve_spec_file"] = os.path.basename(solve_spec_path)
@@ -1608,6 +1634,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         save_json(result_registry, result_registry_path)
         stage_outputs["result_registry"] = result_registry
         stage_outputs["result_registry_file"] = os.path.basename(result_registry_path)
+        trace.add_stage("solve", "completed",
+                        f"verified={len(result_registry.get('verified_results', []) or [])}",
+                        _time.monotonic() - _stage_start)
         yield _message("solve", _preview(solver_result.coder_response), section="算法与编程求解")
 
         verification_result = CoderToWriter(
@@ -1781,12 +1810,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             verification_result.structured_result_files,
             chart_result.structured_result_files,
         )
-        paper_ready_images = _language_verified_generated_images(
+        # Use ArtifactRegistry for figure validation (replaces _language_verified_generated_images)
+        art_registry = ArtifactRegistry.load(
             work_dir,
-            structured_result_files_for_figures,
-            chart_language,
-            result_registry,
+            structured_result_files=structured_result_files_for_figures,
+            contract=contract,
         )
+        paper_ready_images = art_registry.validate_for_paper()
         image_evidence_paths = _generated_image_evidence_paths(
             work_dir,
             structured_result_files_for_figures,
@@ -1887,12 +1917,16 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             result_registry, paper_ready_images, expected_figures, workflow_mode,
         )
 
-        # Generate structured gate reports
+        # Generate structured gate reports from ArtifactRegistry
         figure_gate = FigureGateReport.from_rejections(
             paper_ready_images,
-            [],  # rejections are tracked by ArtifactRegistry
+            art_registry.rejection_summary(),
         )
         figure_gate.save(work_dir)
+        trace.add_stage("figure_gate", "passed" if figure_gate.passed else "failed",
+                        figure_gate.reason, 0,
+                        {"paper_ready_count": len(paper_ready_images),
+                         "rejected_count": len(art_registry.figure_rejections)})
 
         quality_gate = QualityGateReport.from_check(
             verified_count=len(result_registry.get("verified_results", []) or []),
@@ -2348,7 +2382,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         # (may have been updated in audit rounds as paper_ready_images_round_N)
         stage_outputs["paper_ready_images"] = paper_ready_images
 
-        paper_path, docx_path, notebook_path = DocumentFinalizer.finalize(
+        paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
             work_dir=work_dir,
             task_id=task_id,
             task_type="writing",

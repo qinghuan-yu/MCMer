@@ -34,6 +34,55 @@ class DocumentFinalizer:
     """Single export outlet for all final documents."""
 
     @staticmethod
+    async def finalize_async(
+        work_dir: str,
+        task_id: str,
+        task_type: str,
+        paper_content: str,
+        allowed_images: list[str] | None,
+        result_payload: dict[str, Any],
+        code_interpreter=None,
+        version: int | None = None,
+    ) -> tuple[str, str, str]:
+        """Async version of finalize — saves notebook properly in async context."""
+        root = Path(work_dir)
+
+        # ── Save notebook ──────────────────────────────────────────────
+        notebook_path = str(root / "notebook.ipynb")
+        if code_interpreter is not None:
+            try:
+                await code_interpreter.save_notebook(notebook_path)
+            except Exception as e:
+                logger.warning("Notebook save failed: %s", e)
+
+        # ── Normalise markdown ─────────────────────────────────────────
+        normalized = normalize_math_markdown(paper_content)
+        normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
+        normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
+
+        # ── Determine output paths ─────────────────────────────────────
+        if version is not None and version > 0:
+            paper_path = str(root / f"res_v{version}.md")
+            docx_path = str(root / f"res_v{version}.docx")
+        else:
+            paper_path = str(root / "res.md")
+            docx_path = str(root / "res.docx")
+
+        # ── Write res.json ─────────────────────────────────────────────
+        result_payload["task_id"] = task_id
+        result_payload["task_type"] = task_type
+        result_payload["paper"] = normalized
+        save_json(result_payload, str(root / "res.json"))
+
+        # ── Write markdown and export DOCX ─────────────────────────────
+        docx_ok = finalize_markdown_export(paper_path, normalized, docx_path, allowed_images)
+        if not docx_ok:
+            logger.warning("DOCX export failed for %s", paper_path)
+            docx_path = ""
+
+        return paper_path, docx_path, notebook_path
+
+    @staticmethod
     def finalize(
         work_dir: str,
         task_id: str,

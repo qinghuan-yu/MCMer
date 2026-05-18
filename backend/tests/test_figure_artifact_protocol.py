@@ -862,3 +862,70 @@ def test_figure_request_planner(tmp_path: Path) -> None:
     assert len(requests) > 0
     assert all(r.chart_language == "Simplified Chinese" for r in requests)
     assert all(len(r.linked_result_ids) > 0 for r in requests)
+
+
+def test_renderer_output_passes_figure_artifact_gate(tmp_path: Path) -> None:
+    """Deterministic renderer output should pass FigureArtifact gate."""
+    from app.artifacts.renderers import render_verified_summary
+
+    verified = [
+        {"id": "r1", "name": "厚度", "value": 0.35, "unit": "mm", "status": "verified"},
+        {"id": "r2", "name": "反射率", "value": 0.92, "unit": "%", "status": "verified"},
+    ]
+
+    artifact = render_verified_summary(
+        verified_results=verified,
+        title="验证结果汇总",
+        output_path=str(tmp_path / "output" / "verified_summary.png"),
+        chart_language="Simplified Chinese",
+        linked_result_ids=["r1", "r2"],
+        source_data=["result_registry.json"],
+        work_dir=str(tmp_path),
+    )
+
+    # Artifact should pass the gate
+    assert artifact["created_by"] == "save_paper_figure"
+    assert artifact["helper_version"] >= 3
+    assert artifact["is_placeholder"] is False
+    assert len(artifact["linked_result_ids"]) > 0
+    assert len(artifact["source_data"]) > 0
+
+    # Should pass is_verified_paper_figure
+    assert is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path)
+
+
+def test_chinese_renderer_no_english_headers(tmp_path: Path) -> None:
+    """Chinese task renderer should use Chinese headers, not English."""
+    from app.artifacts.renderers import render_verified_summary
+
+    verified = [{"id": "r1", "name": "测试", "value": 1, "unit": "m", "status": "verified"}]
+    artifact = render_verified_summary(
+        verified_results=verified,
+        title="中文标题",
+        output_path=str(tmp_path / "output" / "cn_summary.png"),
+        chart_language="Simplified Chinese",
+        linked_result_ids=["r1"],
+        source_data=["data.csv"],
+        work_dir=str(tmp_path),
+    )
+
+    # Check that audit text contains Chinese, not English headers
+    audit = artifact.get("visible_text_audit", [])
+    audit_combined = " ".join(audit).lower()
+    assert "id" not in audit_combined or "编号" in audit_combined
+    assert "name" not in audit_combined or "名称" in audit_combined
+
+
+def test_problem_contract_creation() -> None:
+    """ProblemContract should correctly detect language from question."""
+    from app.artifacts.contracts import ProblemContract
+
+    cn_contract = ProblemContract.from_question("某碳化硅晶圆片的外延层厚度计算", workflow_mode="standard")
+    assert cn_contract.chart_language == "Simplified Chinese"
+    assert cn_contract.is_chinese
+    assert cn_contract.font_profile == "cjk"
+
+    en_contract = ProblemContract.from_question("Calculate the thickness of SiC epitaxial layer", workflow_mode="standard")
+    assert en_contract.chart_language == "English"
+    assert en_contract.is_english
+    assert en_contract.font_profile == "latin"
