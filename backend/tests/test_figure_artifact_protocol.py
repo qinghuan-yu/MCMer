@@ -827,6 +827,7 @@ def test_document_finalizer_exports(tmp_path: Path) -> None:
         task_type="writing",
         paper_content="# Test\n\nHello world\n",
         allowed_images=None,
+        required_images=None,
         result_payload={"test": True},
     )
 
@@ -850,6 +851,7 @@ def test_document_finalizer_rejects_unwhitelisted_markdown_image(tmp_path: Path)
             task_type="writing",
             paper_content=paper,
             allowed_images=["output/allowed.png"],
+            required_images=None,
             result_payload={"test": True},
         )
         assert False, "Expected ValueError for unwhitelisted image reference"
@@ -870,12 +872,36 @@ def test_document_finalizer_rejects_missing_markdown_image(tmp_path: Path) -> No
             task_type="writing",
             paper_content=paper,
             allowed_images=["output/missing.png"],
+            required_images=None,
             result_payload={"test": True},
         )
         assert False, "Expected ValueError for missing image file"
     except ValueError as exc:
         assert "missing image files" in str(exc)
         assert getattr(exc, "error_code", "") == "FINALIZER_MISSING_IMAGE_REF"
+
+
+def test_document_finalizer_rejects_missing_required_image_reference(tmp_path: Path) -> None:
+    """Finalizer must fail when required_images are not referenced by markdown."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    _write_png(tmp_path / "output" / "must_use.png")
+
+    paper = "# Test\n\n正文没有引用任何图片。\n"
+    try:
+        DocumentFinalizer.finalize(
+            work_dir=str(tmp_path),
+            task_id="test",
+            task_type="writing",
+            paper_content=paper,
+            allowed_images=["output/must_use.png"],
+            required_images=["output/must_use.png"],
+            result_payload={"test": True},
+        )
+        assert False, "Expected ValueError for missing required image reference"
+    except ValueError as exc:
+        assert "missing required figure references" in str(exc)
+        assert getattr(exc, "error_code", "") == "FINALIZER_REQUIRED_IMAGE_NOT_REFERENCED"
 
 
 def test_failure_report_export(tmp_path: Path) -> None:
@@ -1232,12 +1258,28 @@ def test_ensure_figure_requests_from_solve_spec() -> None:
     }
 
     requests = _ensure_figure_requests_in_solve_spec(solve_spec, "Simplified Chinese")
-    assert len(requests) == 1
-    assert requests[0]["subproblem_id"] == "problem_1"
-    assert requests[0]["required"] is True
-    assert requests[0]["language"] == "Simplified Chinese"
-    assert requests[0]["required_data"] != ["result_registry.json"]
-    assert any("trajectory" in item for item in requests[0]["required_data"])
+    assert requests
+    req_ids = {item["id"] for item in requests}
+    assert "fig_problem_1_geometry_schematic" in req_ids
+    assert "fig_problem_1_trajectory_overview" in req_ids
+
+    geometry = next(item for item in requests if item["id"] == "fig_problem_1_geometry_schematic")
+    assert geometry["required"] is True
+    assert geometry["figure_kind"] == "explanatory_figure"
+    assert geometry["must_include_in_paper"] is True
+    assert geometry["language"] == "Simplified Chinese"
+
+
+def test_solve_spec_expect_flags_support_explanatory_only() -> None:
+    """requires_explanatory_figures=true should make task expected_figures=true."""
+    from app.core.workflow import _solve_spec_expects_figures
+
+    solve_spec = {
+        "requires_result_figures": False,
+        "requires_explanatory_figures": True,
+        "requires_figures": True,
+    }
+    assert _solve_spec_expects_figures(solve_spec, "", "") is True
 
 
 def test_semantic_bundle_excludes_diagnostic_summary_for_required_requests(tmp_path: Path) -> None:
@@ -1304,8 +1346,76 @@ def test_semantic_bundle_excludes_diagnostic_summary_for_required_requests(tmp_p
 
     assert len(bundle.required_requests) == 1
     assert len(bundle.available_figures) == 0
+    assert len(bundle.explanatory_figures) == 0
+    assert len(bundle.result_figures) == 0
     assert len(bundle.diagnostic_figures) == 1
+    assert bundle.required_images == []
     assert bundle.missing_requests[0]["figure_request_id"] == "problem_1_trajectory_shielding"
+
+
+def test_semantic_bundle_tracks_required_explanatory_images(tmp_path: Path) -> None:
+    """must_include_in_paper explanatory request should appear in required_images."""
+    from app.artifacts.registry import ArtifactRegistry
+
+    _write_png(tmp_path / "output" / "fig_problem_1_geometry_schematic.png")
+    manifest = {
+        "figures": [
+            {
+                "path": "output/fig_problem_1_geometry_schematic.png",
+                "kind": "figure",
+                "paper_ready": True,
+                "visible_text_language": "Simplified Chinese",
+                "chart_language_verified": True,
+                "visible_text_audit": ["几何关系示意图", "导弹", "目标", "烟幕"],
+                "created_by": "deterministic_renderer",
+                "helper_version": 3,
+                "is_placeholder": False,
+                "figure_role": "geometry_schematic",
+                "figure_kind": "explanatory_figure",
+                "linked_result_ids": ["r1"],
+                "source_data": ["result_registry.json"],
+                "semantic_verified": True,
+                "figure_request_id": "fig_problem_1_geometry_schematic",
+                "subproblem_id": "problem_1",
+                "semantic_role": "geometry_schematic",
+            }
+        ]
+    }
+    (tmp_path / "figure_artifacts.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    structured = {
+        "section": "solve",
+        "summary": "ok",
+        "key_results": [
+            {
+                "id": "r1", "name": "遮蔽时长", "value": 1, "unit": "s", "formula": "x=1",
+                "inputs": {}, "source_data": ["result_registry.json"], "code_cell": "1", "evidence": "ok",
+                "source": "solver", "verified": True, "status": "verified", "warnings": []
+            }
+        ],
+        "generated_files": [],
+        "warnings": [],
+    }
+    (tmp_path / "solve_structured_results.json").write_text(json.dumps(structured, ensure_ascii=False), encoding="utf-8")
+
+    solve_spec = {
+        "figure_requests": [
+            {
+                "id": "fig_problem_1_geometry_schematic",
+                "required": True,
+                "must_include_in_paper": True,
+                "figure_kind": "explanatory_figure",
+            }
+        ]
+    }
+    (tmp_path / "solve_spec.json").write_text(json.dumps(solve_spec, ensure_ascii=False), encoding="utf-8")
+
+    reg = ArtifactRegistry.load(str(tmp_path), structured_result_files=["solve_structured_results.json"])
+    reg.validate_for_paper()
+    bundle = reg.build_figure_bundle()
+
+    assert bundle.required_images == ["output/fig_problem_1_geometry_schematic.png"]
+    assert len(bundle.explanatory_figures) == 1
 
 
 def test_render_distance_time_curve_semantic_artifact(tmp_path: Path) -> None:
@@ -1450,3 +1560,170 @@ def test_classify_failure_maps_finalizer_error() -> None:
     assert code == "FINALIZER_MISSING_IMAGE_REF"
     assert failure_type == "finalizer_validation"
     assert details == {"paths": ["output/a.png"]}
+
+
+def test_figure_plan_builder_backfills_optical_domain_requests(tmp_path: Path) -> None:
+    """FigurePlan should backfill optical interference requests even when solve_spec requests are empty."""
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    data_dir = tmp_path / "inputs" / "question"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "附件1.xlsx").write_text("placeholder", encoding="utf-8")
+
+    solve_spec = {
+        "subproblems": [
+            {
+                "id": "p1",
+                "objective": "基于双光束干涉模型推导厚度公式",
+                "method": "干涉模型 + 光谱峰谷识别",
+                "input_files": ["附件1.xlsx"],
+                "steps": ["读取光谱", "寻找峰谷", "计算厚度"],
+                "expected_outputs": ["厚度"],
+            }
+        ],
+        "figure_requests": [],
+    }
+    plan = FigurePlanBuilder.build(
+        question="碳化硅外延层厚度计算，考虑干涉光程差、波数与反射率峰谷",
+        solve_spec=solve_spec,
+        problem_facts={"domain": "optical"},
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    assert plan["requires_figures"] is True
+    assert plan["requires_explanatory_figures"] is True
+    assert plan["requires_result_figures"] is True
+    req_ids = {item["id"] for item in plan.get("figure_requests", [])}
+    assert "fig_p1_optical_path_diagram" in req_ids
+    assert "fig_p1_spectrum_curve" in req_ids
+    assert "fig_p1_peak_valley_annotation" in req_ids
+    assert "fig_p1_algorithm_flowchart" in req_ids
+
+    spectrum_req = next(item for item in plan.get("figure_requests", []) if item.get("id") == "fig_p1_spectrum_curve")
+    data_files = spectrum_req.get("depends_on", {}).get("data_files", [])
+    assert any("inputs/question/附件1.xlsx" == str(item).replace("\\", "/") for item in data_files)
+
+
+def test_apply_figure_plan_overrides_solve_spec_flags() -> None:
+    from app.core.workflow import _apply_figure_plan_to_solve_spec
+
+    solve_spec = {
+        "requires_figures": False,
+        "requires_result_figures": False,
+        "requires_explanatory_figures": False,
+        "expected_figures": False,
+    }
+    figure_plan = {
+        "requires_figures": True,
+        "requires_result_figures": True,
+        "requires_explanatory_figures": True,
+    }
+    _apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
+
+    assert solve_spec["requires_figures"] is True
+    assert solve_spec["requires_result_figures"] is True
+    assert solve_spec["requires_explanatory_figures"] is True
+    assert solve_spec["expected_figures"] is True
+
+
+def test_render_spectrum_request_from_csv_data_file(tmp_path: Path) -> None:
+    from app.core.workflow import _render_required_requests_deterministically
+
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "spectrum.csv").write_text(
+        "wavenumber,reflectance\n1000,0.2\n1010,0.25\n1020,0.23\n",
+        encoding="utf-8",
+    )
+
+    report = _render_required_requests_deterministically(
+        work_dir=str(tmp_path),
+        result_registry={"verified_results": []},
+        required_requests=[
+            {
+                "id": "fig_p1_spectrum_curve",
+                "subproblem_id": "p1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "spectrum_curve",
+                "expected_content": ["反射率-波数光谱曲线"],
+                "required_data": ["data/spectrum.csv"],
+            }
+        ],
+        chart_language="Simplified Chinese",
+    )
+
+    assert report["created_images"]
+    assert report["satisfied"]
+
+
+def test_figure_plan_blocks_placeholder_linked_result_ids(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    solve_spec = {
+        "subproblems": [{"id": "q1", "objective": "距离-时间曲线", "input_files": []}],
+        "figure_requests": [
+            {
+                "id": "fig_q1_fit",
+                "subproblem_id": "q1",
+                "figure_kind": "result_figure",
+                "semantic_role": "distance_time_curve",
+                "required": True,
+                "required_data": ["distance_time_series.csv"],
+                "linked_result_ids": ["verified_series"],
+                "depends_on": {"data_files": ["distance_time_series.csv"], "result_ids": ["verified_series"]},
+            }
+        ],
+    }
+
+    plan = FigurePlanBuilder.build(
+        question="做拟合并输出曲线",
+        solve_spec=solve_spec,
+        problem_facts={},
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    req = plan["figure_requests"][0]
+    assert req["status"] == "blocked"
+    assert req["required"] is False
+    assert req["blocked_reason"] == "placeholder_linked_result_ids"
+
+
+def test_required_figure_requests_filters_blocked_and_infeasible() -> None:
+    from app.core.workflow import _required_figure_requests
+
+    solve_spec = {
+        "figure_requests": [
+            {"id": "a", "required": True, "status": "required", "feasible": True},
+            {"id": "b", "required": True, "status": "blocked", "feasible": False},
+            {"id": "c", "required": True, "status": "required", "feasible": False},
+            {"id": "d", "required": False, "status": "recommended", "feasible": True},
+        ]
+    }
+
+    required = _required_figure_requests(solve_spec)
+    assert [item["id"] for item in required] == ["a"]
+
+
+def test_explanatory_figure_passes_without_linked_result_ids(tmp_path: Path) -> None:
+    """Explanatory figure should be validated by model_contract evidence, not linked_result_ids."""
+    _write_png(tmp_path / "output" / "geometry.png")
+    artifact = {
+        "path": "output/geometry.png",
+        "kind": "figure",
+        "paper_ready": True,
+        "visible_text_language": "Simplified Chinese",
+        "chart_language_verified": True,
+        "visible_text_audit": ["几何关系示意图", "导弹", "目标"],
+        "created_by": "deterministic_renderer",
+        "helper_version": 3,
+        "is_placeholder": False,
+        "figure_kind": "explanatory_figure",
+        "semantic_role": "geometry_schematic",
+        "evidence_binding_type": "model_contract",
+        "model_objects": ["missile", "target", "smoke_cloud"],
+        "formulas": ["2ndcos(theta)=mλ"],
+        "source_problem_refs": ["problem_1"],
+    }
+    assert is_verified_paper_figure(artifact, "Simplified Chinese", tmp_path, {"r1"})

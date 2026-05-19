@@ -1,4 +1,5 @@
 """工作流引擎 - 按任务类型编排写作与润色流水线。"""
+import csv
 import json
 import os
 import re
@@ -9,8 +10,14 @@ from typing import AsyncGenerator
 from app.artifacts.contracts import ProblemContract
 from app.artifacts.registry import ArtifactRegistry
 from app.artifacts.exporters import DocumentFinalizer, FinalizationValidationError
+from app.artifacts.figure_plan import FigurePlanBuilder
 from app.artifacts.renderers import (
+    render_algorithm_flowchart,
     render_distance_time_curve,
+    render_geometry_schematic,
+    render_peak_valley_annotation,
+    render_spectrum_curve,
+    render_timeline_schematic,
     render_trajectory_shielding_2d,
 )
 from app.artifacts.diagnostics import (
@@ -166,6 +173,10 @@ def _quality_gate_before_writing(
     satisfied_requests: list[dict[str, object]],
     missing_requests: list[dict[str, object]],
     workflow_mode: str,
+    requires_result_figures: bool = False,
+    requires_explanatory_figures: bool = False,
+    result_figure_count: int = 0,
+    explanatory_figure_count: int = 0,
 ) -> tuple[bool, str]:
     """Return (passed, reason). If passed is False, reason explains why."""
     summary = result_registry.get("summary", {}) if isinstance(result_registry, dict) else {}
@@ -182,9 +193,11 @@ def _quality_gate_before_writing(
     if expected_figures and required_requests and missing_requests:
         missing_ids = [str(item.get("figure_request_id") or "").strip() for item in missing_requests]
         missing_ids = [item for item in missing_ids if item]
+        reason_summary = _missing_reason_summary(missing_requests)
         return False, (
             "任务预期有图表（expected_figures=true），但未满足全部 required figure_requests。"
             f"missing={missing_ids}。"
+            f"missing_by_reason={reason_summary}。"
             "请检查图表阶段是否为每个 required request 产出 semantic_verified=true 且绑定 figure_request_id 的图。"
         )
 
@@ -198,6 +211,18 @@ def _quality_gate_before_writing(
         return False, (
             "任务预期有图表（expected_figures=true），但没有任何 required figure_request 被满足。"
             "请确保产物包含 figure_request_id 且 semantic_verified=true。"
+        )
+
+    if requires_explanatory_figures and explanatory_figure_count <= 0:
+        return False, (
+            "任务要求 explanatory figures，但未生成任何说明图。"
+            "请生成 geometry/timeline/trajectory/optimization 语义图并满足 figure_request。"
+        )
+
+    if requires_result_figures and result_figure_count <= 0:
+        return False, (
+            "任务要求 result figures，但未生成任何结果图。"
+            "请生成绑定 verified_results 的结果图。"
         )
 
     return True, ""
@@ -228,9 +253,12 @@ def _ensure_figure_requests_in_solve_spec(
         return normalized
 
     requests: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
     subproblems = _solve_spec_subproblems(solve_spec)
 
     def _default_required_data_for_role(role: str) -> list[str]:
+        if role in {"geometry_schematic", "timeline_schematic", "trajectory_overview", "optimization_variable_diagram"}:
+            return ["result_registry.json"]
         if role == "trajectory_shielding":
             return [
                 "missile_trajectory.json",
@@ -244,24 +272,58 @@ def _ensure_figure_requests_in_solve_spec(
         if role == "sensitivity_analysis":
             return ["sensitivity_results.csv"]
         return ["key_result_series.csv"]
+
+    def _append_request(
+        subproblem_id: str,
+        role: str,
+        required: bool,
+        expected_text: str,
+        figure_kind: str,
+    ) -> None:
+        request_id = f"fig_{subproblem_id}_{role}"
+        if request_id in seen_ids:
+            return
+        seen_ids.add(request_id)
+        requests.append(
+            {
+                "id": request_id,
+                "subproblem_id": subproblem_id,
+                "required": required,
+                "role": role,
+                "semantic_role": role,
+                "figure_kind": figure_kind,
+                "expected_content": [expected_text],
+                "required_data": _default_required_data_for_role(role),
+                "language": chart_language,
+                "chart_language": chart_language,
+                "must_include_in_paper": bool(required and figure_kind == "explanatory_figure"),
+            }
+        )
+
+    geometry_keywords = re.compile(r"导弹|无人机|目标|烟幕|遮蔽|视线|几何|geometry|line\s*of\s*sight", re.IGNORECASE)
+    trajectory_keywords = re.compile(r"轨迹|trajectory|path", re.IGNORECASE)
+    timeline_keywords = re.compile(r"投放|起爆|有效期|时间区间|时刻|timeline|time\s*window", re.IGNORECASE)
+    optimization_keywords = re.compile(r"优化变量|约束|目标函数|优化|optimization|objective|constraint", re.IGNORECASE)
+
     for index, subproblem in enumerate(subproblems, start=1):
         text = json.dumps(subproblem, ensure_ascii=False)
         if not _FIGURE_KEYWORDS.search(text):
             continue
         subproblem_id = str(subproblem.get("id") or f"problem_{index}").strip() or f"problem_{index}"
+        objective = str(subproblem.get("objective") or "").strip() or subproblem_id
+
+        if geometry_keywords.search(text):
+            _append_request(subproblem_id, "geometry_schematic", True, f"{objective} 几何关系示意图", "explanatory_figure")
+        if trajectory_keywords.search(text):
+            _append_request(subproblem_id, "trajectory_overview", True, f"{objective} 轨迹总览示意图", "explanatory_figure")
+        if timeline_keywords.search(text):
+            _append_request(subproblem_id, "timeline_schematic", True, f"{objective} 时间轴示意图", "explanatory_figure")
+        if optimization_keywords.search(text):
+            _append_request(subproblem_id, "optimization_variable_diagram", False, f"{objective} 优化变量关系图", "explanatory_figure")
+
+        # Backward-compatible result figure request.
         role = _infer_figure_role(text)
-        request_id = f"{subproblem_id}_{role}"
-        requests.append(
-            {
-                "id": request_id,
-                "subproblem_id": subproblem_id,
-                "required": True,
-                "role": role,
-                "expected_content": [str(subproblem.get("objective") or "").strip() or role],
-                "required_data": _default_required_data_for_role(role),
-                "language": chart_language,
-            }
-        )
+        _append_request(subproblem_id, role, True, objective, "result_figure")
 
     solve_spec["figure_requests"] = requests
     return requests
@@ -271,7 +333,112 @@ def _required_figure_requests(solve_spec: dict[str, object]) -> list[dict[str, o
     requests = solve_spec.get("figure_requests", []) if isinstance(solve_spec, dict) else []
     if not isinstance(requests, list):
         return []
-    return [req for req in requests if isinstance(req, dict) and bool(req.get("required", True))]
+    return [
+        req
+        for req in requests
+        if isinstance(req, dict)
+        and bool(req.get("required", True))
+        and str(req.get("status") or "").strip().lower() != "blocked"
+        and req.get("feasible", True) is not False
+    ]
+
+
+def _repair_eligible_missing_reason(reason: str) -> bool:
+    lowered = str(reason or "").strip().lower()
+    if not lowered:
+        return True
+    blocked_prefixes = (
+        "unsupported_deterministic_role",
+        "required_data_missing",
+        "insufficient_data_series",
+        "insufficient_semantic_required_data_contract",
+        "missing_source_data",
+        "missing_verified_result",
+        "linked_result_not_verified",
+        "placeholder_linked_result_ids",
+        "unsupported_renderer",
+    )
+    return not any(lowered.startswith(prefix) for prefix in blocked_prefixes)
+
+
+def _missing_reason_summary(missing_requests: list[dict[str, object]]) -> dict[str, int]:
+    summary = {
+        "unsupported_renderer": 0,
+        "missing_verified_result": 0,
+        "missing_source_data": 0,
+        "repair_budget_exceeded": 0,
+        "unbound_semantic_artifact": 0,
+        "other": 0,
+    }
+    for item in missing_requests:
+        reason = str(item.get("reason") or "").strip().lower()
+        if reason.startswith("unsupported_deterministic_role") or reason.startswith("unsupported_renderer"):
+            summary["unsupported_renderer"] += 1
+        elif (
+            "linked_result_not_verified" in reason
+            or "placeholder_linked_result_ids" in reason
+            or "missing_verified_result" in reason
+        ):
+            summary["missing_verified_result"] += 1
+        elif (
+            reason.startswith("required_data_missing")
+            or "missing_source_data" in reason
+            or "insufficient_data_series" in reason
+        ):
+            summary["missing_source_data"] += 1
+        elif "budget" in reason or "tool calls exceeded" in reason:
+            summary["repair_budget_exceeded"] += 1
+        elif "no semantic_verified artifact" in reason:
+            summary["unbound_semantic_artifact"] += 1
+        else:
+            summary["other"] += 1
+    return summary
+
+
+def _infer_figure_requirement_flags(
+    solve_spec: dict[str, object],
+    question: str,
+    breakdown: str,
+) -> tuple[bool, bool, bool]:
+    """Resolve requires_result/explanatory/any flags from solve_spec + heuristics."""
+    if isinstance(solve_spec, dict):
+        req_result = solve_spec.get("requires_result_figures")
+        req_expl = solve_spec.get("requires_explanatory_figures")
+        req_any = solve_spec.get("requires_figures")
+        if isinstance(req_result, bool) and isinstance(req_expl, bool):
+            combined = req_result or req_expl
+            if isinstance(req_any, bool):
+                combined = bool(req_any or combined)
+            return req_result, req_expl, combined
+
+    text = "\n".join(filter(None, [question, breakdown]))
+    explanatory_kw = re.compile(
+        r"几何|轨迹|遮蔽|路径|时间过程|时间区间|优化变量关系|示意图|流程图|时间轴|"
+        r"geometry|trajectory|shield|path|timeline|schematic|flowchart|variable\s*diagram",
+        re.IGNORECASE,
+    )
+    result_kw = re.compile(
+        r"时间序列|参数扫描|灵敏度|优化过程|收敛|曲线|热力图|"
+        r"time\s*series|parameter\s*sweep|sensitivity|optimization\s*process|convergence|curve|heatmap",
+        re.IGNORECASE,
+    )
+    req_expl = bool(explanatory_kw.search(text))
+    req_result = bool(result_kw.search(text))
+    req_any = req_expl or req_result or bool(_FIGURE_KEYWORDS.search(text))
+    return req_result, req_expl, req_any
+
+
+def _apply_figure_plan_to_solve_spec(
+    solve_spec: dict[str, object],
+    figure_plan: dict[str, object],
+) -> None:
+    """Use FigurePlan as source of truth for figure requirement flags."""
+    if not isinstance(solve_spec, dict) or not isinstance(figure_plan, dict):
+        return
+    solve_spec["requires_figures"] = bool(figure_plan.get("requires_figures"))
+    solve_spec["requires_result_figures"] = bool(figure_plan.get("requires_result_figures"))
+    solve_spec["requires_explanatory_figures"] = bool(figure_plan.get("requires_explanatory_figures"))
+    solve_spec["expected_figures"] = bool(figure_plan.get("requires_figures"))
 
 
 def _has_semantic_required_data_contract(role: str, required_data: list[str]) -> bool:
@@ -330,6 +497,120 @@ def _deterministic_series_from_registry(
     return x_values, values, sorted(matched_sources)
 
 
+def _deterministic_series_from_data_files(
+    work_dir: str,
+    data_files: list[str],
+) -> tuple[list[float], list[float], list[str]]:
+    """Load deterministic numeric series from CSV/XLSX paths.
+
+    Returns (x_values, y_values, matched_sources). Empty lists if no usable data found.
+    """
+    root = Path(work_dir)
+    candidates: list[tuple[Path, str]] = []
+    for raw in data_files:
+        rel = str(raw or "").strip()
+        if not rel:
+            continue
+        path = root / rel
+        if path.exists() and path.is_file():
+            candidates.append((path, rel.replace("\\", "/")))
+
+    if not candidates:
+        return [], [], []
+
+    def _to_float(v: object) -> float | None:
+        try:
+            text = str(v).strip()
+            if not text:
+                return None
+            return float(text)
+        except Exception:
+            return None
+
+    def _pick_columns(column_map: dict[str, list[float]]) -> tuple[list[float], list[float]]:
+        if not column_map:
+            return [], []
+        names = list(column_map.keys())
+        lower_to_name = {name.lower(): name for name in names}
+
+        x_candidates = [
+            key for key in names
+            if any(token in key.lower() for token in ["wavenumber", "波数", "time", "时间", "x"])
+        ]
+        y_candidates = [
+            key for key in names
+            if any(token in key.lower() for token in ["reflectance", "反射率", "intensity", "value", "y"])
+        ]
+
+        x_name = x_candidates[0] if x_candidates else ""
+        y_name = y_candidates[0] if y_candidates else ""
+
+        if not y_name:
+            for name in names:
+                if name != x_name and len(column_map.get(name, [])) >= 2:
+                    y_name = name
+                    break
+        if not x_name:
+            x_name = next((name for name in names if name != y_name and len(column_map.get(name, [])) >= 2), "")
+
+        if y_name:
+            y_values = column_map.get(y_name, [])
+            if x_name:
+                x_values = column_map.get(x_name, [])
+                if len(x_values) == len(y_values) and len(y_values) >= 2:
+                    return x_values, y_values
+            if len(y_values) >= 2:
+                return [float(i + 1) for i in range(len(y_values))], y_values
+        return [], []
+
+    for path, rel in candidates:
+        suffix = path.suffix.lower()
+        if suffix == ".csv":
+            try:
+                with path.open("r", encoding="utf-8", newline="") as fp:
+                    reader = csv.DictReader(fp)
+                    if not reader.fieldnames:
+                        continue
+                    column_map: dict[str, list[float]] = {str(name): [] for name in reader.fieldnames if str(name).strip()}
+                    for row in reader:
+                        for name in list(column_map.keys()):
+                            val = _to_float((row or {}).get(name, ""))
+                            if val is not None:
+                                column_map[name].append(val)
+                x_values, y_values = _pick_columns(column_map)
+                if len(x_values) >= 2 and len(y_values) >= 2:
+                    return x_values, y_values, [rel]
+            except Exception:
+                continue
+
+        if suffix in {".xlsx", ".xls"}:
+            try:
+                from openpyxl import load_workbook  # type: ignore
+
+                wb = load_workbook(path, data_only=True, read_only=True)
+                ws = wb.active
+                rows = ws.iter_rows(min_row=1, max_row=2000, values_only=True)
+                header = next(rows, None)
+                if not header:
+                    continue
+                names = [str(item or "").strip() for item in header]
+                column_map: dict[str, list[float]] = {name: [] for name in names if name}
+                for row in rows:
+                    for idx, name in enumerate(names):
+                        if not name:
+                            continue
+                        val = _to_float(row[idx] if row and idx < len(row) else "")
+                        if val is not None:
+                            column_map[name].append(val)
+                x_values, y_values = _pick_columns(column_map)
+                if len(x_values) >= 2 and len(y_values) >= 2:
+                    return x_values, y_values, [rel]
+            except Exception:
+                continue
+
+    return [], [], []
+
+
 def _render_required_requests_deterministically(
     work_dir: str,
     result_registry: dict[str, object],
@@ -347,14 +628,31 @@ def _render_required_requests_deterministically(
     for req in required_requests:
         req_id = str(req.get("id") or "").strip()
         subproblem_id = str(req.get("subproblem_id") or "").strip()
-        role = str(req.get("role") or "").strip().lower()
+        role = str(req.get("semantic_role") or req.get("role") or "").strip().lower()
+        figure_kind = str(req.get("figure_kind") or "result_figure").strip().lower()
         expected_content = req.get("expected_content", [])
         required_data = req.get("required_data", [])
         required_data_list = [str(item).strip() for item in required_data if str(item).strip()] if isinstance(required_data, list) else []
+        depends_on = req.get("depends_on", {}) if isinstance(req.get("depends_on"), dict) else {}
+        model_objects = depends_on.get("model_objects", []) if isinstance(depends_on.get("model_objects"), list) else []
+        formulas = depends_on.get("formulas", []) if isinstance(depends_on.get("formulas"), list) else []
+        source_problem_refs = depends_on.get("source_problem_refs", []) if isinstance(depends_on.get("source_problem_refs"), list) else []
 
         if not req_id:
             continue
-        if role not in {"trajectory_shielding", "distance_time_curve"}:
+        if role not in {
+            "trajectory_shielding",
+            "distance_time_curve",
+            "geometry_schematic",
+            "physical_principle_schematic",
+            "optical_path_diagram",
+            "timeline_schematic",
+            "trajectory_overview",
+            "optimization_variable_diagram",
+            "algorithm_flowchart",
+            "spectrum_curve",
+            "peak_valley_annotation",
+        }:
             missing.append({
                 "figure_request_id": req_id,
                 "required": True,
@@ -363,7 +661,7 @@ def _render_required_requests_deterministically(
             })
             continue
 
-        if not _has_semantic_required_data_contract(role, required_data_list):
+        if role in {"trajectory_shielding", "distance_time_curve"} and not _has_semantic_required_data_contract(role, required_data_list):
             missing.append({
                 "figure_request_id": req_id,
                 "required": True,
@@ -377,7 +675,15 @@ def _render_required_requests_deterministically(
                 src for src in required_data_list
                 if not (Path(work_dir) / src).exists()
             ]
-            if missing_files:
+            if missing_files and role not in {"spectrum_curve", "peak_valley_annotation"}:
+                missing.append({
+                    "figure_request_id": req_id,
+                    "required": True,
+                    "satisfied": False,
+                    "reason": f"required_data_missing:{missing_files}",
+                })
+                continue
+            if role in {"spectrum_curve", "peak_valley_annotation"} and len(missing_files) == len(required_data_list):
                 missing.append({
                     "figure_request_id": req_id,
                     "required": True,
@@ -386,18 +692,41 @@ def _render_required_requests_deterministically(
                 })
                 continue
 
-        x_values, y_values, matched_sources = _deterministic_series_from_registry(
-            result_registry,
-            required_data_list,
-        )
-        if len(x_values) < 2:
-            missing.append({
-                "figure_request_id": req_id,
-                "required": True,
-                "satisfied": False,
-                "reason": "insufficient_verified_numeric_series",
-            })
-            continue
+        x_values: list[float] = []
+        y_values: list[float] = []
+        matched_sources: list[str] = []
+        if role in {"trajectory_shielding", "distance_time_curve"}:
+            x_values, y_values, matched_sources = _deterministic_series_from_registry(
+                result_registry,
+                required_data_list,
+            )
+            if len(x_values) < 2:
+                missing.append({
+                    "figure_request_id": req_id,
+                    "required": True,
+                    "satisfied": False,
+                    "reason": "insufficient_verified_numeric_series",
+                })
+                continue
+
+        if role in {"spectrum_curve", "peak_valley_annotation"}:
+            x_values, y_values, matched_sources = _deterministic_series_from_data_files(
+                work_dir,
+                required_data_list,
+            )
+            if len(x_values) < 2:
+                x_values, y_values, matched_sources = _deterministic_series_from_registry(
+                    result_registry,
+                    required_data_list,
+                )
+            if len(x_values) < 2:
+                missing.append({
+                    "figure_request_id": req_id,
+                    "required": True,
+                    "satisfied": False,
+                    "reason": "insufficient_data_series",
+                })
+                continue
 
         output_path = str(Path(work_dir) / "output" / f"{req_id}.png")
         title = (
@@ -420,7 +749,7 @@ def _render_required_requests_deterministically(
                 source_data=required_data_list or (matched_sources or ["result_registry.json"]),
                 work_dir=work_dir,
             )
-        else:
+        elif role == "distance_time_curve":
             artifact = render_distance_time_curve(
                 times=x_values,
                 distances=y_values,
@@ -435,6 +764,93 @@ def _render_required_requests_deterministically(
                 source_data=required_data_list or (matched_sources or ["result_registry.json"]),
                 work_dir=work_dir,
             )
+        elif role in {
+            "geometry_schematic",
+            "trajectory_overview",
+            "optimization_variable_diagram",
+            "physical_principle_schematic",
+            "optical_path_diagram",
+        }:
+            artifact = render_geometry_schematic(
+                title=title,
+                output_path=output_path,
+                chart_language=chart_language,
+                figure_request_id=req_id,
+                subproblem_id=subproblem_id,
+                semantic_role=role,
+                depicts=expected_content if isinstance(expected_content, list) else [role],
+                linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                source_data=required_data_list or ["result_registry.json"],
+                model_objects=[str(item).strip() for item in model_objects if str(item).strip()] or ["model_core"],
+                formulas=[str(item).strip() for item in formulas if str(item).strip()],
+                source_problem_refs=[str(item).strip() for item in source_problem_refs if str(item).strip()] or ([subproblem_id] if subproblem_id else ["problem"]),
+                work_dir=work_dir,
+            )
+        elif role == "timeline_schematic":
+            artifact = render_timeline_schematic(
+                title=title,
+                output_path=output_path,
+                chart_language=chart_language,
+                figure_request_id=req_id,
+                subproblem_id=subproblem_id,
+                semantic_role="timeline_schematic",
+                depicts=expected_content if isinstance(expected_content, list) else ["timeline_schematic"],
+                linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                source_data=required_data_list or ["result_registry.json"],
+                model_objects=[str(item).strip() for item in model_objects if str(item).strip()] or ["process_stage"],
+                formulas=[str(item).strip() for item in formulas if str(item).strip()],
+                source_problem_refs=[str(item).strip() for item in source_problem_refs if str(item).strip()] or ([subproblem_id] if subproblem_id else ["problem"]),
+                work_dir=work_dir,
+            )
+        elif role == "algorithm_flowchart":
+            artifact = render_algorithm_flowchart(
+                title=title,
+                output_path=output_path,
+                chart_language=chart_language,
+                figure_request_id=req_id,
+                subproblem_id=subproblem_id,
+                semantic_role="algorithm_flowchart",
+                depicts=expected_content if isinstance(expected_content, list) else ["algorithm_flowchart"],
+                linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                source_data=required_data_list or ["result_registry.json"],
+                model_objects=[str(item).strip() for item in model_objects if str(item).strip()] or ["algorithm_pipeline"],
+                formulas=[str(item).strip() for item in formulas if str(item).strip()],
+                source_problem_refs=[str(item).strip() for item in source_problem_refs if str(item).strip()] or ([subproblem_id] if subproblem_id else ["problem"]),
+                work_dir=work_dir,
+            )
+        elif role == "spectrum_curve":
+            artifact = render_spectrum_curve(
+                x_values=x_values,
+                y_values=y_values,
+                title=title,
+                output_path=output_path,
+                chart_language=chart_language,
+                figure_request_id=req_id,
+                subproblem_id=subproblem_id,
+                semantic_role="spectrum_curve",
+                depicts=expected_content if isinstance(expected_content, list) else ["spectrum_curve"],
+                linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                work_dir=work_dir,
+            )
+        else:
+            artifact = render_peak_valley_annotation(
+                x_values=x_values,
+                y_values=y_values,
+                title=title,
+                output_path=output_path,
+                chart_language=chart_language,
+                figure_request_id=req_id,
+                subproblem_id=subproblem_id,
+                semantic_role="peak_valley_annotation",
+                depicts=expected_content if isinstance(expected_content, list) else ["peak_valley_annotation"],
+                linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                work_dir=work_dir,
+            )
+
+        if isinstance(artifact, dict):
+            artifact["figure_kind"] = figure_kind or "result_figure"
 
         artifact_path = str(artifact.get("path") or "").strip() if isinstance(artifact, dict) else ""
         if artifact_path:
@@ -1478,6 +1894,10 @@ def _solve_spec_expects_figures(
        (e.g. ``expected_figures`` key containing the word "figure").
     """
     if isinstance(solve_spec, dict):
+        req_result = solve_spec.get("requires_result_figures")
+        req_expl = solve_spec.get("requires_explanatory_figures")
+        if isinstance(req_result, bool) or isinstance(req_expl, bool):
+            return bool(req_result) or bool(req_expl)
         for key in ("requires_figures", "expected_figures"):
             val = solve_spec.get(key)
             if isinstance(val, bool):
@@ -1787,7 +2207,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "输出必须是单个 JSON 对象，不要附加解释。"
                 "JSON 顶层至少包含 subproblems 数组。每个 subproblem 至少包含：id、objective、input_files、input_columns、method、steps、expected_outputs、validation。"
                 "建议为每个 subproblem 增加 priority（high/medium/low）和 complexity_hint（simple/medium/complex），用于后端分配求解预算。"
-                "如果题目需要生成图表/可视化，JSON 顶层必须包含 requires_figures: true。如果题目纯文本/纯数值不需要图，则 requires_figures: false。"
+                "JSON 顶层应显式给出 requires_result_figures、requires_explanatory_figures、requires_figures。"
+                "其中 requires_figures = requires_result_figures OR requires_explanatory_figures。"
                 "禁止写论文式长段落，重点给出可执行步骤和可校验输出。"
             )
             solve_spec_raw = await _run_text_agent(
@@ -1812,12 +2233,37 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             solve_spec["chart_language"] = chart_language
             solve_spec["chart_language_context"] = chart_language_context
             solve_spec["chart_language_policy"] = chart_language_policy
-            expected_figures = _solve_spec_expects_figures(
+            requires_result_figures, requires_explanatory_figures, expected_figures = _infer_figure_requirement_flags(
                 solve_spec, question, str(stage_outputs.get("breakdown", ""))
             )
+            solve_spec["requires_result_figures"] = requires_result_figures
+            solve_spec["requires_explanatory_figures"] = requires_explanatory_figures
+            solve_spec["requires_figures"] = expected_figures
             solve_spec["expected_figures"] = expected_figures
 
-            figure_requests = _ensure_figure_requests_in_solve_spec(solve_spec, chart_language)
+            # Build independent FigurePlan and freeze it as the planning source of truth.
+            figure_plan = FigurePlanBuilder.build(
+                question=question,
+                solve_spec=solve_spec,
+                problem_facts=problem_facts,
+                chart_language=chart_language,
+                work_dir=work_dir,
+            )
+            figure_plan_path = FigurePlanBuilder.save(work_dir, figure_plan)
+            stage_outputs["figure_plan"] = figure_plan
+            stage_outputs["figure_plan_file"] = os.path.basename(figure_plan_path)
+
+            _apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
+            expected_figures = bool(solve_spec.get("requires_figures"))
+
+            figure_requests = figure_plan.get("figure_requests", []) if isinstance(figure_plan, dict) else []
+            if not isinstance(figure_requests, list) or not any(isinstance(item, dict) for item in figure_requests):
+                figure_requests = _ensure_figure_requests_in_solve_spec(solve_spec, chart_language)
+            else:
+                figure_requests = [item for item in figure_requests if isinstance(item, dict)]
+
+            # Keep solve_spec compatibility while FigurePlan is the primary source.
+            solve_spec["figure_requests"] = figure_requests
             stage_outputs["figure_requests"] = figure_requests
             stage_outputs["figure_request_count"] = len(figure_requests)
 
@@ -2230,6 +2676,16 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 req_id = str(missing_req.get("figure_request_id") or "").strip()
                 if not req_id:
                     continue
+                missing_reason = str(missing_req.get("reason") or "").strip()
+                if not _repair_eligible_missing_reason(missing_reason):
+                    recovery_round_outputs.append(
+                        {
+                            "figure_request_id": req_id,
+                            "skipped": True,
+                            "reason": f"preflight_blocked:{missing_reason or 'infeasible_request'}",
+                        }
+                    )
+                    continue
 
                 target_req = None
                 for req in required_requests:
@@ -2356,6 +2812,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 
         # --- Quality gate using ArtifactRegistry ---
         expected_figures = _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", "")))
+        requires_result_figures = bool((solve_spec or {}).get("requires_result_figures"))
+        requires_explanatory_figures = bool((solve_spec or {}).get("requires_explanatory_figures"))
         gate_passed, gate_reason = _quality_gate_before_writing(
             result_registry,
             expected_figures,
@@ -2363,6 +2821,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             figure_bundle.satisfied_requests,
             figure_bundle.missing_requests,
             workflow_mode,
+            requires_result_figures=requires_result_figures,
+            requires_explanatory_figures=requires_explanatory_figures,
+            result_figure_count=len(figure_bundle.result_figures),
+            explanatory_figure_count=len(figure_bundle.explanatory_figures),
         )
 
         # Generate structured gate reports from ArtifactRegistry
@@ -2400,15 +2862,29 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             yield _message("writing", gate_reason, msg_type="error", section="质量门禁")
 
+            failure_code = "QUALITY_GATE_FAILED"
+            failure_type = "quality_gate"
+            failure_details: dict[str, object] = {"gate_reason": gate_reason}
+            if "solve_spec 未提供 figure_requests" in gate_reason:
+                failure_code = "FIGURE_PLAN_MISSING"
+                figure_plan = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs, dict) else {}
+                detected_needs = figure_plan.get("detected_needs", []) if isinstance(figure_plan, dict) else []
+                failure_details = {
+                    "reason": "FigureNeedDetector judged figures required, but FigurePlan is empty.",
+                    "detected_needs": detected_needs,
+                    "missing_stage": "figure_planning",
+                    "repair_hint": "Run domain_template_backfill for this problem domain.",
+                }
+
             task_manager.update_status(task_id, TaskStatus.FAILED)
             yield _build_failed_task_result(
                 task_id=task_id,
                 task_type="writing",
                 work_dir=work_dir,
                 error_message=gate_reason,
-                error_code="QUALITY_GATE_FAILED",
-                error_type="quality_gate",
-                error_details={"gate_reason": gate_reason},
+                error_code=failure_code,
+                error_type=failure_type,
+                error_details=failure_details,
                 paper_path=md_path,
                 docx_path=docx_fail_path if docx_fail_path and os.path.exists(docx_fail_path) else "",
                 notebook_path=os.path.join(work_dir, "notebook.ipynb"),
@@ -2433,6 +2909,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# FigureBundle（仅 available_figures 可写入正文）\n{_json_for_prompt(figure_bundle.to_dict(), 10000)}\n\n"
             "请输出完整论文 Markdown。论文中所有具体数值都必须来自 result_registry.json 的 verified_results；"
             "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。"
+            "FigureBundle.explanatory_figures 必须优先插入到模型建立、符号说明、几何关系或算法流程章节。"
+            "FigureBundle.result_figures 应插入结果分析章节。"
+            "FigureBundle.required_images 中列出的图片路径必须在 Markdown 中逐一出现。"
             "正文只允许引用 FigureBundle.available_figures；禁止引用 FigureBundle.diagnostic_figures。"
             "每张正文图必须保持其 figure_request_id 语义，不得用 diagnostics 图替代 required 图。"
             "若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级，不能把已 verified 的结果整体写成未计算。"
@@ -2818,6 +3297,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 figure_bundle.satisfied_requests,
                 figure_bundle.missing_requests,
                 workflow_mode,
+                requires_result_figures=bool((solve_spec or {}).get("requires_result_figures")),
+                requires_explanatory_figures=bool((solve_spec or {}).get("requires_explanatory_figures")),
+                result_figure_count=len(figure_bundle.result_figures),
+                explanatory_figure_count=len(figure_bundle.explanatory_figures),
             )
             if not gate_passed:
                 raise ValueError(f"Audit round {audit_round}: semantic quality gate failed: {gate_reason}")
@@ -2866,6 +3349,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             task_type="writing",
             paper_content=final_paper,
             allowed_images=writer_images,
+            required_images=figure_bundle.required_images,
             result_payload={
                 "question": question,
                 "data_context": data_context,
@@ -3147,6 +3631,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             task_type="polish",
             paper_content=final_paper,
             allowed_images=writer_images,
+            required_images=polish_figure_bundle.required_images,
             result_payload={
                 "question": question,
                 "paper_content": paper_content,

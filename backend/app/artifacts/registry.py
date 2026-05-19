@@ -68,7 +68,12 @@ class FigureBundle:
     satisfied_requests: list[dict[str, Any]] = field(default_factory=list)
     missing_requests: list[dict[str, Any]] = field(default_factory=list)
     available_figures: list[dict[str, Any]] = field(default_factory=list)
+    recommended_requests: list[dict[str, Any]] = field(default_factory=list)
+    blocked_requests: list[dict[str, Any]] = field(default_factory=list)
+    result_figures: list[dict[str, Any]] = field(default_factory=list)
+    explanatory_figures: list[dict[str, Any]] = field(default_factory=list)
     diagnostic_figures: list[dict[str, Any]] = field(default_factory=list)
+    required_images: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,7 +81,12 @@ class FigureBundle:
             "satisfied_requests": self.satisfied_requests,
             "missing_requests": self.missing_requests,
             "available_figures": self.available_figures,
+            "recommended_requests": self.recommended_requests,
+            "blocked_requests": self.blocked_requests,
+            "result_figures": self.result_figures,
+            "explanatory_figures": self.explanatory_figures,
             "diagnostic_figures": self.diagnostic_figures,
+            "required_images": self.required_images,
         }
 
 
@@ -204,7 +214,20 @@ class ArtifactRegistry:
         return self.artifact_valid_images
 
     def _load_figure_requests(self) -> list[dict[str, Any]]:
-        """Load figure_requests from solve_spec.json (if present)."""
+        """Load figure_requests from figure_plan.json first, then solve_spec.json."""
+        figure_plan_path = Path(self.work_dir) / "figure_plan.json"
+        if figure_plan_path.exists():
+            try:
+                payload = json.loads(figure_plan_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    requests = payload.get("figure_requests", [])
+                    if isinstance(requests, list):
+                        planned = [item for item in requests if isinstance(item, dict)]
+                        if planned:
+                            return planned
+            except Exception:
+                pass
+
         solve_spec_path = Path(self.work_dir) / "solve_spec.json"
         if not solve_spec_path.exists():
             return []
@@ -262,15 +285,46 @@ class ArtifactRegistry:
             item for item in requests
             if bool(item.get("required", True))
         ]
+        recommended_requests = [
+            item for item in requests
+            if not bool(item.get("required", True)) and str(item.get("status") or "") == "recommended"
+        ]
+        blocked_requests = [
+            item for item in requests
+            if str(item.get("status") or "") == "blocked" or str(item.get("blocked_reason") or "").strip()
+        ]
         required_ids = {
             str(item.get("id") or "").strip()
             for item in required_requests
             if str(item.get("id") or "").strip()
         }
+        request_by_id = {
+            str(item.get("id") or "").strip(): item
+            for item in requests
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
 
         available: list[dict[str, Any]] = []
+        result_figures: list[dict[str, Any]] = []
+        explanatory_figures: list[dict[str, Any]] = []
         diagnostics: list[dict[str, Any]] = []
         matched_request_ids: set[str] = set()
+        required_images: list[str] = []
+
+        explanatory_roles = {
+            "geometry_schematic",
+            "timeline_schematic",
+            "trajectory_overview",
+            "optimization_variable_diagram",
+            "algorithm_flowchart",
+        }
+        forbidden_explanatory_roles = {
+            "workflow",
+            "agent_workflow",
+            "verified_result_summary",
+            "diagnostics",
+            "system_architecture",
+        }
 
         for path in self.artifact_valid_images:
             artifact = artifacts.get(path, {})
@@ -279,6 +333,11 @@ class ArtifactRegistry:
             semantic_role = str(artifact.get("semantic_role") or figure_role).strip()
             semantic_verified = bool(artifact.get("semantic_verified"))
             paper_section = str(artifact.get("paper_section") or "").strip().lower()
+            figure_kind = str(artifact.get("figure_kind") or "").strip().lower()
+
+            req_payload = request_by_id.get(figure_request_id, {})
+            req_kind = str(req_payload.get("figure_kind") or "").strip().lower()
+            effective_kind = figure_kind or req_kind or ("explanatory_figure" if semantic_role in explanatory_roles else "result_figure")
 
             item = {
                 "path": path,
@@ -286,12 +345,14 @@ class ArtifactRegistry:
                 "figure_request_id": figure_request_id,
                 "semantic_role": semantic_role,
                 "semantic_verified": semantic_verified,
+                "figure_kind": effective_kind,
             }
 
             is_diagnostic = (
                 figure_role == "verified_result_summary"
                 or paper_section == "diagnostics"
                 or not semantic_verified
+                or semantic_role in forbidden_explanatory_roles
             )
             if is_diagnostic:
                 diagnostics.append(item)
@@ -300,9 +361,20 @@ class ArtifactRegistry:
             if required_ids and figure_request_id in required_ids:
                 available.append(item)
                 matched_request_ids.add(figure_request_id)
+                if effective_kind == "explanatory_figure":
+                    explanatory_figures.append(item)
+                else:
+                    result_figures.append(item)
+
+                if bool(req_payload.get("must_include_in_paper")):
+                    required_images.append(path)
             elif not required_ids:
                 # Backward-compatible mode: no explicit requests configured.
                 available.append(item)
+                if effective_kind == "explanatory_figure":
+                    explanatory_figures.append(item)
+                else:
+                    result_figures.append(item)
 
         satisfied: list[dict[str, Any]] = []
         missing: list[dict[str, Any]] = []
@@ -317,7 +389,7 @@ class ArtifactRegistry:
                     "figure_request_id": req_id,
                     "required": True,
                     "satisfied": False,
-                    "reason": "no semantic_verified artifact bound to this request",
+                    "reason": str(req.get("blocked_reason") or "").strip() or "no semantic_verified artifact bound to this request",
                 })
 
         self.figure_bundle = FigureBundle(
@@ -325,7 +397,12 @@ class ArtifactRegistry:
             satisfied_requests=satisfied,
             missing_requests=missing,
             available_figures=available,
+            recommended_requests=recommended_requests,
+            blocked_requests=blocked_requests,
+            result_figures=result_figures,
+            explanatory_figures=explanatory_figures,
             diagnostic_figures=diagnostics,
+            required_images=list(dict.fromkeys(required_images)),
         )
         return self.figure_bundle
 

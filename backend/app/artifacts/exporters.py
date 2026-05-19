@@ -71,6 +71,7 @@ class DocumentFinalizer:
         task_type: str,
         paper_content: str,
         allowed_images: list[str] | None,
+        required_images: list[str] | None,
         result_payload: dict[str, Any],
         code_interpreter=None,
         version: int | None = None,
@@ -94,7 +95,7 @@ class DocumentFinalizer:
             )
         normalized = normalize_math_markdown(paper_content)
         normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
-        DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images)
+        DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
 
         # ── Determine output paths ─────────────────────────────────────
@@ -126,6 +127,7 @@ class DocumentFinalizer:
         task_type: str,
         paper_content: str,
         allowed_images: list[str] | None,
+        required_images: list[str] | None,
         result_payload: dict[str, Any],
         code_interpreter=None,
         version: int | None = None,
@@ -190,7 +192,7 @@ class DocumentFinalizer:
             )
         normalized = normalize_math_markdown(paper_content)
         normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
-        DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images)
+        DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
 
         # ── Determine output paths ─────────────────────────────────────
@@ -392,6 +394,7 @@ class DocumentFinalizer:
         work_dir: str,
         markdown: str,
         allowed_images: list[str] | None,
+        required_images: list[str] | None,
     ) -> None:
         """Hard-validate Markdown image references before export.
 
@@ -400,7 +403,7 @@ class DocumentFinalizer:
         - Every referenced image must exist on disk under work_dir.
         """
         refs = DocumentFinalizer._extract_markdown_image_targets(markdown)
-        if not refs:
+        if not refs and not required_images:
             return
 
         allowed = None
@@ -430,3 +433,17 @@ class DocumentFinalizer:
                 error_code="FINALIZER_MISSING_IMAGE_REF",
                 details={"paths": missing},
             )
+
+        if required_images:
+            required = {
+                normalize_artifact_path(path)
+                for path in required_images
+                if str(path).strip()
+            }
+            not_referenced = [path for path in required if path not in set(refs)]
+            if not_referenced:
+                raise FinalizationValidationError(
+                    "Markdown is missing required figure references: " + ", ".join(not_referenced),
+                    error_code="FINALIZER_REQUIRED_IMAGE_NOT_REFERENCED",
+                    details={"paths": not_referenced},
+                )

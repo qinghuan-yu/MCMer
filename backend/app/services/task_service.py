@@ -79,6 +79,37 @@ def _resolve_revision_allowed_images(stages: dict | None) -> list[str] | None:
     return legacy_base or None
 
 
+def _resolve_revision_required_images(stages: dict | None) -> list[str] | None:
+    """Resolve must-include image list for revision finalization."""
+    if not isinstance(stages, dict):
+        return None
+
+    def _pick_latest_prefix(prefix: str):
+        for key in sorted(stages.keys(), reverse=True):
+            if key.startswith(prefix):
+                return stages.get(key)
+        return None
+
+    def _to_path_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    bundle_latest = _pick_latest_prefix("figure_bundle_round_")
+    if isinstance(bundle_latest, dict):
+        latest_required = _to_path_list(bundle_latest.get("required_images"))
+        if latest_required:
+            return latest_required
+
+    bundle_base = stages.get("figure_bundle")
+    if isinstance(bundle_base, dict):
+        base_required = _to_path_list(bundle_base.get("required_images"))
+        if base_required:
+            return base_required
+
+    return None
+
+
 class TaskManager:
     """任务管理器"""
 
@@ -409,6 +440,7 @@ class TaskManager:
         """保存修订版论文 — 使用 DocumentFinalizer 统一出口"""
         task_dir = os.path.join(settings.WORK_DIR, task_id)
         allowed_images: list[str] | None = None
+        required_images: list[str] | None = None
         result_payload: dict = {}
         result_path = os.path.join(task_dir, "res.json")
         if os.path.exists(result_path):
@@ -419,8 +451,10 @@ class TaskManager:
                     result_payload = loaded_payload
                 stages = result_payload.get("stages", {}) if isinstance(result_payload, dict) else {}
                 allowed_images = _resolve_revision_allowed_images(stages)
+                required_images = _resolve_revision_required_images(stages)
             except Exception:
                 allowed_images = None
+                required_images = None
 
         paper_path, docx_path, _ = DocumentFinalizer.finalize(
             work_dir=task_dir,
@@ -428,6 +462,7 @@ class TaskManager:
             task_type="revision",
             paper_content=paper_content,
             allowed_images=allowed_images,
+            required_images=required_images,
             result_payload=result_payload,
             version=version,
         )

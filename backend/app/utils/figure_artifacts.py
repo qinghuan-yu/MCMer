@@ -118,6 +118,7 @@ def is_verified_paper_figure(
 TRUSTED_CREATERS = {"save_paper_figure", "deterministic_renderer"}
 
 
+
 def validate_figure(
     item: object,
     document_language: str,
@@ -195,22 +196,44 @@ def validate_figure(
     if not isinstance(audit, list) or not audit:
         reasons.append("missing_visible_text_audit")
 
+    figure_kind = str(artifact.get("figure_kind") or "result_figure").strip().lower()
+
     # Semantic binding (only when verified_result_ids provided)
     if verified_result_ids is not None:
-        linked = artifact.get("linked_result_ids")
-        if not isinstance(linked, list) or not linked:
-            reasons.append("missing_linked_result_ids")
+        if figure_kind == "explanatory_figure":
+            binding = str(artifact.get("evidence_binding_type") or "model_contract").strip().lower()
+            if binding != "model_contract":
+                reasons.append("invalid_explanatory_binding_type")
+            model_objects = artifact.get("model_objects")
+            formulas = artifact.get("formulas")
+            source_refs = artifact.get("source_problem_refs")
+            source = artifact.get("source_data")
+            has_model_evidence = (
+                isinstance(model_objects, list) and any(str(item).strip() for item in model_objects)
+            ) or (
+                isinstance(formulas, list) and any(str(item).strip() for item in formulas)
+            ) or (
+                isinstance(source_refs, list) and any(str(item).strip() for item in source_refs)
+            ) or (
+                isinstance(source, list) and any(str(item).strip() for item in source)
+            )
+            if not has_model_evidence:
+                reasons.append("missing_model_contract_evidence")
         else:
-            for rid in linked:
-                if str(rid) not in verified_result_ids:
-                    reasons.append(f"linked_result_id_not_verified:{rid}")
-        source = artifact.get("source_data")
-        if not isinstance(source, list) or not source:
-            reasons.append("missing_source_data")
-        else:
-            for entry in source:
-                if not str(entry).strip():
-                    reasons.append("empty_source_data_entry")
+            linked = artifact.get("linked_result_ids")
+            if not isinstance(linked, list) or not linked:
+                reasons.append("missing_linked_result_ids")
+            else:
+                for rid in linked:
+                    if str(rid) not in verified_result_ids:
+                        reasons.append(f"linked_result_id_not_verified:{rid}")
+            source = artifact.get("source_data")
+            if not isinstance(source, list) or not source:
+                reasons.append("missing_source_data")
+            else:
+                for entry in source:
+                    if not str(entry).strip():
+                        reasons.append("empty_source_data_entry")
 
     # File existence check
     if work_dir is not None and not (Path(work_dir) / path).exists():
