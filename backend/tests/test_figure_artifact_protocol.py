@@ -5,7 +5,8 @@ from pathlib import Path
 
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import _contains_tool_protocol_text
-from app.core.workflow import _generated_image_evidence_paths, _has_generated_image_evidence, _language_verified_generated_images, _quality_gate_before_writing
+from app.core.figure_stage import FigureStage
+from app.core.workflow import _generated_image_evidence_paths, _has_generated_image_evidence, _language_verified_generated_images
 from app.utils.common_utils import finalize_markdown_export
 from app.utils.figure_artifacts import is_verified_paper_figure, is_placeholder_filename, contains_placeholder_text
 
@@ -314,7 +315,7 @@ def test_quality_gate_blocks_zero_verified() -> None:
         "blocked_results": [{"id": "r1", "status": "blocked"}],
         "summary": {"verified_count": 0, "blocked_count": 1},
     }
-    passed, reason = _quality_gate_before_writing(
+    passed, reason = FigureStage.quality_gate_before_writing(
         registry,
         False,
         [],
@@ -333,7 +334,7 @@ def test_quality_gate_passes_with_verified_results() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = _quality_gate_before_writing(
+    passed, reason = FigureStage.quality_gate_before_writing(
         registry,
         False,
         [],
@@ -352,7 +353,7 @@ def test_quality_gate_blocks_expected_figures_missing() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = _quality_gate_before_writing(
+    passed, reason = FigureStage.quality_gate_before_writing(
         registry,
         True,
         [{"id": "req_1", "required": True}],
@@ -371,7 +372,7 @@ def test_quality_gate_passes_with_verified_and_images() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = _quality_gate_before_writing(
+    passed, reason = FigureStage.quality_gate_before_writing(
         registry,
         True,
         [{"id": "req_1", "required": True}],
@@ -622,35 +623,32 @@ def test_guard_blocks_helper_exploration():
 
 def test_subproblem_figure_mode_none_for_numeric_subproblem():
     """Numeric subproblem should get figure_mode=none even when task expects figures."""
-    from app.core.workflow import _subproblem_figure_mode
     subproblem = {
         "id": "p1",
         "objective": "计算碳化硅外延层厚度",
         "steps": ["加载数据", "拟合参数", "输出数值结果"],
     }
-    assert _subproblem_figure_mode(subproblem, True) == "none"
+    assert FigureStage.subproblem_figure_mode(subproblem, True) == "none"
 
 
 def test_subproblem_figure_mode_paper_required_for_chart_subproblem():
     """Subproblem mentioning charts should get figure_mode=paper_required."""
-    from app.core.workflow import _subproblem_figure_mode
     subproblem = {
         "id": "p2",
         "objective": "绘制光谱对比图表",
         "steps": ["生成折线图", "保存可视化结果"],
     }
-    assert _subproblem_figure_mode(subproblem, True) == "paper_required"
+    assert FigureStage.subproblem_figure_mode(subproblem, True) == "paper_required"
 
 
 def test_subproblem_figure_mode_none_when_task_has_no_figures():
     """When task doesn't expect figures, all subproblems get figure_mode=none."""
-    from app.core.workflow import _subproblem_figure_mode
     subproblem = {
         "id": "p1",
         "objective": "绘制图表",
         "steps": ["plot"],
     }
-    assert _subproblem_figure_mode(subproblem, False) == "none"
+    assert FigureStage.subproblem_figure_mode(subproblem, False) == "none"
 
 
 def test_deterministic_summary_figure_passes_gate(tmp_path: Path) -> None:
@@ -1046,6 +1044,21 @@ def test_problem_contract_creation() -> None:
     assert en_contract.font_profile == "latin"
 
 
+def test_problem_contract_from_question_prefers_by_problem_figure_flag() -> None:
+    from app.artifacts.contracts import ProblemContract
+
+    contract = ProblemContract.from_question(
+        question="请画图展示结果",
+        solve_spec={
+            "requires_figures_by_problem": False,
+            "requires_result_figures": True,
+            "requires_explanatory_figures": True,
+        },
+        workflow_mode="standard",
+    )
+    assert contract.paper_requires_figures is False
+
+
 def test_save_revision_preserves_existing_res_payload(tmp_path: Path, monkeypatch) -> None:
     """save_revision must keep existing res.json fields (stages/coverage/images)."""
     from app.config.setting import settings
@@ -1240,8 +1253,6 @@ def test_artifact_registry_reports_bare_string_generated_file_rejection(tmp_path
 
 def test_ensure_figure_requests_from_solve_spec() -> None:
     """Workflow should derive required figure_requests from visual subproblems."""
-    from app.core.workflow import _ensure_figure_requests_in_solve_spec
-
     solve_spec = {
         "subproblems": [
             {
@@ -1257,7 +1268,7 @@ def test_ensure_figure_requests_from_solve_spec() -> None:
         ]
     }
 
-    requests = _ensure_figure_requests_in_solve_spec(solve_spec, "Simplified Chinese")
+    requests = FigureStage.ensure_figure_requests_in_solve_spec(solve_spec, "Simplified Chinese")
     assert requests
     req_ids = {item["id"] for item in requests}
     assert "fig_problem_1_geometry_schematic" in req_ids
@@ -1272,14 +1283,27 @@ def test_ensure_figure_requests_from_solve_spec() -> None:
 
 def test_solve_spec_expect_flags_support_explanatory_only() -> None:
     """requires_explanatory_figures=true should make task expected_figures=true."""
-    from app.core.workflow import _solve_spec_expects_figures
+    from app.artifacts.contracts import ProblemContract
 
     solve_spec = {
         "requires_result_figures": False,
         "requires_explanatory_figures": True,
         "requires_figures": True,
     }
-    assert _solve_spec_expects_figures(solve_spec, "", "") is True
+    contract = ProblemContract.from_question("", solve_spec=solve_spec)
+    assert contract.paper_requires_figures is True
+
+
+def test_solve_spec_expects_figures_prefers_by_problem_flag() -> None:
+    from app.artifacts.contracts import ProblemContract
+
+    solve_spec = {
+        "requires_figures_by_problem": False,
+        "requires_result_figures": True,
+        "requires_explanatory_figures": True,
+    }
+    contract = ProblemContract.from_question("figure", solve_spec=solve_spec)
+    assert contract.paper_requires_figures is False
 
 
 def test_semantic_bundle_excludes_diagnostic_summary_for_required_requests(tmp_path: Path) -> None:
@@ -1443,8 +1467,6 @@ def test_render_distance_time_curve_semantic_artifact(tmp_path: Path) -> None:
 
 def test_render_required_requests_deterministically(tmp_path: Path) -> None:
     """Workflow deterministic-first recovery should satisfy supported requests with data."""
-    from app.core.workflow import _render_required_requests_deterministically
-
     # required_data file must exist for deterministic attempt
     (tmp_path / "distance_time_series.csv").write_text("t,d\n1,1\n2,2\n", encoding="utf-8")
 
@@ -1466,7 +1488,7 @@ def test_render_required_requests_deterministically(tmp_path: Path) -> None:
         }
     ]
 
-    report = _render_required_requests_deterministically(
+    report = FigureStage.render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry=registry,
         required_requests=required_requests,
@@ -1480,8 +1502,6 @@ def test_render_required_requests_deterministically(tmp_path: Path) -> None:
 
 def test_render_required_requests_rejects_weak_required_data_contract(tmp_path: Path) -> None:
     """Deterministic renderer must not semantic-verify requests with weak required_data contract."""
-    from app.core.workflow import _render_required_requests_deterministically
-
     (tmp_path / "result_registry.json").write_text("{}", encoding="utf-8")
     registry = {
         "verified_results": [
@@ -1500,7 +1520,7 @@ def test_render_required_requests_rejects_weak_required_data_contract(tmp_path: 
         }
     ]
 
-    report = _render_required_requests_deterministically(
+    report = FigureStage.render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry=registry,
         required_requests=required_requests,
@@ -1605,9 +1625,26 @@ def test_figure_plan_builder_backfills_optical_domain_requests(tmp_path: Path) -
     assert any("inputs/question/附件1.xlsx" == str(item).replace("\\", "/") for item in data_files)
 
 
-def test_apply_figure_plan_overrides_solve_spec_flags() -> None:
-    from app.core.workflow import _apply_figure_plan_to_solve_spec
+def test_figure_plan_emits_workflow_issues_for_blocked_requests(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
 
+    solve_spec = {
+        "subproblems": [{"id": "q1", "objective": "拟合分析", "steps": ["fit"]}],
+        "figure_requests": [],
+    }
+    plan = FigurePlanBuilder.build(
+        question="拟合与残差分析图",
+        solve_spec=solve_spec,
+        problem_facts={},
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+    issues = plan.get("workflow_issues", [])
+    assert isinstance(issues, list)
+    assert any(item.get("code") == "FIGURE_REQUEST_BLOCKED" for item in issues if isinstance(item, dict))
+
+
+def test_apply_figure_plan_overrides_solve_spec_flags() -> None:
     solve_spec = {
         "requires_figures": False,
         "requires_result_figures": False,
@@ -1618,25 +1655,29 @@ def test_apply_figure_plan_overrides_solve_spec_flags() -> None:
         "requires_figures": True,
         "requires_result_figures": True,
         "requires_explanatory_figures": True,
+        "requires_figures_by_problem": True,
+        "required_feasible_count": 0,
+        "blocked_count": 3,
     }
-    _apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
+    FigureStage.apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
 
     assert solve_spec["requires_figures"] is True
     assert solve_spec["requires_result_figures"] is True
     assert solve_spec["requires_explanatory_figures"] is True
     assert solve_spec["expected_figures"] is True
+    assert solve_spec["requires_figures_by_problem"] is True
+    assert solve_spec["required_feasible_count"] == 0
+    assert solve_spec["blocked_count"] == 3
 
 
 def test_render_spectrum_request_from_csv_data_file(tmp_path: Path) -> None:
-    from app.core.workflow import _render_required_requests_deterministically
-
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data" / "spectrum.csv").write_text(
         "wavenumber,reflectance\n1000,0.2\n1010,0.25\n1020,0.23\n",
         encoding="utf-8",
     )
 
-    report = _render_required_requests_deterministically(
+    report = FigureStage.render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={"verified_results": []},
         required_requests=[
@@ -1690,9 +1731,177 @@ def test_figure_plan_blocks_placeholder_linked_result_ids(tmp_path: Path) -> Non
     assert req["blocked_reason"] == "placeholder_linked_result_ids"
 
 
-def test_required_figure_requests_filters_blocked_and_infeasible() -> None:
-    from app.core.workflow import _required_figure_requests
+def test_figure_plan_keeps_problem_need_when_all_requests_blocked(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
 
+    solve_spec = {
+        "subproblems": [
+            {
+                "id": "q1",
+                "objective": "拟合与残差分析",
+                "method": "fit residual",
+                "steps": ["fit", "residual"],
+                "expected_outputs": ["拟合参数"],
+            }
+        ],
+        "figure_requests": [],
+    }
+
+    plan = FigurePlanBuilder.build(
+        question="请进行拟合并给出残差分析图",
+        solve_spec=solve_spec,
+        problem_facts={},
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    assert plan["requires_figures"] is True
+    assert plan["requires_figures_by_problem"] is True
+    assert plan["required_feasible_count"] == 0
+    assert plan["blocked_count"] > 0
+
+
+def test_figure_plan_pending_result_binding_not_required(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    solve_spec = {
+        "subproblems": [{"id": "q1", "objective": "轨迹遮蔽分析"}],
+        "figure_requests": [
+            {
+                "id": "fig_q1_traj",
+                "subproblem_id": "q1",
+                "figure_kind": "result_figure",
+                "semantic_role": "trajectory_shielding",
+                "required": True,
+                "required_data": ["missile_trajectory.json", "cloud_center_trajectory.json", "shielding_intervals.json"],
+                "linked_result_ids": ["q1_traj_result"],
+                "depends_on": {
+                    "data_files": ["missile_trajectory.json", "cloud_center_trajectory.json", "shielding_intervals.json"],
+                    "result_ids": ["q1_traj_result"],
+                },
+            }
+        ],
+    }
+
+    plan = FigurePlanBuilder.build(
+        question="轨迹遮蔽图",
+        solve_spec=solve_spec,
+        problem_facts={},
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+    req = plan["figure_requests"][0]
+    assert req["status"] == "blocked"
+    assert req["required"] is False
+    assert req["blocked_reason"] == "pending_result_binding"
+    assert req["result_binding_status"] == "pending_result_binding"
+
+
+def test_quality_gate_reports_blocked_required_by_problem() -> None:
+    registry = {
+        "verified_results": [{"id": "r1", "status": "verified"}],
+        "blocked_results": [],
+        "summary": {"verified_count": 1, "blocked_count": 0},
+    }
+    passed, reason = FigureStage.quality_gate_before_writing(
+        registry,
+        True,
+        [],
+        [],
+        [],
+        "standard",
+        requires_figures_by_problem=True,
+        blocked_requests=[
+            {
+                "id": "fig_q1_fit",
+                "status": "blocked",
+                "blocked_reason": "unsupported_renderer:fitting_curve",
+            }
+        ],
+    )
+    assert passed is False
+    assert "blocked_required_by_problem_count" in reason
+
+
+def test_render_fitting_request_from_csv_data_file(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "fit.csv").write_text(
+        "x,observed,fitted\n1,1.0,0.9\n2,2.1,2.0\n3,3.05,3.0\n",
+        encoding="utf-8",
+    )
+
+    report = FigureStage.render_required_requests_deterministically(
+        work_dir=str(tmp_path),
+        result_registry={"verified_results": [{"id": "q1_fit_result", "value": 1.0}]},
+        required_requests=[
+            {
+                "id": "fig_q1_fitting_curve",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "fitting_curve",
+                "expected_content": ["拟合曲线"],
+                "required_data": ["data/fit.csv"],
+            }
+        ],
+        chart_language="Simplified Chinese",
+    )
+
+    assert report["created_images"]
+    assert report["satisfied"]
+
+
+def test_figure_plan_reevaluate_promotes_pending_binding_after_solver(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "fit.csv").write_text(
+        "x,observed,fitted\n1,1.0,0.9\n2,2.1,2.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "result_registry.json").write_text(
+        json.dumps(
+            {
+                "verified_results": [{"id": "q1_fit_result", "value": 1.23}],
+                "blocked_results": [],
+                "summary": {"verified_count": 1, "blocked_count": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    requests = [
+        {
+            "id": "fig_q1_fitting_curve",
+            "subproblem_id": "q1",
+            "figure_kind": "result_figure",
+            "semantic_role": "fitting_curve",
+            "required": True,
+            "status": "blocked",
+            "blocked_reason": "pending_result_binding",
+            "required_data": ["data/fit.csv"],
+            "linked_result_ids": ["q1_fit_result"],
+            "depends_on": {
+                "data_files": ["data/fit.csv"],
+                "result_ids": ["q1_fit_result"],
+            },
+        }
+    ]
+
+    reevaluated = FigurePlanBuilder.reevaluate_requests(
+        requests=requests,
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    req = reevaluated[0]
+    assert req["required"] is True
+    assert req["status"] == "required"
+    assert req["result_binding_status"] == "verified_result_bound"
+
+
+def test_required_figure_requests_filters_blocked_and_infeasible() -> None:
     solve_spec = {
         "figure_requests": [
             {"id": "a", "required": True, "status": "required", "feasible": True},
@@ -1702,8 +1911,82 @@ def test_required_figure_requests_filters_blocked_and_infeasible() -> None:
         ]
     }
 
-    required = _required_figure_requests(solve_spec)
+    required = FigureStage.required_figure_requests(solve_spec)
     assert [item["id"] for item in required] == ["a"]
+
+
+def test_figure_data_protocol_contract_includes_phase2_roles() -> None:
+    contract = FigureStage.figure_data_protocol_contract(
+        [
+            {
+                "id": "fig_q1_fit",
+                "semantic_role": "fitting_curve",
+                "required_data": ["data/q1_observed_vs_fitted.csv"],
+                "linked_result_ids": ["q1_fitting_result"],
+            },
+            {
+                "id": "fig_q1_res",
+                "semantic_role": "residual_plot",
+                "required_data": ["data/q1_residuals.csv"],
+                "linked_result_ids": ["q1_residual_result"],
+            },
+            {
+                "id": "fig_q1_cmp",
+                "semantic_role": "comparison_bar",
+                "required_data": ["data/q1_method_comparison.csv"],
+                "linked_result_ids": ["q1_comparison_result"],
+            },
+        ]
+    )
+
+    assert "fitting_curve" in contract
+    assert "x, observed, fitted" in contract
+    assert "residual_plot" in contract
+    assert "x, residual" in contract
+    assert "comparison_bar" in contract
+    assert "method, metric, value" in contract
+
+
+def test_missing_reason_summary_groups_phase2_column_missing() -> None:
+    summary = FigureStage.missing_reason_summary(
+        [
+            {"reason": "missing_fitting_columns"},
+            {"reason": "missing_residual_columns"},
+            {"reason": "missing_comparison_columns"},
+        ]
+    )
+    assert summary["missing_source_data"] == 3
+
+
+def test_figure_stage_workflow_issue_summary_counts() -> None:
+    from app.core.figure_stage import FigureStage
+
+    issues = FigureStage.normalize_workflow_issues(
+        {
+            "workflow_issues": [
+                {
+                    "code": "FIGURE_REQUEST_BLOCKED",
+                    "severity": "warning",
+                    "stage": "figure_plan",
+                    "reason": "missing_source_data",
+                    "request_id": "fig_1",
+                },
+                {
+                    "code": "FIGURE_REQUEST_BLOCKED",
+                    "severity": "warning",
+                    "stage": "figure_plan",
+                    "reason": "missing_source_data",
+                    "request_id": "fig_2",
+                },
+            ]
+        }
+    )
+    summary = FigureStage.workflow_issue_summary(issues)
+
+    assert summary["count"] == 2
+    assert summary["by_code"].get("FIGURE_REQUEST_BLOCKED") == 2
+    assert summary["by_stage"].get("figure_plan") == 2
+    assert summary["top_reasons"].get("missing_source_data") == 2
 
 
 def test_explanatory_figure_passes_without_linked_result_ids(tmp_path: Path) -> None:

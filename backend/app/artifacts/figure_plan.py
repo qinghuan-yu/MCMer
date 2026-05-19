@@ -17,6 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.artifacts.protocols import (
+    DEFAULT_FIGURE_CAPABILITIES,
+    FigureRequestState,
+    WorkflowIssue,
+)
 from app.utils.common_utils import save_json
 
 
@@ -25,76 +30,6 @@ PLACEHOLDER_RESULT_IDS = {
     "result_series",
     "placeholder_result",
     "todo_result",
-}
-
-
-FIGURE_CAPABILITIES: dict[str, dict[str, Any]] = {
-    "trajectory_shielding": {
-        "renderer": "render_trajectory_shielding_2d",
-        "requires_data": False,
-        "requires_verified_result": True,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "distance_time_curve": {
-        "renderer": "render_distance_time_curve",
-        "requires_data": False,
-        "requires_verified_result": True,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "geometry_schematic": {
-        "renderer": "render_geometry_schematic",
-        "requires_data": False,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "physical_principle_schematic": {
-        "renderer": "render_geometry_schematic",
-        "requires_data": False,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "optical_path_diagram": {
-        "renderer": "render_geometry_schematic",
-        "requires_data": False,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "timeline_schematic": {
-        "renderer": "render_timeline_schematic",
-        "requires_data": False,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "trajectory_overview": {
-        "renderer": "render_geometry_schematic",
-        "requires_data": False,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "optimization_variable_diagram": {
-        "renderer": "render_geometry_schematic",
-        "requires_data": False,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "algorithm_flowchart": {
-        "renderer": "render_algorithm_flowchart",
-        "requires_data": False,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "spectrum_curve": {
-        "renderer": "render_spectrum_curve",
-        "requires_data": True,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
-    "peak_valley_annotation": {
-        "renderer": "render_peak_valley_annotation",
-        "requires_data": True,
-        "requires_verified_result": False,
-        "supports_languages": ["Simplified Chinese", "English"],
-    },
 }
 
 
@@ -341,6 +276,20 @@ class FigurePlanBuilder:
         )
 
         required_count = sum(1 for item in requests if isinstance(item, dict) and bool(item.get("required", True)))
+        required_result_count = sum(
+            1
+            for item in requests
+            if isinstance(item, dict)
+            and bool(item.get("required", True))
+            and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+        )
+        required_explanatory_count = sum(
+            1
+            for item in requests
+            if isinstance(item, dict)
+            and bool(item.get("required", True))
+            and str(item.get("figure_kind") or "").strip().lower() == "explanatory_figure"
+        )
         requires_result_figures = any(
             isinstance(item, dict)
             and bool(item.get("required", True))
@@ -355,17 +304,27 @@ class FigurePlanBuilder:
         )
 
         plan = {
-            "requires_figures": required_count > 0,
-            "requires_result_figures": requires_result_figures,
-            "requires_explanatory_figures": requires_explanatory_figures,
+            "requires_figures": bool(need.requires_figures),
+            "requires_result_figures": bool(need.requires_result_figures),
+            "requires_explanatory_figures": bool(need.requires_explanatory_figures),
+            "requires_figures_by_problem": bool(need.requires_figures),
+            "requires_result_figures_by_problem": bool(need.requires_result_figures),
+            "requires_explanatory_figures_by_problem": bool(need.requires_explanatory_figures),
             "confidence": need.confidence,
             "reasons": need.reasons,
             "detected_needs": need.detected_needs,
             "domain_type": need.domain_type,
             "planning_basis": cls._planning_basis_from_reasons(need.reasons),
+            "required_feasible_count": required_count,
+            "required_feasible_result_count": required_result_count,
+            "required_feasible_explanatory_count": required_explanatory_count,
             "required_count": required_count,
             "recommended_count": sum(1 for item in requests if isinstance(item, dict) and str(item.get("status") or "") == "recommended"),
             "blocked_count": sum(1 for item in requests if isinstance(item, dict) and str(item.get("status") or "") == "blocked"),
+            "workflow_issues": [
+                issue.to_dict()
+                for issue in cls._issues_from_requests(requests)
+            ],
             "figure_requests": requests,
         }
 
@@ -451,32 +410,44 @@ class FigurePlanBuilder:
             req["depends_on"] = depends_on
             req["required_data"] = data_files_list
 
-            capability = FIGURE_CAPABILITIES.get(role)
+            capability = DEFAULT_FIGURE_CAPABILITIES.get(role)
             blocked_reason = ""
 
             if not capability:
                 blocked_reason = f"unsupported_renderer:{role or 'unknown'}"
-            elif chart_language not in (capability.get("supports_languages") or []):
+            elif chart_language not in set(capability.supports_languages):
                 blocked_reason = f"unsupported_chart_language:{chart_language}"
-            elif bool(capability.get("requires_data")) and kind == "result_figure":
+            elif bool(capability.requires_data) and kind == "result_figure":
                 candidates = [item for item in data_files_list if item != "result_registry.json"]
                 if not candidates:
                     blocked_reason = "missing_source_data"
                 elif not any(item in available_set for item in candidates):
                     blocked_reason = "missing_source_data"
-            if not blocked_reason and bool(capability and capability.get("requires_verified_result")) and kind == "result_figure":
+            if not blocked_reason and bool(capability and capability.requires_verified_result) and kind == "result_figure":
                 if placeholder_ids:
                     blocked_reason = "placeholder_linked_result_ids"
                 elif not linked_ids_list:
                     blocked_reason = "missing_verified_result_binding"
+                elif not verified_result_ids:
+                    blocked_reason = "pending_result_binding"
                 elif verified_result_ids and any(item not in verified_result_ids for item in linked_ids_list):
                     blocked_reason = "linked_result_not_verified"
+
+            if kind == "result_figure" and bool(capability and capability.requires_verified_result):
+                if blocked_reason == "pending_result_binding":
+                    req["result_binding_status"] = "pending_result_binding"
+                elif not blocked_reason:
+                    req["result_binding_status"] = "verified_result_bound"
+                else:
+                    req["result_binding_status"] = "binding_blocked"
+            else:
+                req["result_binding_status"] = "not_required"
 
             if blocked_reason:
                 req["required"] = False
                 req["must_include_in_paper"] = False
                 req["recommended"] = True
-                req["status"] = "blocked"
+                req["status"] = FigureRequestState.blocked.value
                 req["blocked_reason"] = blocked_reason
                 req["feasible"] = False
             else:
@@ -485,23 +456,62 @@ class FigurePlanBuilder:
                     req["required"] = True
                     req["must_include_in_paper"] = bool(req.get("must_include_in_paper", True))
                     req["recommended"] = False
-                    req["status"] = "required"
+                    req["status"] = FigureRequestState.required.value
                     req.pop("blocked_reason", None)
                 else:
                     req["required"] = False
                     req["must_include_in_paper"] = False
                     req["recommended"] = True
-                    req["status"] = "recommended"
+                    req["status"] = FigureRequestState.recommended.value
                     req.pop("blocked_reason", None)
             evaluated.append(req)
 
         return evaluated
 
     @classmethod
+    def _issues_from_requests(cls, requests: list[dict[str, Any]]) -> list[WorkflowIssue]:
+        issues: list[WorkflowIssue] = []
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("status") or "").strip() != FigureRequestState.blocked.value:
+                continue
+            request_id = str(item.get("id") or "").strip()
+            reason = str(item.get("blocked_reason") or "").strip() or "blocked"
+            issues.append(
+                WorkflowIssue(
+                    code="FIGURE_REQUEST_BLOCKED",
+                    severity="warning",
+                    stage="figure_plan",
+                    reason=reason,
+                    request_id=request_id,
+                    action="Implement renderer, provide source data, or keep downgraded as recommended.",
+                )
+            )
+        return issues
+
+    @classmethod
     def save(cls, work_dir: str, figure_plan: dict[str, Any]) -> str:
         path = str(Path(work_dir) / "figure_plan.json")
         save_json(figure_plan, path)
         return path
+
+    @classmethod
+    def reevaluate_requests(
+        cls,
+        requests: list[dict[str, Any]],
+        chart_language: str,
+        work_dir: str,
+    ) -> list[dict[str, Any]]:
+        available_data_files = cls._discover_input_files(work_dir)
+        verified_result_ids = cls._load_verified_result_ids(work_dir)
+        normalized = [dict(item) for item in requests if isinstance(item, dict)]
+        return cls._apply_capability_constraints(
+            requests=normalized,
+            chart_language=chart_language,
+            available_data_files=available_data_files,
+            verified_result_ids=verified_result_ids,
+        )
 
     @classmethod
     def _planning_basis_from_reasons(cls, reasons: list[str]) -> list[str]:

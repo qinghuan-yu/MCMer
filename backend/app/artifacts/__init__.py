@@ -18,6 +18,7 @@ from app.artifacts.renderers import (
     render_verified_summary,
 )
 from app.artifacts.diagnostics import GateReport, FigureGateReport, QualityGateReport, BudgetReport, WorkflowTrace
+from app.artifacts.protocols import FigureRequestState, WorkflowIssue, FigureCapability, DEFAULT_FIGURE_CAPABILITIES
 
 __all__ = [
     "ArtifactRegistry",
@@ -37,4 +38,8 @@ __all__ = [
     "QualityGateReport",
     "BudgetReport",
     "WorkflowTrace",
+    "FigureRequestState",
+    "WorkflowIssue",
+    "FigureCapability",
+    "DEFAULT_FIGURE_CAPABILITIES",
 ]

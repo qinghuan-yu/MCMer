@@ -13,6 +13,52 @@ from pathlib import Path
 from typing import Any
 
 
+_FIGURE_KEYWORDS = re.compile(
+    r"(?:图表|作图|绘图|制图|画图|插图|示意图|流程图|架构图|拓扑图|"
+    r"折线图|散点图|柱状图|饼图|箱线图|热力图|等高线图|雷达图|直方图|"
+    r"figure|chart|plot|graph|diagram|visualization|visuali[sz]e|"
+    r"scatter|histogram|heatmap|contour|boxplot|bar\s*chart|pie\s*chart|"
+    r"折线|柱状|散点|热力|等高线|箱线|雷达|可视化)",
+    re.IGNORECASE,
+)
+
+
+def _detect_document_language(text: str) -> str:
+    combined = str(text or "")
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", combined))
+    latin_words = len(re.findall(r"\b[A-Za-z][A-Za-z0-9'-]*\b", combined))
+
+    if latin_words >= 80 and latin_words >= cjk_count * 2:
+        return "English"
+    if cjk_count >= 30 and cjk_count > latin_words:
+        return "Simplified Chinese"
+    return "English" if latin_words > cjk_count else "Simplified Chinese"
+
+
+def _solve_spec_expects_figures(
+    solve_spec: dict[str, Any],
+    question: str,
+    breakdown: str,
+) -> bool:
+    if isinstance(solve_spec, dict):
+        by_problem = solve_spec.get("requires_figures_by_problem")
+        if isinstance(by_problem, bool):
+            return by_problem
+
+        req_result = solve_spec.get("requires_result_figures")
+        req_expl = solve_spec.get("requires_explanatory_figures")
+        if isinstance(req_result, bool) or isinstance(req_expl, bool):
+            return bool(req_result) or bool(req_expl)
+
+        for key in ("requires_figures", "expected_figures"):
+            val = solve_spec.get(key)
+            if isinstance(val, bool):
+                return val
+
+    combined = "\n".join(filter(None, [question, breakdown]))
+    return bool(_FIGURE_KEYWORDS.search(combined))
+
+
 @dataclass(frozen=True)
 class ProblemContract:
     """Immutable contract describing the problem's language and output requirements.
@@ -54,8 +100,6 @@ class ProblemContract:
         workflow_mode: str = "standard",
     ) -> ProblemContract:
         """Build a contract from the question text and optional solve_spec."""
-        from app.core.workflow import _detect_document_language, _solve_spec_expects_figures
-
         chart_language = _detect_document_language(question)
 
         if chart_language == "English":

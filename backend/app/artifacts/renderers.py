@@ -499,6 +499,212 @@ def render_peak_valley_annotation(
     return artifact
 
 
+def render_fitting_curve(
+    x_values: list[float],
+    observed_values: list[float],
+    fitted_values: list[float],
+    title: str,
+    output_path: str,
+    chart_language: str = "Simplified Chinese",
+    figure_request_id: str = "",
+    subproblem_id: str = "",
+    semantic_role: str = "fitting_curve",
+    depicts: list[str] | None = None,
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    work_dir: str | None = None,
+) -> dict[str, Any]:
+    """Render deterministic observed-vs-fitted curve (result figure)."""
+    if (
+        not x_values
+        or not observed_values
+        or not fitted_values
+        or len(x_values) != len(observed_values)
+        or len(x_values) != len(fitted_values)
+    ):
+        return {}
+
+    _ensure_matplotlib()
+    _configure_fonts(chart_language)
+
+    if chart_language == "Simplified Chinese":
+        x_label, y_label = "自变量", "观测/拟合值"
+        obs_label, fit_label = "观测值", "拟合值"
+    else:
+        x_label, y_label = "X", "Observed/Fitted"
+        obs_label, fit_label = "Observed", "Fitted"
+
+    fig, ax = _plt.subplots(figsize=(9, 5.2))
+    ax.scatter(x_values, observed_values, color="#1f77b4", s=28, label=obs_label)
+    ax.plot(x_values, fitted_values, color="#d62728", linewidth=2.0, label=fit_label)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(True, alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    _save_figure(fig, output_path)
+
+    rel_path = _to_relative_path(output_path)
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, x_label, y_label, obs_label, fit_label],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or ["result_registry.json"],
+        figure_role=semantic_role,
+        figure_kind="result_figure",
+    )
+    artifact.update(
+        {
+            "figure_request_id": figure_request_id,
+            "subproblem_id": subproblem_id,
+            "semantic_role": semantic_role,
+            "depicts": depicts or [semantic_role],
+            "data_bindings": source_data or ["result_registry.json"],
+            "semantic_verified": True,
+            "evidence_binding_type": "verified_result",
+        }
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact
+
+
+def render_residual_plot(
+    x_values: list[float],
+    residual_values: list[float],
+    title: str,
+    output_path: str,
+    chart_language: str = "Simplified Chinese",
+    figure_request_id: str = "",
+    subproblem_id: str = "",
+    semantic_role: str = "residual_plot",
+    depicts: list[str] | None = None,
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    work_dir: str | None = None,
+) -> dict[str, Any]:
+    """Render deterministic residual plot with y=0 baseline."""
+    if not x_values or not residual_values or len(x_values) != len(residual_values):
+        return {}
+    if all((val != val) for val in residual_values):
+        return {}
+
+    _ensure_matplotlib()
+    _configure_fonts(chart_language)
+
+    if chart_language == "Simplified Chinese":
+        x_label, y_label = "自变量", "残差"
+        baseline_label = "零参考线"
+    else:
+        x_label, y_label = "X", "Residual"
+        baseline_label = "Zero baseline"
+
+    fig, ax = _plt.subplots(figsize=(9, 5.2))
+    ax.scatter(x_values, residual_values, color="#1f77b4", s=24, label=y_label)
+    ax.axhline(0.0, color="#d62728", linestyle="--", linewidth=1.6, label=baseline_label)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(True, alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    _save_figure(fig, output_path)
+
+    rel_path = _to_relative_path(output_path)
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, x_label, y_label, baseline_label],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or ["result_registry.json"],
+        figure_role=semantic_role,
+        figure_kind="result_figure",
+    )
+    artifact.update(
+        {
+            "figure_request_id": figure_request_id,
+            "subproblem_id": subproblem_id,
+            "semantic_role": semantic_role,
+            "depicts": depicts or [semantic_role],
+            "data_bindings": source_data or ["result_registry.json"],
+            "semantic_verified": True,
+            "evidence_binding_type": "verified_result",
+        }
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact
+
+
+def render_comparison_bar(
+    categories: list[str],
+    values: list[float],
+    title: str,
+    output_path: str,
+    chart_language: str = "Simplified Chinese",
+    figure_request_id: str = "",
+    subproblem_id: str = "",
+    semantic_role: str = "comparison_bar",
+    depicts: list[str] | None = None,
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    work_dir: str | None = None,
+) -> dict[str, Any]:
+    """Render deterministic comparison bar chart."""
+    if not categories or not values or len(categories) != len(values):
+        return {}
+
+    _ensure_matplotlib()
+    _configure_fonts(chart_language)
+
+    if chart_language == "Simplified Chinese":
+        x_label, y_label = "方法/类别", "指标值"
+    else:
+        x_label, y_label = "Method/Category", "Metric Value"
+
+    fig, ax = _plt.subplots(figsize=(9.2, 5.4))
+    x = list(range(len(categories)))
+    bars = ax.bar(x, values, color="#4472C4", edgecolor="white")
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, rotation=30, ha="right")
+    for idx, bar in enumerate(bars):
+        val = values[idx]
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{val:.4g}", ha="center", va="bottom", fontsize=9)
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    _save_figure(fig, output_path)
+
+    rel_path = _to_relative_path(output_path)
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, x_label, y_label, *categories[:5]],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or ["result_registry.json"],
+        figure_role=semantic_role,
+        figure_kind="result_figure",
+    )
+    artifact.update(
+        {
+            "figure_request_id": figure_request_id,
+            "subproblem_id": subproblem_id,
+            "semantic_role": semantic_role,
+            "depicts": depicts or [semantic_role],
+            "data_bindings": source_data or ["result_registry.json"],
+            "semantic_verified": True,
+            "evidence_binding_type": "verified_result",
+        }
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact
+
+
 def render_line_chart(
     x_data: list[float],
     y_data: list[float] | list[list[float]],
