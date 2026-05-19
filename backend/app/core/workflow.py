@@ -9,6 +9,10 @@ from typing import AsyncGenerator
 from app.artifacts.contracts import ProblemContract
 from app.artifacts.registry import ArtifactRegistry
 from app.artifacts.exporters import DocumentFinalizer
+from app.artifacts.renderers import (
+    render_distance_time_curve,
+    render_trajectory_shielding_2d,
+)
 from app.artifacts.diagnostics import (
     FigureGateReport,
     QualityGateReport,
@@ -69,6 +73,54 @@ def _message(agent: str, content: str, msg_type: str = "success", section: str =
     return payload
 
 
+def _build_completed_task_result(
+    task_id: str,
+    task_type: str,
+    work_dir: str,
+    paper_path: str,
+    docx_path: str,
+    notebook_path: str,
+) -> dict:
+    """Build a normalized completed TaskResult payload."""
+    return {
+        "type": "result",
+        "data": TaskResult(
+            task_id=task_id,
+            status="completed",
+            task_type=task_type,
+            paper_path=paper_path,
+            docx_path=docx_path,
+            notebook_path=notebook_path,
+            work_dir=work_dir,
+        ).model_dump(),
+    }
+
+
+def _build_failed_task_result(
+    task_id: str,
+    task_type: str,
+    work_dir: str,
+    error_message: str,
+    paper_path: str = "",
+    docx_path: str = "",
+    notebook_path: str = "",
+) -> dict:
+    """Build a normalized failed TaskResult payload."""
+    return {
+        "type": "result",
+        "data": TaskResult(
+            task_id=task_id,
+            status="failed",
+            task_type=task_type,
+            error_message=error_message,
+            paper_path=paper_path,
+            docx_path=docx_path,
+            notebook_path=notebook_path,
+            work_dir=work_dir,
+        ).model_dump(),
+    }
+
+
 def _unique_structured_result_files(*file_groups: list[str]) -> list[str]:
     return list(
         dict.fromkeys(
@@ -96,8 +148,10 @@ def _is_image_path(path: str) -> bool:
 
 def _quality_gate_before_writing(
     result_registry: dict[str, object],
-    paper_ready_images: list[str],
     expected_figures: bool,
+    required_requests: list[dict[str, object]],
+    satisfied_requests: list[dict[str, object]],
+    missing_requests: list[dict[str, object]],
     workflow_mode: str,
 ) -> tuple[bool, str]:
     """Return (passed, reason). If passed is False, reason explains why."""
@@ -112,13 +166,284 @@ def _quality_gate_before_writing(
             "请检查求解阶段是否正确产出 key_results 并标记为 verified。"
         )
 
-    if expected_figures and not paper_ready_images:
+    if expected_figures and required_requests and missing_requests:
+        missing_ids = [str(item.get("figure_request_id") or "").strip() for item in missing_requests]
+        missing_ids = [item for item in missing_ids if item]
         return False, (
-            "任务预期有图表（expected_figures=true），但没有通过 FigureArtifact 门控的合格图。"
-            "请检查图表阶段是否正确使用 save_paper_figure() 产出并注册图表。"
+            "任务预期有图表（expected_figures=true），但未满足全部 required figure_requests。"
+            f"missing={missing_ids}。"
+            "请检查图表阶段是否为每个 required request 产出 semantic_verified=true 且绑定 figure_request_id 的图。"
+        )
+
+    if expected_figures and not required_requests:
+        return False, (
+            "任务预期有图表（expected_figures=true），但 solve_spec 未提供 figure_requests。"
+            "请在求解规格阶段生成 required figure_requests。"
+        )
+
+    if expected_figures and required_requests and not satisfied_requests:
+        return False, (
+            "任务预期有图表（expected_figures=true），但没有任何 required figure_request 被满足。"
+            "请确保产物包含 figure_request_id 且 semantic_verified=true。"
         )
 
     return True, ""
+
+
+def _infer_figure_role(text: str) -> str:
+    lowered = text.lower()
+    if any(token in lowered for token in ["轨迹", "trajectory"]):
+        return "trajectory_shielding"
+    if any(token in lowered for token in ["收敛", "convergence", "优化"]):
+        return "optimization_convergence"
+    if any(token in lowered for token in ["距离", "distance", "时间", "time"]):
+        return "distance_time_curve"
+    if any(token in lowered for token in ["敏感性", "sensitivity"]):
+        return "sensitivity_analysis"
+    return "result_visualization"
+
+
+def _ensure_figure_requests_in_solve_spec(
+    solve_spec: dict[str, object],
+    chart_language: str,
+) -> list[dict[str, object]]:
+    """Ensure solve_spec has explicit figure_requests when figures are expected."""
+    existing = solve_spec.get("figure_requests") if isinstance(solve_spec, dict) else None
+    if isinstance(existing, list) and any(isinstance(item, dict) for item in existing):
+        normalized = [item for item in existing if isinstance(item, dict)]
+        solve_spec["figure_requests"] = normalized
+        return normalized
+
+    requests: list[dict[str, object]] = []
+    subproblems = _solve_spec_subproblems(solve_spec)
+
+    def _default_required_data_for_role(role: str) -> list[str]:
+        if role == "trajectory_shielding":
+            return [
+                "missile_trajectory.json",
+                "cloud_center_trajectory.json",
+                "shielding_intervals.json",
+            ]
+        if role == "distance_time_curve":
+            return ["distance_time_series.csv"]
+        if role == "optimization_convergence":
+            return ["optimization_history.csv"]
+        if role == "sensitivity_analysis":
+            return ["sensitivity_results.csv"]
+        return ["key_result_series.csv"]
+    for index, subproblem in enumerate(subproblems, start=1):
+        text = json.dumps(subproblem, ensure_ascii=False)
+        if not _FIGURE_KEYWORDS.search(text):
+            continue
+        subproblem_id = str(subproblem.get("id") or f"problem_{index}").strip() or f"problem_{index}"
+        role = _infer_figure_role(text)
+        request_id = f"{subproblem_id}_{role}"
+        requests.append(
+            {
+                "id": request_id,
+                "subproblem_id": subproblem_id,
+                "required": True,
+                "role": role,
+                "expected_content": [str(subproblem.get("objective") or "").strip() or role],
+                "required_data": _default_required_data_for_role(role),
+                "language": chart_language,
+            }
+        )
+
+    solve_spec["figure_requests"] = requests
+    return requests
+
+
+def _required_figure_requests(solve_spec: dict[str, object]) -> list[dict[str, object]]:
+    requests = solve_spec.get("figure_requests", []) if isinstance(solve_spec, dict) else []
+    if not isinstance(requests, list):
+        return []
+    return [req for req in requests if isinstance(req, dict) and bool(req.get("required", True))]
+
+
+def _has_semantic_required_data_contract(role: str, required_data: list[str]) -> bool:
+    """Check whether required_data is specific enough for semantic verification."""
+    normalized = [str(item).strip().lower() for item in required_data if str(item).strip()]
+    if not normalized:
+        return False
+    if len(normalized) == 1 and normalized[0] == "result_registry.json":
+        return False
+
+    merged = " ".join(normalized)
+    if role == "trajectory_shielding":
+        return (
+            "trajectory" in merged
+            and ("shield" in merged or "cloud" in merged)
+        )
+    if role == "distance_time_curve":
+        return "distance" in merged and "time" in merged
+    return len(normalized) >= 1
+
+
+def _deterministic_series_from_registry(
+    result_registry: dict[str, object],
+    required_data: list[str],
+) -> tuple[list[float], list[float], list[str]]:
+    verified = result_registry.get("verified_results", []) if isinstance(result_registry, dict) else []
+    if not isinstance(verified, list):
+        return [], [], []
+
+    values: list[float] = []
+    linked_ids: list[str] = []
+    matched_sources: set[str] = set()
+
+    required_set = {str(item).strip() for item in required_data if str(item).strip()}
+
+    for entry in verified:
+        if not isinstance(entry, dict):
+            continue
+        entry_sources = [str(item).strip() for item in (entry.get("source_data", []) or []) if str(item).strip()]
+        if required_set and not (required_set.intersection(set(entry_sources))):
+            continue
+        value = _coerce_numeric_value(entry.get("value"))
+        if value is None:
+            continue
+        result_id = str(entry.get("id") or "").strip()
+        if not result_id:
+            continue
+        values.append(value)
+        linked_ids.append(result_id)
+        for src in entry_sources:
+            matched_sources.add(src)
+        if len(values) >= 24:
+            break
+
+    x_values = [float(index + 1) for index in range(len(values))]
+    return x_values, values, sorted(matched_sources)
+
+
+def _render_required_requests_deterministically(
+    work_dir: str,
+    result_registry: dict[str, object],
+    required_requests: list[dict[str, object]],
+    chart_language: str,
+) -> dict[str, object]:
+    """Attempt deterministic rendering per required request.
+
+    Returns structured status with created images and missing reasons.
+    """
+    created_images: list[str] = []
+    satisfied: list[dict[str, object]] = []
+    missing: list[dict[str, object]] = []
+
+    for req in required_requests:
+        req_id = str(req.get("id") or "").strip()
+        subproblem_id = str(req.get("subproblem_id") or "").strip()
+        role = str(req.get("role") or "").strip().lower()
+        expected_content = req.get("expected_content", [])
+        required_data = req.get("required_data", [])
+        required_data_list = [str(item).strip() for item in required_data if str(item).strip()] if isinstance(required_data, list) else []
+
+        if not req_id:
+            continue
+        if role not in {"trajectory_shielding", "distance_time_curve"}:
+            missing.append({
+                "figure_request_id": req_id,
+                "required": True,
+                "satisfied": False,
+                "reason": f"unsupported_deterministic_role:{role or 'unknown'}",
+            })
+            continue
+
+        if not _has_semantic_required_data_contract(role, required_data_list):
+            missing.append({
+                "figure_request_id": req_id,
+                "required": True,
+                "satisfied": False,
+                "reason": "insufficient_semantic_required_data_contract",
+            })
+            continue
+
+        if required_data_list:
+            missing_files = [
+                src for src in required_data_list
+                if not (Path(work_dir) / src).exists()
+            ]
+            if missing_files:
+                missing.append({
+                    "figure_request_id": req_id,
+                    "required": True,
+                    "satisfied": False,
+                    "reason": f"required_data_missing:{missing_files}",
+                })
+                continue
+
+        x_values, y_values, matched_sources = _deterministic_series_from_registry(
+            result_registry,
+            required_data_list,
+        )
+        if len(x_values) < 2:
+            missing.append({
+                "figure_request_id": req_id,
+                "required": True,
+                "satisfied": False,
+                "reason": "insufficient_verified_numeric_series",
+            })
+            continue
+
+        output_path = str(Path(work_dir) / "output" / f"{req_id}.png")
+        title = (
+            str(expected_content[0]).strip()
+            if isinstance(expected_content, list) and expected_content and str(expected_content[0]).strip()
+            else ("轨迹遮蔽过程" if chart_language == "Simplified Chinese" else "Trajectory Shielding")
+        )
+
+        if role == "trajectory_shielding":
+            artifact = render_trajectory_shielding_2d(
+                points=list(zip(x_values, y_values)),
+                title=title,
+                output_path=output_path,
+                chart_language=chart_language,
+                figure_request_id=req_id,
+                subproblem_id=subproblem_id,
+                semantic_role="trajectory_shielding",
+                depicts=expected_content if isinstance(expected_content, list) else ["trajectory_shielding"],
+                linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                work_dir=work_dir,
+            )
+        else:
+            artifact = render_distance_time_curve(
+                times=x_values,
+                distances=y_values,
+                title=title,
+                output_path=output_path,
+                chart_language=chart_language,
+                figure_request_id=req_id,
+                subproblem_id=subproblem_id,
+                semantic_role="distance_time_curve",
+                depicts=expected_content if isinstance(expected_content, list) else ["distance_time_curve"],
+                linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                work_dir=work_dir,
+            )
+
+        artifact_path = str(artifact.get("path") or "").strip() if isinstance(artifact, dict) else ""
+        if artifact_path:
+            created_images.append(artifact_path)
+            satisfied.append({
+                "figure_request_id": req_id,
+                "required": True,
+                "satisfied": True,
+            })
+        else:
+            missing.append({
+                "figure_request_id": req_id,
+                "required": True,
+                "satisfied": False,
+                "reason": "renderer_failed",
+            })
+
+    return {
+        "created_images": list(dict.fromkeys(created_images)),
+        "satisfied": satisfied,
+        "missing": missing,
+    }
 
 
 def _generate_failure_report(
@@ -374,6 +699,13 @@ def _create_verified_result_summary_figure(
             "figure_role": "verified_result_summary",
             "linked_result_ids": ids,
             "source_data": ["result_registry.json", *source_files[:6]],
+            "paper_section": "diagnostics",
+            "semantic_verified": False,
+            "semantic_role": "verified_result_summary",
+            "figure_request_id": "diagnostic_verified_result_summary",
+            "subproblem_id": "diagnostics",
+            "depicts": ["verified_result_summary"],
+            "data_bindings": ["result_registry.json", *source_files[:6]],
         }
         existing = load_figure_manifest(work_dir)
         save_figure_manifest(work_dir, [*existing, artifact])
@@ -567,6 +899,9 @@ def _strict_chart_artifact_contract(document_language: str) -> str:
         "Do NOT use generic field names like 'title', 'axis labels', 'legend'.\n"
         "- If any visible chart text does not match the Chart language policy, set paper_ready=false and save the file under debug_artifacts/ or redraw it before registration.\n"
         "- The writer will only receive images that pass this metadata gate; unverified images are intentionally withheld from the paper.\n"
+        "- For required paper figures, you must also provide semantic fields in the generated_files artifact object: "
+        "figure_request_id, subproblem_id, semantic_role, depicts, data_bindings, semantic_verified=true.\n"
+        "- Diagnostic charts (including verified_result_summary) must use semantic_verified=false and paper_section='diagnostics'.\n"
     )
 
 
@@ -1469,6 +1804,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             solve_spec["expected_figures"] = expected_figures
 
+            figure_requests = _ensure_figure_requests_in_solve_spec(solve_spec, chart_language)
+            stage_outputs["figure_requests"] = figure_requests
+            stage_outputs["figure_request_count"] = len(figure_requests)
+
             # Upgrade ProblemContract with definitive figure requirement
             # from solve_spec (more accurate than initial heuristic)
             if expected_figures != contract.paper_requires_figures:
@@ -1754,6 +2093,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             chart_prompt = (
                 f"## 结果分析报告\n{stage_outputs['analysis']}\n\n"
                 f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 8000)}\n\n"
+                f"## figure_requests（逐项满足 required request）\n{_json_for_prompt((solve_spec or {}).get('figure_requests', []), 8000)}\n\n"
                 f"## 求解结果\n{solver_result.coder_response}\n\n"
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                 f"## 模型符号与假设\n{stage_outputs.get('modeling', '')}\n\n"
@@ -1765,6 +2105,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "请优先复用求解阶段已经登记的 generated_files 和已确认结果。"
                 "禁止重新设计模型、禁止重新做整题求解、禁止引入新的数值口径。"
                 "只有在论文所需图表缺失且能够直接基于 verified_results 或已登记源数据补图时，才允许补充绘图。"
+                "图表产物必须绑定 figure_request_id；required 图必须 semantic_verified=true。"
+                "如果产物是 diagnostics（如 verified_result_summary），必须 semantic_verified=false 且 paper_section='diagnostics'。"
                 "输出格式一致性校验清单；若因 verified_results 为空或证据不足而无法安全补图，必须明确写 blocked/skip 原因并直接收口。"
             )
             chart_result = await chart_agent.run(prompt=chart_prompt, subtask_title="图表与一致性")
@@ -1830,65 +2172,129 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             contract=contract,
         )
         paper_ready_images = art_registry.validate_for_paper()
+        required_requests = _required_figure_requests(solve_spec)
+
+        # Phase-2: deterministic-first recovery per required request.
+        if required_requests:
+            deterministic_report = _render_required_requests_deterministically(
+                work_dir=work_dir,
+                result_registry=result_registry,
+                required_requests=required_requests,
+                chart_language=chart_language,
+            )
+            if deterministic_report.get("created_images"):
+                chart_images = list(dict.fromkeys([
+                    *chart_images,
+                    *list(deterministic_report.get("created_images", [])),
+                ]))
+                stage_outputs["deterministic_request_recovery"] = deterministic_report
+                art_registry = ArtifactRegistry.load(
+                    work_dir,
+                    structured_result_files=structured_result_files_for_figures,
+                    contract=contract,
+                )
+                paper_ready_images = art_registry.validate_for_paper()
+
+        semantic_bundle = art_registry.build_figure_bundle()
+        missing_required_requests = list(semantic_bundle.missing_requests)
         image_evidence_paths = _generated_image_evidence_paths(
             work_dir,
             structured_result_files_for_figures,
             [*solver_images, *chart_images],
         )
-        if not paper_ready_images and image_evidence_paths:
+        if missing_required_requests:
             pre_recovery_image_evidence = [*solver_images, *chart_images]
             yield _progress(
                 task_id,
                 "charts",
                 0.84,
-                "Figure artifacts failed the language gate; repairing charts.",
+                "Deterministic 渲染后仍有 required figure 缺口，正在逐项 LLM 修复。",
                 current_subtask="Figure artifact repair",
             )
-            recovery_agent = CoderAgent(
-                task_id=task_id,
-                model=models["coder"],
-                work_dir=work_dir,
-                max_chat_turns=budget.coder.max_chat_turns,
-                max_retries=budget.coder.max_retries,
-                max_total_tool_calls=max(3, budget.coder.max_total_tool_calls),
-                max_wall_seconds=budget.coder.max_wall_seconds,
-                code_interpreter=code_interpreter,
-            )
-            recovery_prompt = (
-                f"## Locked chart language context\n{_json_for_prompt(chart_language_context, 4000)}\n\n"
-                f"{chart_language_policy}\n"
-                f"{_strict_chart_artifact_contract(chart_language)}\n"
-                "The previous run produced image files, but none passed the FigureArtifact gate. "
-                "Repair this by creating final paper figures with save_paper_figure(...). "
-                "Do not call plt.savefig for final paper images. Do not redo the numerical solve; reuse result_registry.json, existing CSV/JSON outputs, and verified data only.\n\n"
-                f"## Existing image evidence\n{_json_for_prompt(image_evidence_paths, 4000)}\n\n"
-                f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
-                f"## Structured result files\n{', '.join(structured_result_files_for_figures) if structured_result_files_for_figures else 'none'}\n\n"
-                "Write a structured result JSON for this repair stage. Every final figure in generated_files must be the exact object returned by save_paper_figure."
-            )
-            recovery_result = await recovery_agent.run(
-                prompt=recovery_prompt,
-                subtask_title="Figure artifact repair",
-            )
-            chart_result = recovery_result
-            chart_images = recovery_result.created_images
-            stage_outputs["chart_recovery"] = recovery_result.model_dump()
-            structured_result_files_for_figures = _unique_structured_result_files(
-                structured_result_files_for_figures,
-                recovery_result.structured_result_files,
-            )
-            _quarantine_unregistered_output_images(work_dir, structured_result_files_for_figures)
-            result_registry = build_result_registry(work_dir, structured_result_files_for_figures)
-            save_json(result_registry, result_registry_path)
-            stage_outputs["result_registry"] = result_registry
-            # Re-validate with ArtifactRegistry after repair
-            art_registry = ArtifactRegistry.load(
-                work_dir,
-                structured_result_files=structured_result_files_for_figures,
-                contract=contract,
-            )
-            paper_ready_images = art_registry.validate_for_paper()
-            yield _message("charts", _preview(recovery_result.coder_response), section="Figure artifact repair")
+            recovery_round_outputs: list[dict[str, object]] = []
+            # Execute one request at a time for precise failure localization.
+            for missing_req in list(missing_required_requests):
+                req_id = str(missing_req.get("figure_request_id") or "").strip()
+                if not req_id:
+                    continue
+
+                target_req = None
+                for req in required_requests:
+                    if str(req.get("id") or "").strip() == req_id:
+                        target_req = req
+                        break
+                if not target_req:
+                    continue
+
+                recovery_agent = CoderAgent(
+                    task_id=task_id,
+                    model=models["coder"],
+                    work_dir=work_dir,
+                    max_chat_turns=budget.coder.max_chat_turns,
+                    max_retries=budget.coder.max_retries,
+                    max_total_tool_calls=max(3, budget.coder.max_total_tool_calls // 2),
+                    max_wall_seconds=budget.coder.max_wall_seconds,
+                    code_interpreter=code_interpreter,
+                )
+                recovery_prompt = (
+                    f"## Locked chart language context\n{_json_for_prompt(chart_language_context, 4000)}\n\n"
+                    f"{chart_language_policy}\n"
+                    f"{_strict_chart_artifact_contract(chart_language)}\n"
+                    f"## 当前必须补齐的 figure_request\n{_json_for_prompt(target_req, 4000)}\n\n"
+                    f"## Existing image evidence\n{_json_for_prompt(image_evidence_paths, 4000)}\n\n"
+                    f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
+                    f"## Structured result files\n{', '.join(structured_result_files_for_figures) if structured_result_files_for_figures else 'none'}\n\n"
+                    "Only repair this ONE figure_request. Do not solve unrelated requests. "
+                    "Do not call plt.savefig for final paper images. Use save_paper_figure only. "
+                    "The generated_files artifact for this request must include "
+                    "figure_request_id/subproblem_id/semantic_role/depicts/data_bindings/semantic_verified=true."
+                )
+                recovery_result = await recovery_agent.run(
+                    prompt=recovery_prompt,
+                    subtask_title=f"Figure artifact repair: {req_id}",
+                )
+                recovery_round_outputs.append(
+                    {
+                        "figure_request_id": req_id,
+                        "coder_response": recovery_result.coder_response,
+                        "created_images": recovery_result.created_images,
+                        "structured_result_files": recovery_result.structured_result_files,
+                    }
+                )
+
+                chart_result = recovery_result
+                chart_images = list(dict.fromkeys([*chart_images, *recovery_result.created_images]))
+                structured_result_files_for_figures = _unique_structured_result_files(
+                    structured_result_files_for_figures,
+                    recovery_result.structured_result_files,
+                )
+                _quarantine_unregistered_output_images(work_dir, structured_result_files_for_figures)
+                result_registry = build_result_registry(work_dir, structured_result_files_for_figures)
+                save_json(result_registry, result_registry_path)
+                stage_outputs["result_registry"] = result_registry
+
+                art_registry = ArtifactRegistry.load(
+                    work_dir,
+                    structured_result_files=structured_result_files_for_figures,
+                    contract=contract,
+                )
+                paper_ready_images = art_registry.validate_for_paper()
+                semantic_bundle = art_registry.build_figure_bundle()
+                missing_required_requests = list(semantic_bundle.missing_requests)
+                if not missing_required_requests:
+                    break
+
+            stage_outputs["chart_recovery"] = {
+                "mode": "per_request",
+                "rounds": recovery_round_outputs,
+                "remaining_missing_requests": missing_required_requests,
+            }
+            if recovery_round_outputs:
+                yield _message(
+                    "charts",
+                    _preview(json.dumps(stage_outputs["chart_recovery"], ensure_ascii=False)),
+                    section="Figure artifact repair",
+                )
         if not paper_ready_images:
             fallback_images = _create_verified_result_summary_figure(
                 work_dir,
@@ -1924,12 +2330,25 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "The workflow stopped instead of silently producing a paper with missing figures. "
                 "Ensure the solver/chart stage generates at least one figure via save_paper_figure()."
             )
+        figure_bundle = art_registry.build_figure_bundle()
+        writer_images = [
+            str(item.get("path") or "").strip()
+            for item in figure_bundle.available_figures
+            if str(item.get("path") or "").strip()
+        ]
         stage_outputs["paper_ready_images"] = paper_ready_images
+        stage_outputs["figure_bundle"] = figure_bundle.to_dict()
+        stage_outputs["writer_available_images"] = writer_images
 
         # --- Quality gate using ArtifactRegistry ---
         expected_figures = _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", "")))
         gate_passed, gate_reason = _quality_gate_before_writing(
-            result_registry, paper_ready_images, expected_figures, workflow_mode,
+            result_registry,
+            expected_figures,
+            figure_bundle.required_requests,
+            figure_bundle.satisfied_requests,
+            figure_bundle.missing_requests,
+            workflow_mode,
         )
 
         # Generate structured gate reports from ArtifactRegistry
@@ -1950,6 +2369,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             paper_ready_count=len(paper_ready_images),
             passed=gate_passed,
             reason=gate_reason,
+            required_request_count=len(figure_bundle.required_requests),
+            satisfied_request_count=len(figure_bundle.satisfied_requests),
+            missing_requests=figure_bundle.missing_requests,
         )
         quality_gate.save(work_dir)
 
@@ -1965,19 +2387,15 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             yield _message("writing", gate_reason, msg_type="error", section="质量门禁")
 
             task_manager.update_status(task_id, TaskStatus.FAILED)
-            yield {
-                "type": "result",
-                "data": TaskResult(
-                    task_id=task_id,
-                    status="failed",
-                    task_type="writing",
-                    error_message=gate_reason,
-                    paper_path=md_path,
-                    docx_path=docx_path if os.path.exists(docx_path) else "",
-                    notebook_path=os.path.join(work_dir, "notebook.ipynb"),
-                    work_dir=work_dir,
-                ).model_dump(),
-            }
+            yield _build_failed_task_result(
+                task_id=task_id,
+                task_type="writing",
+                work_dir=work_dir,
+                error_message=gate_reason,
+                paper_path=md_path,
+                docx_path=docx_fail_path if docx_fail_path and os.path.exists(docx_fail_path) else "",
+                notebook_path=os.path.join(work_dir, "notebook.ipynb"),
+            )
             yield _progress(task_id, "done", 1.0, "质量门禁未通过，已输出失败报告", status="failed")
             return
 
@@ -1995,8 +2413,11 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
             f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
             f"# 图表与一致性\n{chart_result.coder_response}\n\n"
+            f"# FigureBundle（仅 available_figures 可写入正文）\n{_json_for_prompt(figure_bundle.to_dict(), 10000)}\n\n"
             "请输出完整论文 Markdown。论文中所有具体数值都必须来自 result_registry.json 的 verified_results；"
             "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。"
+            "正文只允许引用 FigureBundle.available_figures；禁止引用 FigureBundle.diagnostic_figures。"
+            "每张正文图必须保持其 figure_request_id 语义，不得用 diagnostics 图替代 required 图。"
             "若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级，不能把已 verified 的结果整体写成未计算。"
             "参考文献必须来自 scholar 工具或用户材料。"
             "严格模式不是加长正文；严格模式必须压缩套话，把篇幅留给可复核表格、公式口径和误差/阻断说明。"
@@ -2004,7 +2425,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         final_paper = await _run_writer_stage(
             writer=writer,
             prompt=final_prompt,
-            available_images=paper_ready_images,
+            available_images=writer_images,
             sub_title="论文组织与润色",
             budget=budget,
         )
@@ -2361,6 +2782,28 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 raise ValueError(
                     "Audit round {}: task expects figures but no verified paper figures were produced.".format(audit_round)
                 )
+
+            # Rebuild semantic bundle after audit repairs and re-run request-level quality gate.
+            figure_bundle = art_registry.build_figure_bundle()
+            writer_images = [
+                str(item.get("path") or "").strip()
+                for item in figure_bundle.available_figures
+                if str(item.get("path") or "").strip()
+            ]
+            stage_outputs[f"figure_bundle_round_{audit_round}"] = figure_bundle.to_dict()
+            stage_outputs[f"writer_available_images_round_{audit_round}"] = writer_images
+
+            gate_passed, gate_reason = _quality_gate_before_writing(
+                result_registry,
+                _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))),
+                figure_bundle.required_requests,
+                figure_bundle.satisfied_requests,
+                figure_bundle.missing_requests,
+                workflow_mode,
+            )
+            if not gate_passed:
+                raise ValueError(f"Audit round {audit_round}: semantic quality gate failed: {gate_reason}")
+
             revision_prompt = (
                 f"# 原题\n{question}\n\n"
                 f"# Workflow mode writing policy\n{_writer_mode_policy(workflow_mode)}\n\n"
@@ -2384,7 +2827,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             final_paper = await _run_writer_stage(
                 writer=writer,
                 prompt=revision_prompt,
-                available_images=paper_ready_images,
+                available_images=writer_images,
                 sub_title=f"审查后修订第{audit_round}轮",
                 budget=budget,
             )
@@ -2396,13 +2839,15 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         # Ensure stage_outputs reflects the final paper_ready_images
         # (may have been updated in audit rounds as paper_ready_images_round_N)
         stage_outputs["paper_ready_images"] = paper_ready_images
+        stage_outputs["figure_bundle"] = figure_bundle.to_dict()
+        stage_outputs["writer_available_images"] = writer_images
 
         paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
             work_dir=work_dir,
             task_id=task_id,
             task_type="writing",
             paper_content=final_paper,
-            allowed_images=paper_ready_images,
+            allowed_images=writer_images,
             result_payload={
                 "question": question,
                 "data_context": data_context,
@@ -2417,33 +2862,25 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         budget_report.save(work_dir)
 
         task_manager.update_status(task_id, TaskStatus.COMPLETED)
-        yield {
-            "type": "result",
-            "data": TaskResult(
-                task_id=task_id,
-                status="completed",
-                task_type="writing",
-                paper_path=paper_path,
-                docx_path=docx_path,
-                notebook_path=notebook_path,
-                work_dir=work_dir,
-            ).model_dump(),
-        }
+        yield _build_completed_task_result(
+            task_id=task_id,
+            task_type="writing",
+            work_dir=work_dir,
+            paper_path=paper_path,
+            docx_path=docx_path,
+            notebook_path=notebook_path,
+        )
         yield _progress(task_id, "done", 1.0, "写作任务完成", status="completed")
 
     except Exception as exc:
         logger.exception(f"写作工作流执行失败: {exc}")
         task_manager.update_status(task_id, TaskStatus.FAILED)
-        yield {
-            "type": "error",
-            "data": TaskResult(
-                task_id=task_id,
-                status="failed",
-                task_type="writing",
-                work_dir=work_dir,
-                error_message=str(exc),
-            ).model_dump(),
-        }
+        yield _build_failed_task_result(
+            task_id=task_id,
+            task_type="writing",
+            work_dir=work_dir,
+            error_message=str(exc),
+        )
     finally:
         await code_interpreter.close()
         await scholar.close()
@@ -2627,7 +3064,15 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             raise ValueError(
                 "Polish generated replacement figures, but none passed the strict FigureArtifact language gate."
             )
+        polish_figure_bundle = polish_art_registry.build_figure_bundle()
+        writer_images = [
+            str(item.get("path") or "").strip()
+            for item in polish_figure_bundle.available_figures
+            if str(item.get("path") or "").strip()
+        ]
         stage_outputs["paper_ready_images"] = paper_ready_images
+        stage_outputs["figure_bundle"] = polish_figure_bundle.to_dict()
+        stage_outputs["writer_available_images"] = writer_images
         wording_prompt = (
             f"# 原始题目\n{question or '未提供'}\n\n"
             f"# 原论文\n{paper_content}\n\n"
@@ -2643,7 +3088,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         final_paper = await _run_writer_stage(
             writer=writer,
             prompt=wording_prompt,
-            available_images=paper_ready_images,
+            available_images=writer_images,
             sub_title="论文措辞修订",
             budget=budget,
         )
@@ -2678,7 +3123,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             task_id=task_id,
             task_type="polish",
             paper_content=final_paper,
-            allowed_images=paper_ready_images,
+            allowed_images=writer_images,
             result_payload={
                 "question": question,
                 "paper_content": paper_content,
@@ -2690,33 +3135,25 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         )
 
         task_manager.update_status(task_id, TaskStatus.COMPLETED)
-        yield {
-            "type": "result",
-            "data": TaskResult(
-                task_id=task_id,
-                status="completed",
-                task_type="polish",
-                paper_path=paper_path,
-                docx_path=docx_path,
-                notebook_path=notebook_path,
-                work_dir=work_dir,
-            ).model_dump(),
-        }
+        yield _build_completed_task_result(
+            task_id=task_id,
+            task_type="polish",
+            work_dir=work_dir,
+            paper_path=paper_path,
+            docx_path=docx_path,
+            notebook_path=notebook_path,
+        )
         yield _progress(task_id, "done", 1.0, "润色任务完成", status="completed")
 
     except Exception as exc:
         logger.exception(f"润色工作流执行失败: {exc}")
         task_manager.update_status(task_id, TaskStatus.FAILED)
-        yield {
-            "type": "error",
-            "data": TaskResult(
-                task_id=task_id,
-                status="failed",
-                task_type="polish",
-                work_dir=work_dir,
-                error_message=str(exc),
-            ).model_dump(),
-        }
+        yield _build_failed_task_result(
+            task_id=task_id,
+            task_type="polish",
+            work_dir=work_dir,
+            error_message=str(exc),
+        )
     finally:
         await code_interpreter.close()
         await scholar.close()

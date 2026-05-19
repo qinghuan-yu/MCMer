@@ -74,6 +74,9 @@ class QualityGateReport(GateReport):
         paper_ready_count: int,
         passed: bool,
         reason: str,
+        required_request_count: int = 0,
+        satisfied_request_count: int = 0,
+        missing_requests: list[dict[str, Any]] | None = None,
     ) -> QualityGateReport:
         return cls(
             gate_name="quality",
@@ -84,6 +87,9 @@ class QualityGateReport(GateReport):
                 "blocked_count": blocked_count,
                 "expected_figures": expected_figures,
                 "paper_ready_count": paper_ready_count,
+                "required_request_count": required_request_count,
+                "satisfied_request_count": satisfied_request_count,
+                "missing_requests": missing_requests or [],
             },
         )
 

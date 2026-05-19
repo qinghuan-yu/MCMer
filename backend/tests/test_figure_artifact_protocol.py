@@ -296,7 +296,14 @@ def test_quality_gate_blocks_zero_verified() -> None:
         "blocked_results": [{"id": "r1", "status": "blocked"}],
         "summary": {"verified_count": 0, "blocked_count": 1},
     }
-    passed, reason = _quality_gate_before_writing(registry, [], False, "standard")
+    passed, reason = _quality_gate_before_writing(
+        registry,
+        False,
+        [],
+        [],
+        [],
+        "standard",
+    )
     assert not passed
     assert "verified_count=0" in reason
 
@@ -308,7 +315,14 @@ def test_quality_gate_passes_with_verified_results() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = _quality_gate_before_writing(registry, [], False, "standard")
+    passed, reason = _quality_gate_before_writing(
+        registry,
+        False,
+        [],
+        [],
+        [],
+        "standard",
+    )
     assert passed
     assert reason == ""
 
@@ -320,9 +334,16 @@ def test_quality_gate_blocks_expected_figures_missing() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = _quality_gate_before_writing(registry, [], True, "standard")
+    passed, reason = _quality_gate_before_writing(
+        registry,
+        True,
+        [{"id": "req_1", "required": True}],
+        [],
+        [{"figure_request_id": "req_1", "required": True, "satisfied": False, "reason": "missing"}],
+        "standard",
+    )
     assert not passed
-    assert "expected_figures=true" in reason
+    assert "required figure_requests" in reason
 
 
 def test_quality_gate_passes_with_verified_and_images() -> None:
@@ -332,7 +353,14 @@ def test_quality_gate_passes_with_verified_and_images() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = _quality_gate_before_writing(registry, ["output/fig.png"], True, "standard")
+    passed, reason = _quality_gate_before_writing(
+        registry,
+        True,
+        [{"id": "req_1", "required": True}],
+        [{"figure_request_id": "req_1", "required": True, "satisfied": True}],
+        [],
+        "standard",
+    )
     assert passed
 
 
@@ -1031,3 +1059,220 @@ def test_artifact_registry_reports_bare_string_generated_file_rejection(tmp_path
     reasons_by_path = {r.path: r.rejected_by for r in registry.figure_rejections}
     assert "output/bare.png" in reasons_by_path
     assert "generated_file_not_object" in reasons_by_path["output/bare.png"]
+
+
+def test_ensure_figure_requests_from_solve_spec() -> None:
+    """Workflow should derive required figure_requests from visual subproblems."""
+    from app.core.workflow import _ensure_figure_requests_in_solve_spec
+
+    solve_spec = {
+        "subproblems": [
+            {
+                "id": "problem_1",
+                "objective": "绘制导弹轨迹与烟幕遮蔽示意图",
+                "steps": ["计算轨迹", "输出图表"],
+            },
+            {
+                "id": "problem_2",
+                "objective": "仅输出最优参数数值",
+                "steps": ["拟合", "输出 key_results"],
+            },
+        ]
+    }
+
+    requests = _ensure_figure_requests_in_solve_spec(solve_spec, "Simplified Chinese")
+    assert len(requests) == 1
+    assert requests[0]["subproblem_id"] == "problem_1"
+    assert requests[0]["required"] is True
+    assert requests[0]["language"] == "Simplified Chinese"
+    assert requests[0]["required_data"] != ["result_registry.json"]
+    assert any("trajectory" in item for item in requests[0]["required_data"])
+
+
+def test_semantic_bundle_excludes_diagnostic_summary_for_required_requests(tmp_path: Path) -> None:
+    """verified_result_summary should stay in diagnostics and not satisfy required requests."""
+    from app.artifacts.registry import ArtifactRegistry
+
+    _write_png(tmp_path / "output" / "verified_result_summary.png")
+    manifest = {
+        "figures": [
+            {
+                "path": "output/verified_result_summary.png",
+                "kind": "figure",
+                "paper_ready": True,
+                "visible_text_language": "Simplified Chinese",
+                "chart_language_verified": True,
+                "visible_text_audit": ["已验证结果摘要", "结果序号", "数值"],
+                "created_by": "deterministic_renderer",
+                "helper_version": 3,
+                "is_placeholder": False,
+                "figure_role": "verified_result_summary",
+                "linked_result_ids": ["r1"],
+                "source_data": ["result_registry.json"],
+                "paper_section": "diagnostics",
+                "semantic_verified": False,
+                "figure_request_id": "diagnostic_verified_result_summary",
+                "subproblem_id": "diagnostics",
+                "semantic_role": "verified_result_summary",
+            }
+        ]
+    }
+    (tmp_path / "figure_artifacts.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    structured = {
+        "section": "solve",
+        "summary": "ok",
+        "key_results": [
+            {
+                "id": "r1", "name": "厚度", "value": 1, "unit": "mm", "formula": "x=1",
+                "inputs": {}, "source_data": ["data.csv"], "code_cell": "1", "evidence": "ok",
+                "source": "solver", "verified": True, "status": "verified", "warnings": []
+            }
+        ],
+        "generated_files": [],
+        "warnings": [],
+    }
+    (tmp_path / "solve_structured_results.json").write_text(json.dumps(structured), encoding="utf-8")
+
+    solve_spec = {
+        "figure_requests": [
+            {
+                "id": "problem_1_trajectory_shielding",
+                "required": True,
+                "subproblem_id": "problem_1",
+                "role": "trajectory_shielding",
+                "language": "Simplified Chinese",
+            }
+        ]
+    }
+    (tmp_path / "solve_spec.json").write_text(json.dumps(solve_spec, ensure_ascii=False), encoding="utf-8")
+
+    reg = ArtifactRegistry.load(str(tmp_path), structured_result_files=["solve_structured_results.json"])
+    reg.validate_for_paper()
+    bundle = reg.build_figure_bundle()
+
+    assert len(bundle.required_requests) == 1
+    assert len(bundle.available_figures) == 0
+    assert len(bundle.diagnostic_figures) == 1
+    assert bundle.missing_requests[0]["figure_request_id"] == "problem_1_trajectory_shielding"
+
+
+def test_render_distance_time_curve_semantic_artifact(tmp_path: Path) -> None:
+    """distance_time_curve renderer should output semantic-verified artifact."""
+    from app.artifacts.renderers import render_distance_time_curve
+
+    artifact = render_distance_time_curve(
+        times=[1, 2, 3, 4],
+        distances=[10, 9, 8, 7],
+        title="距离-时间曲线",
+        output_path=str(tmp_path / "output" / "p1_distance_time.png"),
+        chart_language="Simplified Chinese",
+        figure_request_id="p1_distance_time_curve",
+        subproblem_id="problem_1",
+        linked_result_ids=["r1", "r2"],
+        source_data=["result_registry.json"],
+        work_dir=str(tmp_path),
+    )
+
+    assert artifact["path"] == "output/p1_distance_time.png"
+    assert artifact["semantic_verified"] is True
+    assert artifact["figure_request_id"] == "p1_distance_time_curve"
+    assert artifact["semantic_role"] == "distance_time_curve"
+
+
+def test_render_required_requests_deterministically(tmp_path: Path) -> None:
+    """Workflow deterministic-first recovery should satisfy supported requests with data."""
+    from app.core.workflow import _render_required_requests_deterministically
+
+    # required_data file must exist for deterministic attempt
+    (tmp_path / "distance_time_series.csv").write_text("t,d\n1,1\n2,2\n", encoding="utf-8")
+
+    registry = {
+        "verified_results": [
+            {"id": "r1", "value": 1.0, "source_data": ["distance_time_series.csv"]},
+            {"id": "r2", "value": 2.0, "source_data": ["distance_time_series.csv"]},
+            {"id": "r3", "value": 3.0, "source_data": ["distance_time_series.csv"]},
+        ]
+    }
+    required_requests = [
+        {
+            "id": "problem_1_distance",
+            "subproblem_id": "problem_1",
+            "required": True,
+            "role": "distance_time_curve",
+            "expected_content": ["距离-时间曲线"],
+            "required_data": ["distance_time_series.csv"],
+        }
+    ]
+
+    report = _render_required_requests_deterministically(
+        work_dir=str(tmp_path),
+        result_registry=registry,
+        required_requests=required_requests,
+        chart_language="Simplified Chinese",
+    )
+
+    assert report["created_images"]
+    assert report["satisfied"][0]["figure_request_id"] == "problem_1_distance"
+    assert report["missing"] == []
+
+
+def test_render_required_requests_rejects_weak_required_data_contract(tmp_path: Path) -> None:
+    """Deterministic renderer must not semantic-verify requests with weak required_data contract."""
+    from app.core.workflow import _render_required_requests_deterministically
+
+    (tmp_path / "result_registry.json").write_text("{}", encoding="utf-8")
+    registry = {
+        "verified_results": [
+            {"id": "r1", "value": 1.0, "source_data": ["result_registry.json"]},
+            {"id": "r2", "value": 2.0, "source_data": ["result_registry.json"]},
+        ]
+    }
+    required_requests = [
+        {
+            "id": "problem_1_trajectory",
+            "subproblem_id": "problem_1",
+            "required": True,
+            "role": "trajectory_shielding",
+            "expected_content": ["轨迹遮蔽图"],
+            "required_data": ["result_registry.json"],
+        }
+    ]
+
+    report = _render_required_requests_deterministically(
+        work_dir=str(tmp_path),
+        result_registry=registry,
+        required_requests=required_requests,
+        chart_language="Simplified Chinese",
+    )
+
+    assert report["created_images"] == []
+    assert report["satisfied"] == []
+    assert report["missing"]
+    assert report["missing"][0]["reason"] == "insufficient_semantic_required_data_contract"
+
+
+def test_build_failed_task_result_with_failure_report_paths(tmp_path: Path) -> None:
+    """Failure result builder should carry failure report paths without undefined vars."""
+    from app.core.workflow import _build_failed_task_result
+
+    md_path = str(tmp_path / "failure_report.md")
+    docx_path = str(tmp_path / "failure_report.docx")
+    notebook_path = str(tmp_path / "notebook.ipynb")
+
+    payload = _build_failed_task_result(
+        task_id="t1",
+        task_type="writing",
+        work_dir=str(tmp_path),
+        error_message="verified_count=0",
+        paper_path=md_path,
+        docx_path=docx_path,
+        notebook_path=notebook_path,
+    )
+
+    assert payload["type"] == "result"
+    data = payload["data"]
+    assert data["status"] == "failed"
+    assert data["paper_path"] == md_path
+    assert data["docx_path"] == docx_path
+    assert data["notebook_path"] == notebook_path

@@ -334,3 +334,129 @@ def render_verified_summary(
     if work_dir:
         _register_artifact(artifact, work_dir)
     return artifact
+
+
+def render_trajectory_shielding_2d(
+    points: list[tuple[float, float]],
+    title: str,
+    output_path: str,
+    chart_language: str = "Simplified Chinese",
+    figure_request_id: str = "",
+    subproblem_id: str = "",
+    semantic_role: str = "trajectory_shielding",
+    depicts: list[str] | None = None,
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    work_dir: str | None = None,
+) -> dict[str, Any]:
+    """Render a 2D trajectory-style figure with semantic bindings."""
+    if not points or len(points) < 2:
+        return {}
+
+    _ensure_matplotlib()
+    _configure_fonts(chart_language)
+
+    x_values = [float(p[0]) for p in points]
+    y_values = [float(p[1]) for p in points]
+
+    if chart_language == "Simplified Chinese":
+        x_label = "时间序号"
+        y_label = "轨迹量纲值"
+    else:
+        x_label = "Time index"
+        y_label = "Trajectory metric"
+
+    fig, ax = _plt.subplots(figsize=(9, 5.8))
+    ax.plot(x_values, y_values, linewidth=2.0, color="#1f77b4", label="Trajectory")
+    ax.scatter([x_values[0], x_values[-1]], [y_values[0], y_values[-1]], color="#d62728", s=35)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel(x_label, fontsize=12)
+    ax.set_ylabel(y_label, fontsize=12)
+    ax.grid(True, alpha=0.28)
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    _save_figure(fig, output_path)
+
+    rel_path = _to_relative_path(output_path)
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, x_label, y_label],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or [],
+        figure_role=semantic_role,
+    )
+    artifact.update(
+        {
+            "figure_request_id": figure_request_id,
+            "subproblem_id": subproblem_id,
+            "semantic_role": semantic_role,
+            "depicts": depicts or [semantic_role],
+            "data_bindings": source_data or [],
+            "semantic_verified": True,
+        }
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact
+
+
+def render_distance_time_curve(
+    times: list[float],
+    distances: list[float],
+    title: str,
+    output_path: str,
+    chart_language: str = "Simplified Chinese",
+    figure_request_id: str = "",
+    subproblem_id: str = "",
+    semantic_role: str = "distance_time_curve",
+    depicts: list[str] | None = None,
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    work_dir: str | None = None,
+) -> dict[str, Any]:
+    """Render a distance-time curve with semantic bindings."""
+    if not times or not distances or len(times) != len(distances) or len(times) < 2:
+        return {}
+
+    _ensure_matplotlib()
+    _configure_fonts(chart_language)
+
+    if chart_language == "Simplified Chinese":
+        x_label = "时间"
+        y_label = "距离"
+    else:
+        x_label = "Time"
+        y_label = "Distance"
+
+    fig, ax = _plt.subplots(figsize=(9, 5.8))
+    ax.plot(times, distances, linewidth=2.2, color="#2ca02c")
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel(x_label, fontsize=12)
+    ax.set_ylabel(y_label, fontsize=12)
+    ax.grid(True, alpha=0.28)
+    fig.tight_layout()
+    _save_figure(fig, output_path)
+
+    rel_path = _to_relative_path(output_path)
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, x_label, y_label],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or [],
+        figure_role=semantic_role,
+    )
+    artifact.update(
+        {
+            "figure_request_id": figure_request_id,
+            "subproblem_id": subproblem_id,
+            "semantic_role": semantic_role,
+            "depicts": depicts or [semantic_role],
+            "data_bindings": source_data or [],
+            "semantic_verified": True,
+        }
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact

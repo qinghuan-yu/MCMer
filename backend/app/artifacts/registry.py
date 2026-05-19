@@ -38,6 +38,48 @@ class FigureRejection:
         return {"path": self.path, "rejected_by": self.rejected_by}
 
 
+@dataclass
+class FigureRequestStatus:
+    """Semantic request satisfaction status for one required figure request."""
+
+    figure_request_id: str
+    required: bool
+    satisfied: bool
+    reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "figure_request_id": self.figure_request_id,
+            "required": self.required,
+            "satisfied": self.satisfied,
+            "reason": self.reason,
+        }
+
+
+@dataclass
+class FigureBundle:
+    """Writer-facing structured figure bundle.
+
+    - available_figures: semantic-verified figures satisfying required requests
+    - diagnostic_figures: valid artifacts that are intentionally excluded
+    """
+
+    required_requests: list[dict[str, Any]] = field(default_factory=list)
+    satisfied_requests: list[dict[str, Any]] = field(default_factory=list)
+    missing_requests: list[dict[str, Any]] = field(default_factory=list)
+    available_figures: list[dict[str, Any]] = field(default_factory=list)
+    diagnostic_figures: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "required_requests": self.required_requests,
+            "satisfied_requests": self.satisfied_requests,
+            "missing_requests": self.missing_requests,
+            "available_figures": self.available_figures,
+            "diagnostic_figures": self.diagnostic_figures,
+        }
+
+
 # ── ArtifactRegistry ───────────────────────────────────────────────────
 
 @dataclass
@@ -60,6 +102,7 @@ class ArtifactRegistry:
     paper_ready_images: list[str] = field(default_factory=list)
     figure_rejections: list[FigureRejection] = field(default_factory=list)
     verified_result_ids: set[str] = field(default_factory=set)
+    figure_bundle: FigureBundle = field(default_factory=FigureBundle)
 
     # ── Loading ────────────────────────────────────────────────────────
 
@@ -154,6 +197,132 @@ class ArtifactRegistry:
                     _reject_path(item, "generated_file_not_object")
 
         return self.paper_ready_images
+
+    def _load_figure_requests(self) -> list[dict[str, Any]]:
+        """Load figure_requests from solve_spec.json (if present)."""
+        solve_spec_path = Path(self.work_dir) / "solve_spec.json"
+        if not solve_spec_path.exists():
+            return []
+        try:
+            payload = json.loads(solve_spec_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        if not isinstance(payload, dict):
+            return []
+        requests = payload.get("figure_requests", [])
+        if not isinstance(requests, list):
+            return []
+        return [item for item in requests if isinstance(item, dict)]
+
+    def _artifact_by_path(self) -> dict[str, dict[str, Any]]:
+        """Build a path->artifact index from manifest and structured outputs."""
+        root = Path(self.work_dir)
+        indexed: dict[str, dict[str, Any]] = {}
+
+        def _add(item: object) -> None:
+            if not isinstance(item, dict):
+                return
+            path = normalize_artifact_path(item.get("path") or item.get("filename") or "")
+            if not path:
+                return
+            indexed[path] = dict(item)
+
+        for item in self.figure_manifest:
+            _add(item)
+
+        for filename in self.structured_result_files:
+            payload = load_json(str(root / filename))
+            if not isinstance(payload, dict):
+                continue
+            for item in payload.get("generated_files", []) or []:
+                _add(item)
+
+        return indexed
+
+    def build_figure_bundle(self) -> FigureBundle:
+        """Build writer-facing FigureBundle with semantic request checks.
+
+        Semantic admission criteria for required requests:
+        - artifact already passed validate_for_paper() (artifact gate)
+        - figure_request_id exists and is required
+        - semantic_verified is True
+        """
+        if not self.paper_ready_images:
+            self.validate_for_paper()
+
+        artifacts = self._artifact_by_path()
+        requests = self._load_figure_requests()
+
+        required_requests = [
+            item for item in requests
+            if bool(item.get("required", True))
+        ]
+        required_ids = {
+            str(item.get("id") or "").strip()
+            for item in required_requests
+            if str(item.get("id") or "").strip()
+        }
+
+        available: list[dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = []
+        matched_request_ids: set[str] = set()
+
+        for path in self.paper_ready_images:
+            artifact = artifacts.get(path, {})
+            figure_role = str(artifact.get("figure_role") or "").strip()
+            figure_request_id = str(artifact.get("figure_request_id") or "").strip()
+            semantic_role = str(artifact.get("semantic_role") or figure_role).strip()
+            semantic_verified = bool(artifact.get("semantic_verified"))
+            paper_section = str(artifact.get("paper_section") or "").strip().lower()
+
+            item = {
+                "path": path,
+                "caption": str(artifact.get("caption") or artifact.get("figure_caption") or semantic_role or path),
+                "figure_request_id": figure_request_id,
+                "semantic_role": semantic_role,
+                "semantic_verified": semantic_verified,
+            }
+
+            is_diagnostic = (
+                figure_role == "verified_result_summary"
+                or paper_section == "diagnostics"
+                or not semantic_verified
+            )
+            if is_diagnostic:
+                diagnostics.append(item)
+                continue
+
+            if required_ids and figure_request_id in required_ids:
+                available.append(item)
+                matched_request_ids.add(figure_request_id)
+            elif not required_ids:
+                # Backward-compatible mode: no explicit requests configured.
+                available.append(item)
+
+        satisfied: list[dict[str, Any]] = []
+        missing: list[dict[str, Any]] = []
+        for req in required_requests:
+            req_id = str(req.get("id") or "").strip()
+            if not req_id:
+                continue
+            if req_id in matched_request_ids:
+                satisfied.append({"figure_request_id": req_id, "required": True, "satisfied": True})
+            else:
+                missing.append({
+                    "figure_request_id": req_id,
+                    "required": True,
+                    "satisfied": False,
+                    "reason": "no semantic_verified artifact bound to this request",
+                })
+
+        self.figure_bundle = FigureBundle(
+            required_requests=required_requests,
+            satisfied_requests=satisfied,
+            missing_requests=missing,
+            available_figures=available,
+            diagnostic_figures=diagnostics,
+        )
+        return self.figure_bundle
 
     # ── Queries ────────────────────────────────────────────────────────
 
