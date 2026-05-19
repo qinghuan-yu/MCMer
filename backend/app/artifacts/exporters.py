@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import asyncio
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -119,22 +120,31 @@ class DocumentFinalizer:
         Returns
         -------
         (paper_path, docx_path, notebook_path)
+
+        Notes
+        -----
+        This synchronous method must not be used to save notebooks from within
+        a running asyncio event loop. In async contexts, call
+        ``DocumentFinalizer.finalize_async()``.
         """
         root = Path(work_dir)
 
         # ── Save notebook ──────────────────────────────────────────────
         notebook_path = str(root / "notebook.ipynb")
         if code_interpreter is not None:
-            import asyncio
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we're already in an async context, skip notebook save here
-                    pass
-                else:
-                    loop.run_until_complete(code_interpreter.save_notebook(notebook_path))
+                asyncio.get_running_loop()
             except RuntimeError:
-                pass  # no event loop; skip
+                # No running loop in this thread: safe to run coroutine synchronously.
+                try:
+                    asyncio.run(code_interpreter.save_notebook(notebook_path))
+                except Exception as e:
+                    logger.warning("Notebook save failed: %s", e)
+            else:
+                raise RuntimeError(
+                    "DocumentFinalizer.finalize() cannot save notebook in async context; "
+                    "use DocumentFinalizer.finalize_async()."
+                )
 
         # ── Normalise markdown ─────────────────────────────────────────
         normalized = normalize_math_markdown(paper_content)

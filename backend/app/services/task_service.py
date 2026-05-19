@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config.setting import settings
+from app.artifacts.exporters import DocumentFinalizer
 from app.core.workflow_budget import normalize_workflow_mode
 from app.schemas.enums import TaskStatus
 from app.schemas.response import TaskProgress
@@ -346,26 +347,38 @@ class TaskManager:
     def save_revision(
         self, task_id: str, paper_content: str, version: int
     ) -> str:
-        """保存修订版论文"""
+        """保存修订版论文 — 使用 DocumentFinalizer 统一出口"""
         task_dir = os.path.join(settings.WORK_DIR, task_id)
-        paper_path = os.path.join(task_dir, f"res_v{version}.md")
-        normalized_paper = normalize_math_markdown(paper_content)
-        allowed_images = None
+        allowed_images: list[str] | None = None
+        result_payload: dict = {}
         result_path = os.path.join(task_dir, "res.json")
         if os.path.exists(result_path):
             try:
                 with open(result_path, "r", encoding="utf-8") as f:
-                    result_payload = json.load(f)
+                    loaded_payload = json.load(f)
+                if isinstance(loaded_payload, dict):
+                    result_payload = loaded_payload
                 stages = result_payload.get("stages", {}) if isinstance(result_payload, dict) else {}
-                allowed_images = stages.get("paper_ready_images") if isinstance(stages, dict) else None
+                # Try the latest audit round first, then fall back to base
+                if isinstance(stages, dict):
+                    # Find the highest paper_ready_images_round_N
+                    round_images = []
+                    for key in sorted(stages.keys(), reverse=True):
+                        if key.startswith("paper_ready_images_round_"):
+                            round_images = stages[key]
+                            break
+                    allowed_images = round_images or stages.get("paper_ready_images")
             except Exception:
                 allowed_images = None
 
-        finalize_markdown_export(
-            paper_path,
-            normalized_paper,
-            os.path.join(task_dir, f"res_v{version}.docx"),
-            allowed_images,
+        paper_path, docx_path, _ = DocumentFinalizer.finalize(
+            work_dir=task_dir,
+            task_id=task_id,
+            task_type="revision",
+            paper_content=paper_content,
+            allowed_images=allowed_images,
+            result_payload=result_payload,
+            version=version,
         )
         logger.info(f"修订版论文已保存: {paper_path}")
         return paper_path

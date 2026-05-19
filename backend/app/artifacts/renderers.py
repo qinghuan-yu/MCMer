@@ -88,7 +88,7 @@ def _make_figure_artifact(
         "visible_text_language": chart_language,
         "chart_language_verified": True,
         "visible_text_audit": visible_text_audit,
-        "created_by": "save_paper_figure",
+        "created_by": "deterministic_renderer",
         "helper_version": 3,
         "is_placeholder": False,
         "figure_role": figure_role,

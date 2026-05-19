@@ -368,7 +368,7 @@ def _create_verified_result_summary_figure(
             "visible_text_language": "English" if is_english else "Simplified Chinese",
             "chart_language_verified": True,
             "visible_text_audit": [title, xlabel, ylabel, note_title],
-            "created_by": "save_paper_figure",
+            "created_by": "deterministic_renderer",
             "helper_version": 3,
             "is_placeholder": False,
             "figure_role": "verified_result_summary",
@@ -1227,6 +1227,48 @@ def _build_code_interpreter(work_dir: str, chart_language: str = "English"):
     return LocalCodeInterpreter(work_dir=work_dir, chart_language=chart_language)
 
 
+def _resolve_polish_contract(
+    task: dict[str, object],
+    workflow_mode: str,
+    question: str,
+    paper_content: str,
+) -> ProblemContract:
+    """Resolve polish contract with parent-contract priority.
+
+    Priority:
+    1) Inherit parent task contract (revision/polish subtask)
+    2) Fall back to question + paper_content combined text
+    """
+    contract = None
+    parent_task_id = str(task.get("parent_task_id") or "").strip()
+    if parent_task_id:
+        parent_task = task_manager.get_task(parent_task_id) or {}
+        parent_work_dir = str(parent_task.get("work_dir") or "").strip()
+        if parent_work_dir:
+            contract = ProblemContract.load(parent_work_dir)
+
+    if contract is None:
+        combined_source = "\n\n".join(
+            [part.strip() for part in (question, paper_content) if str(part).strip()]
+        )
+        contract = ProblemContract.from_question(combined_source, workflow_mode=workflow_mode)
+
+    if contract.workflow_mode != workflow_mode:
+        contract = ProblemContract(
+            document_language=contract.document_language,
+            chart_language=contract.chart_language,
+            allowed_visible_text_language=contract.allowed_visible_text_language,
+            font_profile=contract.font_profile,
+            paper_requires_figures=contract.paper_requires_figures,
+            paper_requires_tables=contract.paper_requires_tables,
+            workflow_mode=workflow_mode,
+            chart_language_aliases=contract.chart_language_aliases,
+            allowed_latin_tokens=contract.allowed_latin_tokens,
+        )
+
+    return contract
+
+
 async def _run_text_agent(
     task_id: str,
     model: LLM,
@@ -1237,35 +1279,6 @@ async def _run_text_agent(
     agent = Agent(task_id=task_id, model=model, max_chat_turns=10, max_memory=12)
     response = await agent.run(prompt=user_prompt, system_prompt=system_prompt, sub_title=sub_title)
     return response.strip()
-
-
-async def _finalize_outputs(
-    task_id: str,
-    task_type: str,
-    work_dir: str,
-    paper_content: str,
-    result_payload: dict,
-    code_interpreter,
-    allowed_images: list[str] | None = None,
-) -> tuple[str, str, str]:
-    notebook_path = os.path.join(work_dir, "notebook.ipynb")
-    if code_interpreter is not None:
-        await code_interpreter.save_notebook(notebook_path)
-
-    normalized_paper = normalize_math_markdown(paper_content)
-    normalized_paper = _normalize_paper_image_references(work_dir, normalized_paper, allowed_images)
-    normalized_paper = enforce_markdown_image_whitelist(normalized_paper, allowed_images)
-
-    paper_path = os.path.join(work_dir, "res.md")
-
-    result_payload["task_id"] = task_id
-    result_payload["task_type"] = task_type
-    result_payload["paper"] = normalized_paper
-    save_json(result_payload, os.path.join(work_dir, "res.json"))
-
-    docx_path = os.path.join(work_dir, "res.docx")
-    docx_generated = finalize_markdown_export(paper_path, normalized_paper, docx_path, allowed_images)
-    return paper_path, docx_path if docx_generated else "", notebook_path
 
 
 async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, None]:
@@ -1868,12 +1881,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             result_registry = build_result_registry(work_dir, structured_result_files_for_figures)
             save_json(result_registry, result_registry_path)
             stage_outputs["result_registry"] = result_registry
-            paper_ready_images = _language_verified_generated_images(
+            # Re-validate with ArtifactRegistry after repair
+            art_registry = ArtifactRegistry.load(
                 work_dir,
-                structured_result_files_for_figures,
-                chart_language,
-                result_registry,
+                structured_result_files=structured_result_files_for_figures,
+                contract=contract,
             )
+            paper_ready_images = art_registry.validate_for_paper()
             yield _message("charts", _preview(recovery_result.coder_response), section="Figure artifact repair")
         if not paper_ready_images:
             fallback_images = _create_verified_result_summary_figure(
@@ -1882,12 +1896,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 chart_language,
             )
             if fallback_images:
-                paper_ready_images = _language_verified_generated_images(
+                # Re-validate after deterministic fallback
+                art_registry = ArtifactRegistry.load(
                     work_dir,
-                    structured_result_files_for_figures,
-                    chart_language,
-                    result_registry,
+                    structured_result_files=structured_result_files_for_figures,
+                    contract=contract,
                 )
+                paper_ready_images = art_registry.validate_for_paper()
                 if paper_ready_images:
                     chart_images = list(dict.fromkeys([*chart_images, *fallback_images]))
                     stage_outputs["deterministic_chart_recovery"] = {
@@ -2308,12 +2323,12 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 verification_result.structured_result_files,
                 chart_result.structured_result_files,
             )
-            paper_ready_images = _language_verified_generated_images(
+            art_registry = ArtifactRegistry.load(
                 work_dir,
-                structured_result_files_for_figures,
-                chart_language,
-                result_registry,
+                structured_result_files=structured_result_files_for_figures,
+                contract=contract,
             )
+            paper_ready_images = art_registry.validate_for_paper()
             if not paper_ready_images:
                 fallback_images = _create_verified_result_summary_figure(
                     work_dir,
@@ -2321,12 +2336,12 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     chart_language,
                 )
                 if fallback_images:
-                    paper_ready_images = _language_verified_generated_images(
+                    art_registry = ArtifactRegistry.load(
                         work_dir,
-                        structured_result_files_for_figures,
-                        chart_language,
-                        result_registry,
+                        structured_result_files=structured_result_files_for_figures,
+                        contract=contract,
                     )
+                    paper_ready_images = art_registry.validate_for_paper()
                     if paper_ready_images:
                         chart_images = list(dict.fromkeys([*chart_images, *fallback_images]))
                         stage_outputs[f"deterministic_chart_recovery_round_{audit_round}"] = {
@@ -2444,9 +2459,14 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
     paper_content = task.get("paper_content", "")
     if not paper_content and task.get("parent_task_id"):
         paper_content = task_manager.load_paper(task.get("parent_task_id", "")) or ""
-    chart_language = _detect_document_language(question, paper_content)
+
+    # ── Use ProblemContract for language (single source of truth) ──────
+    contract = _resolve_polish_contract(task, workflow_mode, question, paper_content)
+    contract.save(work_dir)
+    chart_language = contract.chart_language
     chart_language_policy = _chart_language_policy(chart_language)
-    chart_language_context = _chart_language_context(chart_language)
+    chart_language_context = contract.chart_language_context
+
     requirements = task.get("polishing_requirements", "") or task.get("feedback", "")
     data_context = get_current_files(work_dir, "data")
     image_manifest = task.get("source_image_manifest", [])
@@ -2575,26 +2595,25 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         polish_structured_files = _unique_structured_result_files(
             recalculation_result.structured_result_files,
         )
-        polish_result_registry = build_result_registry(work_dir, polish_structured_files) if polish_structured_files else {"verified_results": [], "blocked_results": [], "summary": {"verified_count": 0, "blocked_count": 0}}
-        paper_ready_images = _language_verified_generated_images(
+        polish_art_registry = ArtifactRegistry.load(
             work_dir,
-            polish_structured_files,
-            chart_language,
-            polish_result_registry,
+            structured_result_files=polish_structured_files,
+            contract=contract,
         )
+        paper_ready_images = polish_art_registry.validate_for_paper()
         if not paper_ready_images:
             fallback_images = _create_verified_result_summary_figure(
                 work_dir,
-                polish_result_registry,
+                polish_art_registry.result_registry,
                 chart_language,
             )
             if fallback_images:
-                paper_ready_images = _language_verified_generated_images(
+                polish_art_registry = ArtifactRegistry.load(
                     work_dir,
-                    polish_structured_files,
-                    chart_language,
-                    polish_result_registry,
+                    structured_result_files=polish_structured_files,
+                    contract=contract,
                 )
+                paper_ready_images = polish_art_registry.validate_for_paper()
                 if paper_ready_images:
                     stage_outputs["deterministic_chart_recovery"] = {
                         "created_images": fallback_images,
@@ -2654,11 +2673,12 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             )
             yield _message("final_audit", _preview(str(stage_outputs["final_polish_audit"])), section="润色终审")
 
-        paper_path, docx_path, notebook_path = await _finalize_outputs(
+        paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
+            work_dir=work_dir,
             task_id=task_id,
             task_type="polish",
-            work_dir=work_dir,
             paper_content=final_paper,
+            allowed_images=paper_ready_images,
             result_payload={
                 "question": question,
                 "paper_content": paper_content,
@@ -2667,7 +2687,6 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
                 "stages": stage_outputs,
             },
             code_interpreter=code_interpreter,
-            allowed_images=paper_ready_images,
         )
 
         task_manager.update_status(task_id, TaskStatus.COMPLETED)

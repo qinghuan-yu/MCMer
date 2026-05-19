@@ -884,7 +884,7 @@ def test_renderer_output_passes_figure_artifact_gate(tmp_path: Path) -> None:
     )
 
     # Artifact should pass the gate
-    assert artifact["created_by"] == "save_paper_figure"
+    assert artifact["created_by"] == "deterministic_renderer"
     assert artifact["helper_version"] >= 3
     assert artifact["is_placeholder"] is False
     assert len(artifact["linked_result_ids"]) > 0
@@ -929,3 +929,105 @@ def test_problem_contract_creation() -> None:
     assert en_contract.chart_language == "English"
     assert en_contract.is_english
     assert en_contract.font_profile == "latin"
+
+
+def test_save_revision_preserves_existing_res_payload(tmp_path: Path, monkeypatch) -> None:
+    """save_revision must keep existing res.json fields (stages/coverage/images)."""
+    from app.config.setting import settings
+    from app.services.task_service import TaskManager
+
+    monkeypatch.setattr(settings, "WORK_DIR", str(tmp_path))
+    task_id = "rev-task"
+    task_dir = tmp_path / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    original_payload = {
+        "task_id": task_id,
+        "task_type": "writing",
+        "stages": {
+            "paper_ready_images": ["output/keep.png"],
+            "paper_ready_images_round_2": ["output/round2.png"],
+        },
+        "paper_ready_images": ["output/keep.png"],
+        "result_coverage": {"verified": 3, "blocked": 1},
+    }
+    (task_dir / "res.json").write_text(json.dumps(original_payload, ensure_ascii=False), encoding="utf-8")
+
+    manager = TaskManager()
+    manager.save_revision(task_id=task_id, paper_content="# Revised\n\nUpdated content.\n", version=1)
+
+    updated = json.loads((task_dir / "res.json").read_text(encoding="utf-8"))
+    assert updated.get("stages", {}) == original_payload["stages"]
+    assert updated.get("paper_ready_images", []) == original_payload["paper_ready_images"]
+    assert updated.get("result_coverage", {}) == original_payload["result_coverage"]
+    assert "Updated content" in updated.get("paper", "")
+
+
+def test_polish_contract_prefers_parent_contract(tmp_path: Path, monkeypatch) -> None:
+    """Polish should inherit parent ProblemContract before fallback text detection."""
+    from app.artifacts.contracts import ProblemContract
+    from app.core.workflow import _resolve_polish_contract
+
+    parent_dir = tmp_path / "parent"
+    parent_dir.mkdir(parents=True, exist_ok=True)
+    parent_contract = ProblemContract.from_question("Please solve this in English.", workflow_mode="standard")
+    parent_contract.save(parent_dir)
+
+    def _fake_get_task(task_id: str):
+        if task_id == "parent-1":
+            return {"work_dir": str(parent_dir)}
+        return None
+
+    monkeypatch.setattr("app.core.workflow.task_manager.get_task", _fake_get_task)
+
+    # question intentionally misleading Chinese; should still inherit English from parent
+    contract = _resolve_polish_contract(
+        task={"parent_task_id": "parent-1"},
+        workflow_mode="strict",
+        question="请输出中文图表",
+        paper_content="正文是中文也不应覆盖父任务已锁定语言",
+    )
+
+    assert contract.chart_language == "English"
+    assert contract.document_language == "English"
+    assert contract.workflow_mode == "strict"
+
+
+def test_artifact_registry_reports_bare_string_generated_file_rejection(tmp_path: Path) -> None:
+    """Bare string generated_files image paths should be recorded in rejection report."""
+    from app.artifacts.registry import ArtifactRegistry
+
+    _write_png(tmp_path / "output" / "bare.png")
+    structured = {
+        "section": "solve",
+        "summary": "ok",
+        "key_results": [
+            {
+                "id": "r1",
+                "name": "厚度",
+                "value": 1,
+                "unit": "mm",
+                "formula": "x=1",
+                "inputs": {},
+                "source_data": ["data.csv"],
+                "code_cell": "1",
+                "evidence": "ok",
+                "source": "test",
+                "verified": True,
+                "status": "verified",
+                "warnings": [],
+            }
+        ],
+        "generated_files": ["output/bare.png"],
+        "warnings": [],
+    }
+    (tmp_path / "solve_structured_results.json").write_text(
+        json.dumps(structured, ensure_ascii=False), encoding="utf-8"
+    )
+
+    registry = ArtifactRegistry.load(str(tmp_path), structured_result_files=["solve_structured_results.json"])
+    registry.validate_for_paper()
+
+    reasons_by_path = {r.path: r.rejected_by for r in registry.figure_rejections}
+    assert "output/bare.png" in reasons_by_path
+    assert "generated_file_not_object" in reasons_by_path["output/bare.png"]

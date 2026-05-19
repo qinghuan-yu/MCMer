@@ -109,51 +109,76 @@ def is_verified_paper_figure(
     work_dir: str | Path | None = None,
     verified_result_ids: set[str] | None = None,
 ) -> bool:
-    """Validate that an artifact is a legitimate paper-ready figure.
+    """Validate that an artifact is a legitimate paper-ready figure."""
+    passed, _ = validate_figure(item, document_language, work_dir, verified_result_ids)
+    return passed
+
+
+# Trusted creators — figures from these sources are accepted.
+TRUSTED_CREATERS = {"save_paper_figure", "deterministic_renderer"}
+
+
+def validate_figure(
+    item: object,
+    document_language: str,
+    work_dir: str | Path | None = None,
+    verified_result_ids: set[str] | None = None,
+) -> tuple[bool, list[str]]:
+    """Validate a figure artifact and return (passed, rejection_reasons).
+
+    This is the SINGLE source of truth for figure validation.
+    Both ``is_verified_paper_figure()`` and ``ArtifactRegistry.validate_for_paper()``
+    must delegate to this function to prevent rule drift.
 
     Parameters
     ----------
     verified_result_ids:
         When provided, ``linked_result_ids`` on the artifact must be non-empty
         and every entry must exist in this set.  Pass ``None`` to skip the
-        semantic-binding check (used by the per-file coder_agent guard which
-        does not have access to the global result registry).
+        semantic-binding check.
     """
     artifact = normalize_figure_artifact(item)
     if artifact is None:
-        return False
+        return False, ["not_a_figure_artifact"]
 
     path = artifact["path"]
+    reasons: list[str] = []
+
     if not path.startswith(PAPER_FIGURE_DIRS):
-        return False
+        reasons.append("path_not_in_paper_dir")
     if path.startswith(DEBUG_FIGURE_DIR):
-        return False
+        reasons.append("path_under_debug_artifacts")
     if artifact.get("kind") not in {None, "", "figure", "chart", "image"}:
-        return False
+        reasons.append("invalid_kind")
     if artifact.get("paper_ready") is not True:
-        return False
+        reasons.append("paper_ready_not_true")
     if artifact.get("chart_language_verified") is not True:
-        return False
-    # All new paper figures MUST come from the save_paper_figure helper.
-    # Old artifacts without helper_version/created_by are rejected — the
-    # helper has been mandatory since helper_version 3.
-    if artifact.get("created_by") != "save_paper_figure":
-        return False
+        reasons.append("chart_language_not_verified")
+
+    # Trusted creator check
+    creator = artifact.get("created_by")
+    if creator not in TRUSTED_CREATERS:
+        reasons.append(f"untrusted_creator:{creator}")
     helper_version = artifact.get("helper_version")
     if not isinstance(helper_version, (int, float)) or helper_version < 3:
-        return False
-    # Reject placeholder/test figures by filename or explicit flag.
+        reasons.append("missing_or_old_helper_version")
+
+    # Placeholder checks
     if artifact.get("is_placeholder") is True:
-        return False
+        reasons.append("is_placeholder_true")
     if is_placeholder_filename(path):
-        return False
-    # Reject placeholder content in audit text.
+        reasons.append("placeholder_filename")
     audit_texts = artifact.get("visible_text_audit") or []
     if isinstance(audit_texts, list):
         combined_audit = " ".join(str(t) for t in audit_texts)
         if contains_placeholder_text(combined_audit):
-            return False
+            reasons.append("placeholder_text_in_audit")
+        if not audit_texts:
+            reasons.append("empty_visible_text_audit")
+    else:
+        reasons.append("visible_text_audit_not_list")
 
+    # Language check (always enforced, regardless of verified_result_ids)
     language = str(
         artifact.get("visible_text_language")
         or artifact.get("chart_language")
@@ -161,32 +186,37 @@ def is_verified_paper_figure(
         or artifact.get("figure_language")
         or ""
     ).strip().lower()
-    if language not in expected_language_aliases(document_language):
-        return False
+    if not language:
+        reasons.append("missing_visible_text_language")
+    elif language not in expected_language_aliases(document_language):
+        reasons.append("wrong_visible_text_language")
 
     audit = artifact.get("visible_text_audit")
     if not isinstance(audit, list) or not audit:
-        return False
+        reasons.append("missing_visible_text_audit")
 
-    # Semantic binding: linked_result_ids must reference verified results,
-    # and source_data must be non-empty (proves what the figure is based on).
+    # Semantic binding (only when verified_result_ids provided)
     if verified_result_ids is not None:
         linked = artifact.get("linked_result_ids")
         if not isinstance(linked, list) or not linked:
-            return False
-        for rid in linked:
-            if str(rid) not in verified_result_ids:
-                return False
+            reasons.append("missing_linked_result_ids")
+        else:
+            for rid in linked:
+                if str(rid) not in verified_result_ids:
+                    reasons.append(f"linked_result_id_not_verified:{rid}")
         source = artifact.get("source_data")
         if not isinstance(source, list) or not source:
-            return False
-        for entry in source:
-            if not str(entry).strip():
-                return False
+            reasons.append("missing_source_data")
+        else:
+            for entry in source:
+                if not str(entry).strip():
+                    reasons.append("empty_source_data_entry")
 
+    # File existence check
     if work_dir is not None and not (Path(work_dir) / path).exists():
-        return False
-    return True
+        reasons.append("file_not_on_disk")
+
+    return len(reasons) == 0, reasons
 
 
 def is_placeholder_filename(path: str) -> bool:

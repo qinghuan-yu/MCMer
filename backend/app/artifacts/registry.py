@@ -16,12 +16,10 @@ from typing import Any
 from app.artifacts.contracts import ProblemContract
 from app.utils.figure_artifacts import (
     FIGURE_MANIFEST,
-    is_verified_paper_figure,
+    validate_figure,
     load_figure_manifest,
     normalize_artifact_path,
     is_image_path,
-    is_placeholder_filename,
-    contains_placeholder_text,
 )
 from app.utils.common_utils import build_result_registry, load_json
 
@@ -108,16 +106,15 @@ class ArtifactRegistry:
     # ── Validation ─────────────────────────────────────────────────────
 
     def validate_for_paper(self) -> list[str]:
-        """Validate all figures and return the list of paper-ready image paths.
+        """Validate all figures using the unified ``validate_figure()`` validator.
 
-        Also populates ``self.figure_rejections`` with structured rejection
-        reasons for every rejected figure.
+        Delegates to ``figure_artifacts.validate_figure()`` — the SINGLE source
+        of truth for figure validation — and collects structured rejection reasons.
         """
         self.paper_ready_images = []
         self.figure_rejections = []
         seen: set[str] = set()
         root = Path(self.work_dir)
-
         document_language = self.contract.chart_language if self.contract else "Simplified Chinese"
 
         def _check(item: dict[str, Any], source: str) -> None:
@@ -126,72 +123,20 @@ class ArtifactRegistry:
                 return
             seen.add(path)
 
-            rejection = FigureRejection(path=path)
-
-            # Run all validation checks and collect reasons
-            if not is_image_path(path):
-                rejection.rejected_by.append("not_an_image")
-            elif not path.startswith(("output/", "figures/", "final_results/")):
-                rejection.rejected_by.append("path_not_in_paper_dir")
-            elif path.startswith("debug_artifacts/"):
-                rejection.rejected_by.append("path_under_debug_artifacts")
-            else:
-                if item.get("paper_ready") is not True:
-                    rejection.rejected_by.append("paper_ready_not_true")
-                if item.get("chart_language_verified") is not True:
-                    rejection.rejected_by.append("chart_language_not_verified")
-                if item.get("created_by") != "save_paper_figure":
-                    rejection.rejected_by.append("missing_created_by")
-                hv = item.get("helper_version")
-                if not isinstance(hv, (int, float)) or hv < 3:
-                    rejection.rejected_by.append("missing_or_old_helper_version")
-                if item.get("is_placeholder") is True:
-                    rejection.rejected_by.append("is_placeholder_true")
-                if is_placeholder_filename(path):
-                    rejection.rejected_by.append("placeholder_filename")
-
-                # Audit text checks
-                audit_texts = item.get("visible_text_audit") or []
-                if isinstance(audit_texts, list):
-                    combined = " ".join(str(t) for t in audit_texts)
-                    if contains_placeholder_text(combined):
-                        rejection.rejected_by.append("placeholder_text_in_audit")
-                    if not audit_texts:
-                        rejection.rejected_by.append("empty_visible_text_audit")
-                else:
-                    rejection.rejected_by.append("visible_text_audit_not_list")
-
-                # Language check
-                lang = str(
-                    item.get("visible_text_language")
-                    or item.get("chart_language")
-                    or ""
-                ).strip().lower()
-                from app.utils.figure_artifacts import expected_language_aliases
-                if lang and lang not in expected_language_aliases(document_language):
-                    rejection.rejected_by.append("wrong_visible_text_language")
-
-                # Semantic binding checks
-                if self.verified_result_ids:
-                    linked = item.get("linked_result_ids")
-                    if not isinstance(linked, list) or not linked:
-                        rejection.rejected_by.append("missing_linked_result_ids")
-                    else:
-                        for rid in linked:
-                            if str(rid) not in self.verified_result_ids:
-                                rejection.rejected_by.append(f"linked_result_id_not_verified:{rid}")
-                    source = item.get("source_data")
-                    if not isinstance(source, list) or not source:
-                        rejection.rejected_by.append("missing_source_data")
-
-                # File existence check
-                if not (root / path).exists():
-                    rejection.rejected_by.append("file_not_on_disk")
-
-            if rejection.rejected_by:
-                self.figure_rejections.append(rejection)
-            else:
+            passed, reasons = validate_figure(
+                item, document_language, root, self.verified_result_ids,
+            )
+            if passed:
                 self.paper_ready_images.append(path)
+            else:
+                self.figure_rejections.append(FigureRejection(path=path, rejected_by=reasons))
+
+        def _reject_path(path_like: str, reason: str) -> None:
+            path = normalize_artifact_path(path_like)
+            if not path or path in seen:
+                return
+            seen.add(path)
+            self.figure_rejections.append(FigureRejection(path=path, rejected_by=[reason]))
 
         # Check manifest entries
         for item in self.figure_manifest:
@@ -205,6 +150,8 @@ class ArtifactRegistry:
             for item in payload.get("generated_files", []) or []:
                 if isinstance(item, dict):
                     _check(item, filename)
+                elif isinstance(item, str) and is_image_path(item):
+                    _reject_path(item, "generated_file_not_object")
 
         return self.paper_ready_images
 
