@@ -31,6 +31,36 @@ from app.utils.figure_artifacts import normalize_artifact_path
 from app.utils.log_util import logger
 
 
+_TOOL_PROTOCOL_RE = re.compile(
+    r"(<\s*[｜|]+\s*DSML\s*[｜|]+|</\s*[｜|]+\s*DSML\s*[｜|]+|"
+    r"\btool_calls\b|invoke\s+name\s*=|parameter\s+name\s*=|run_script)",
+    re.IGNORECASE,
+)
+
+
+def _contains_tool_protocol_text(content: str) -> bool:
+    if not content:
+        return False
+    matches = _TOOL_PROTOCOL_RE.findall(content)
+    if any("DSML" in str(match).upper() for match in matches):
+        return True
+    lowered = content.lower()
+    return (
+        "tool_calls" in lowered
+        and ("invoke name" in lowered or "parameter name" in lowered or "run_script" in lowered)
+    )
+
+
+class FinalizationValidationError(ValueError):
+    """Machine-readable finalization validation failure."""
+
+    def __init__(self, message: str, error_code: str, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.error_code = error_code
+        self.error_type = "finalizer_validation"
+        self.details = details or {}
+
+
 class DocumentFinalizer:
     """Single export outlet for all final documents."""
 
@@ -57,8 +87,14 @@ class DocumentFinalizer:
                 logger.warning("Notebook save failed: %s", e)
 
         # ── Normalise markdown ─────────────────────────────────────────
+        if _contains_tool_protocol_text(paper_content):
+            raise FinalizationValidationError(
+                "Refusing to export tool-call protocol text as paper content.",
+                error_code="FINALIZER_TOOL_PROTOCOL_LEAK",
+            )
         normalized = normalize_math_markdown(paper_content)
         normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
+        DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
 
         # ── Determine output paths ─────────────────────────────────────
@@ -147,8 +183,14 @@ class DocumentFinalizer:
                 )
 
         # ── Normalise markdown ─────────────────────────────────────────
+        if _contains_tool_protocol_text(paper_content):
+            raise FinalizationValidationError(
+                "Refusing to export tool-call protocol text as paper content.",
+                error_code="FINALIZER_TOOL_PROTOCOL_LEAK",
+            )
         normalized = normalize_math_markdown(paper_content)
         normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
+        DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
 
         # ── Determine output paths ─────────────────────────────────────
@@ -319,3 +361,72 @@ class DocumentFinalizer:
             return m.group(0) if raw in allowed else ""
 
         return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", _replace, markdown or "")
+
+    @staticmethod
+    def _extract_markdown_image_targets(markdown: str) -> list[str]:
+        """Extract normalized image targets from Markdown image syntax."""
+        if not markdown:
+            return []
+
+        def _strip_title(raw: str) -> str:
+            target = raw.strip()
+            if target.startswith("<"):
+                end = target.find(">")
+                if end != -1:
+                    return target[1:end].strip()
+            for sep in (' "', " '"):
+                if sep in target:
+                    return target.split(sep, 1)[0].strip()
+            return target
+
+        targets: list[str] = []
+        for match in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", markdown):
+            raw = _strip_title(match.group(1))
+            normalized = normalize_artifact_path(raw)
+            if normalized:
+                targets.append(normalized)
+        return targets
+
+    @staticmethod
+    def _validate_image_references(
+        work_dir: str,
+        markdown: str,
+        allowed_images: list[str] | None,
+    ) -> None:
+        """Hard-validate Markdown image references before export.
+
+        Rules:
+        - If ``allowed_images`` is not None, every referenced image must be in whitelist.
+        - Every referenced image must exist on disk under work_dir.
+        """
+        refs = DocumentFinalizer._extract_markdown_image_targets(markdown)
+        if not refs:
+            return
+
+        allowed = None
+        if allowed_images is not None:
+            allowed = {
+                normalize_artifact_path(path)
+                for path in allowed_images
+                if str(path).strip()
+            }
+            disallowed = [path for path in refs if path not in allowed]
+            if disallowed:
+                raise FinalizationValidationError(
+                    "Markdown references images outside FigureBundle whitelist: "
+                    + ", ".join(disallowed),
+                    error_code="FINALIZER_UNWHITELISTED_IMAGE_REF",
+                    details={"paths": disallowed},
+                )
+
+        missing = [
+            path
+            for path in refs
+            if not (Path(work_dir) / path).exists()
+        ]
+        if missing:
+            raise FinalizationValidationError(
+                "Markdown references missing image files: " + ", ".join(missing),
+                error_code="FINALIZER_MISSING_IMAGE_REF",
+                details={"paths": missing},
+            )

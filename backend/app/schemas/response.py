@@ -49,6 +49,9 @@ class TaskResult(BaseModel):
     notebook_path: str = ""
     work_dir: str = ""
     error_message: str = ""
+    error_code: str = ""
+    error_type: str = ""
+    error_details: Optional[Any] = None
 
 
 # ============================================================

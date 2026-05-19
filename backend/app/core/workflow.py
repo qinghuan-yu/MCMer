@@ -8,7 +8,7 @@ from typing import AsyncGenerator
 
 from app.artifacts.contracts import ProblemContract
 from app.artifacts.registry import ArtifactRegistry
-from app.artifacts.exporters import DocumentFinalizer
+from app.artifacts.exporters import DocumentFinalizer, FinalizationValidationError
 from app.artifacts.renderers import (
     render_distance_time_curve,
     render_trajectory_shielding_2d,
@@ -101,6 +101,9 @@ def _build_failed_task_result(
     task_type: str,
     work_dir: str,
     error_message: str,
+    error_code: str = "",
+    error_type: str = "",
+    error_details: dict | None = None,
     paper_path: str = "",
     docx_path: str = "",
     notebook_path: str = "",
@@ -113,12 +116,22 @@ def _build_failed_task_result(
             status="failed",
             task_type=task_type,
             error_message=error_message,
+            error_code=error_code,
+            error_type=error_type,
+            error_details=error_details,
             paper_path=paper_path,
             docx_path=docx_path,
             notebook_path=notebook_path,
             work_dir=work_dir,
         ).model_dump(),
     }
+
+
+def _classify_failure(exc: Exception) -> tuple[str, str, str, dict | None]:
+    """Map internal exceptions to machine-readable failure semantics."""
+    if isinstance(exc, FinalizationValidationError):
+        return str(exc), exc.error_code, exc.error_type, exc.details
+    return str(exc), "WORKFLOW_RUNTIME_ERROR", "runtime", None
 
 
 def _unique_structured_result_files(*file_groups: list[str]) -> list[str]:
@@ -2171,7 +2184,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             structured_result_files=structured_result_files_for_figures,
             contract=contract,
         )
-        paper_ready_images = art_registry.validate_for_paper()
+        artifact_valid_images = art_registry.validate_for_paper()
         required_requests = _required_figure_requests(solve_spec)
 
         # Phase-2: deterministic-first recovery per required request.
@@ -2193,7 +2206,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     structured_result_files=structured_result_files_for_figures,
                     contract=contract,
                 )
-                paper_ready_images = art_registry.validate_for_paper()
+                artifact_valid_images = art_registry.validate_for_paper()
 
         semantic_bundle = art_registry.build_figure_bundle()
         missing_required_requests = list(semantic_bundle.missing_requests)
@@ -2278,7 +2291,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     structured_result_files=structured_result_files_for_figures,
                     contract=contract,
                 )
-                paper_ready_images = art_registry.validate_for_paper()
+                artifact_valid_images = art_registry.validate_for_paper()
                 semantic_bundle = art_registry.build_figure_bundle()
                 missing_required_requests = list(semantic_bundle.missing_requests)
                 if not missing_required_requests:
@@ -2295,7 +2308,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     _preview(json.dumps(stage_outputs["chart_recovery"], ensure_ascii=False)),
                     section="Figure artifact repair",
                 )
-        if not paper_ready_images:
+        if not artifact_valid_images:
             fallback_images = _create_verified_result_summary_figure(
                 work_dir,
                 result_registry,
@@ -2308,14 +2321,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     structured_result_files=structured_result_files_for_figures,
                     contract=contract,
                 )
-                paper_ready_images = art_registry.validate_for_paper()
-                if paper_ready_images:
+                artifact_valid_images = art_registry.validate_for_paper()
+                if artifact_valid_images:
                     chart_images = list(dict.fromkeys([*chart_images, *fallback_images]))
                     stage_outputs["deterministic_chart_recovery"] = {
                         "created_images": fallback_images,
                         "reason": "LLM chart repair produced image evidence but no verified FigureArtifact.",
                     }
-        if not paper_ready_images and _has_generated_image_evidence(
+        if not artifact_valid_images and _has_generated_image_evidence(
             work_dir,
             structured_result_files_for_figures,
             [*(locals().get("pre_recovery_image_evidence", [])), *solver_images, *chart_images],
@@ -2324,7 +2337,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "Generated figures exist, but none passed the strict FigureArtifact language gate. "
                 "The workflow stopped instead of silently producing a paper with missing or unverified figures."
             )
-        if not paper_ready_images and _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))):
+        if not artifact_valid_images and _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))):
             raise ValueError(
                 "The task context indicates figures/charts are expected, but no verified paper figures were produced. "
                 "The workflow stopped instead of silently producing a paper with missing figures. "
@@ -2336,7 +2349,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             for item in figure_bundle.available_figures
             if str(item.get("path") or "").strip()
         ]
-        stage_outputs["paper_ready_images"] = paper_ready_images
+        stage_outputs["artifact_valid_images"] = artifact_valid_images
+        stage_outputs["paper_ready_images"] = writer_images
         stage_outputs["figure_bundle"] = figure_bundle.to_dict()
         stage_outputs["writer_available_images"] = writer_images
 
@@ -2353,20 +2367,20 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 
         # Generate structured gate reports from ArtifactRegistry
         figure_gate = FigureGateReport.from_rejections(
-            paper_ready_images,
+            artifact_valid_images,
             art_registry.rejection_summary(),
         )
         figure_gate.save(work_dir)
         trace.add_stage("figure_gate", "passed" if figure_gate.passed else "failed",
                         figure_gate.reason, 0,
-                        {"paper_ready_count": len(paper_ready_images),
+                        {"paper_ready_count": len(writer_images),
                          "rejected_count": len(art_registry.figure_rejections)})
 
         quality_gate = QualityGateReport.from_check(
             verified_count=len(result_registry.get("verified_results", []) or []),
             blocked_count=len(result_registry.get("blocked_results", []) or []),
             expected_figures=expected_figures,
-            paper_ready_count=len(paper_ready_images),
+            paper_ready_count=len(writer_images),
             passed=gate_passed,
             reason=gate_reason,
             required_request_count=len(figure_bundle.required_requests),
@@ -2392,6 +2406,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 task_type="writing",
                 work_dir=work_dir,
                 error_message=gate_reason,
+                error_code="QUALITY_GATE_FAILED",
+                error_type="quality_gate",
+                error_details={"gate_reason": gate_reason},
                 paper_path=md_path,
                 docx_path=docx_fail_path if docx_fail_path and os.path.exists(docx_fail_path) else "",
                 notebook_path=os.path.join(work_dir, "notebook.ipynb"),
@@ -2749,8 +2766,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 structured_result_files=structured_result_files_for_figures,
                 contract=contract,
             )
-            paper_ready_images = art_registry.validate_for_paper()
-            if not paper_ready_images:
+            artifact_valid_images = art_registry.validate_for_paper()
+            if not artifact_valid_images:
                 fallback_images = _create_verified_result_summary_figure(
                     work_dir,
                     result_registry,
@@ -2762,15 +2779,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                         structured_result_files=structured_result_files_for_figures,
                         contract=contract,
                     )
-                    paper_ready_images = art_registry.validate_for_paper()
-                    if paper_ready_images:
+                    artifact_valid_images = art_registry.validate_for_paper()
+                    if artifact_valid_images:
                         chart_images = list(dict.fromkeys([*chart_images, *fallback_images]))
                         stage_outputs[f"deterministic_chart_recovery_round_{audit_round}"] = {
                             "created_images": fallback_images,
                             "reason": "Audit repair produced image evidence but no verified FigureArtifact.",
                         }
-            stage_outputs[f"paper_ready_images_round_{audit_round}"] = paper_ready_images
-            if not paper_ready_images and _has_generated_image_evidence(
+            if not artifact_valid_images and _has_generated_image_evidence(
                 work_dir,
                 structured_result_files_for_figures,
                 [*solver_images, *chart_images],
@@ -2778,7 +2794,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 raise ValueError(
                     "Audit repair produced figures, but none passed the strict FigureArtifact language gate."
                 )
-            if not paper_ready_images and _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))):
+            if not artifact_valid_images and _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))):
                 raise ValueError(
                     "Audit round {}: task expects figures but no verified paper figures were produced.".format(audit_round)
                 )
@@ -2790,6 +2806,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 for item in figure_bundle.available_figures
                 if str(item.get("path") or "").strip()
             ]
+            stage_outputs[f"artifact_valid_images_round_{audit_round}"] = artifact_valid_images
+            stage_outputs[f"paper_ready_images_round_{audit_round}"] = writer_images
             stage_outputs[f"figure_bundle_round_{audit_round}"] = figure_bundle.to_dict()
             stage_outputs[f"writer_available_images_round_{audit_round}"] = writer_images
 
@@ -2836,9 +2854,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 
         stage_outputs["final_audit"] = audit_report
         stage_outputs["paper_audit_report"] = audit_report_machine
-        # Ensure stage_outputs reflects the final paper_ready_images
-        # (may have been updated in audit rounds as paper_ready_images_round_N)
-        stage_outputs["paper_ready_images"] = paper_ready_images
+        # Ensure stage_outputs reflects the final writer-facing image whitelist.
+        stage_outputs["artifact_valid_images"] = artifact_valid_images
+        stage_outputs["paper_ready_images"] = writer_images
         stage_outputs["figure_bundle"] = figure_bundle.to_dict()
         stage_outputs["writer_available_images"] = writer_images
 
@@ -2874,12 +2892,16 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 
     except Exception as exc:
         logger.exception(f"写作工作流执行失败: {exc}")
+        error_message, error_code, error_type, error_details = _classify_failure(exc)
         task_manager.update_status(task_id, TaskStatus.FAILED)
         yield _build_failed_task_result(
             task_id=task_id,
             task_type="writing",
             work_dir=work_dir,
-            error_message=str(exc),
+            error_message=error_message,
+            error_code=error_code,
+            error_type=error_type,
+            error_details=error_details,
         )
     finally:
         await code_interpreter.close()
@@ -3037,8 +3059,8 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             structured_result_files=polish_structured_files,
             contract=contract,
         )
-        paper_ready_images = polish_art_registry.validate_for_paper()
-        if not paper_ready_images:
+        artifact_valid_images = polish_art_registry.validate_for_paper()
+        if not artifact_valid_images:
             fallback_images = _create_verified_result_summary_figure(
                 work_dir,
                 polish_art_registry.result_registry,
@@ -3050,13 +3072,13 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
                     structured_result_files=polish_structured_files,
                     contract=contract,
                 )
-                paper_ready_images = polish_art_registry.validate_for_paper()
-                if paper_ready_images:
+                artifact_valid_images = polish_art_registry.validate_for_paper()
+                if artifact_valid_images:
                     stage_outputs["deterministic_chart_recovery"] = {
                         "created_images": fallback_images,
                         "reason": "Polish produced image evidence but no verified FigureArtifact.",
                     }
-        if not paper_ready_images and _has_generated_image_evidence(
+        if not artifact_valid_images and _has_generated_image_evidence(
             work_dir,
             recalculation_result.structured_result_files,
             recalculation_result.created_images,
@@ -3070,7 +3092,8 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             for item in polish_figure_bundle.available_figures
             if str(item.get("path") or "").strip()
         ]
-        stage_outputs["paper_ready_images"] = paper_ready_images
+        stage_outputs["artifact_valid_images"] = artifact_valid_images
+        stage_outputs["paper_ready_images"] = writer_images
         stage_outputs["figure_bundle"] = polish_figure_bundle.to_dict()
         stage_outputs["writer_available_images"] = writer_images
         wording_prompt = (
@@ -3147,12 +3170,16 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
 
     except Exception as exc:
         logger.exception(f"润色工作流执行失败: {exc}")
+        error_message, error_code, error_type, error_details = _classify_failure(exc)
         task_manager.update_status(task_id, TaskStatus.FAILED)
         yield _build_failed_task_result(
             task_id=task_id,
             task_type="polish",
             work_dir=work_dir,
-            error_message=str(exc),
+            error_message=error_message,
+            error_code=error_code,
+            error_type=error_type,
+            error_details=error_details,
         )
     finally:
         await code_interpreter.close()

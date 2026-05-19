@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 from app.core.agents.coder_agent import CoderAgent
+from app.core.agents.writer_agent import _contains_tool_protocol_text
 from app.core.workflow import _generated_image_evidence_paths, _has_generated_image_evidence, _language_verified_generated_images, _quality_gate_before_writing
 from app.utils.common_utils import finalize_markdown_export
 from app.utils.figure_artifacts import is_verified_paper_figure, is_placeholder_filename, contains_placeholder_text
@@ -18,6 +19,23 @@ PNG_1X1 = base64.b64decode(
 def _write_png(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(PNG_1X1)
+
+
+def test_writer_rejects_tool_protocol_text() -> None:
+    from app.artifacts.exporters import _contains_tool_protocol_text as export_guard
+
+    leaked = (
+        '<｜｜DSML｜｜tool_calls>\n'
+        '<｜｜DSML｜｜invoke name="run_script">\n'
+        '<｜｜DSML｜｜parameter name="script" string="true">print("debug")</｜｜DSML｜｜parameter>\n'
+        '</｜｜DSML｜｜invoke>\n'
+        '</｜｜DSML｜｜tool_calls>'
+    )
+    assert _contains_tool_protocol_text(leaked)
+    assert export_guard(leaked)
+    assert _contains_tool_protocol_text('<||DSML||tool_calls><||DSML||invoke name="run_script">')
+    assert not _contains_tool_protocol_text("# 正文\n\n这是普通 Markdown 论文正文。")
+    assert not export_guard("# 正文\n\n这是普通 Markdown 论文正文。")
 
 
 def test_chinese_task_rejects_english_figure_artifact(tmp_path: Path) -> None:
@@ -817,6 +835,49 @@ def test_document_finalizer_exports(tmp_path: Path) -> None:
     assert "Hello world" in content
 
 
+def test_document_finalizer_rejects_unwhitelisted_markdown_image(tmp_path: Path) -> None:
+    """Finalizer must fail when markdown references images outside whitelist."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    _write_png(tmp_path / "output" / "allowed.png")
+    _write_png(tmp_path / "output" / "blocked.png")
+
+    paper = "![ok](output/allowed.png)\n\n![blocked](output/blocked.png)\n"
+    try:
+        DocumentFinalizer.finalize(
+            work_dir=str(tmp_path),
+            task_id="test",
+            task_type="writing",
+            paper_content=paper,
+            allowed_images=["output/allowed.png"],
+            result_payload={"test": True},
+        )
+        assert False, "Expected ValueError for unwhitelisted image reference"
+    except ValueError as exc:
+        assert "outside FigureBundle whitelist" in str(exc)
+        assert getattr(exc, "error_code", "") == "FINALIZER_UNWHITELISTED_IMAGE_REF"
+
+
+def test_document_finalizer_rejects_missing_markdown_image(tmp_path: Path) -> None:
+    """Finalizer must fail when markdown references missing image files."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    paper = "![missing](output/missing.png)\n"
+    try:
+        DocumentFinalizer.finalize(
+            work_dir=str(tmp_path),
+            task_id="test",
+            task_type="writing",
+            paper_content=paper,
+            allowed_images=["output/missing.png"],
+            result_payload={"test": True},
+        )
+        assert False, "Expected ValueError for missing image file"
+    except ValueError as exc:
+        assert "missing image files" in str(exc)
+        assert getattr(exc, "error_code", "") == "FINALIZER_MISSING_IMAGE_REF"
+
+
 def test_failure_report_export(tmp_path: Path) -> None:
     """DocumentFinalizer.export_failure_report should create failure files."""
     from app.artifacts.exporters import DocumentFinalizer
@@ -991,6 +1052,60 @@ def test_save_revision_preserves_existing_res_payload(tmp_path: Path, monkeypatc
     assert "Updated content" in updated.get("paper", "")
 
 
+def test_save_revision_prefers_writer_available_images(tmp_path: Path, monkeypatch) -> None:
+    """Revision whitelist must prioritize writer_available_images over legacy paper_ready_images."""
+    from app.config.setting import settings
+    from app.services.task_service import TaskManager
+
+    monkeypatch.setattr(settings, "WORK_DIR", str(tmp_path))
+    task_id = "rev-writer-images"
+    task_dir = tmp_path / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "task_id": task_id,
+        "task_type": "writing",
+        "stages": {
+            "paper_ready_images": ["output/legacy_diag.png"],
+            "paper_ready_images_round_3": ["output/legacy_round.png"],
+            "writer_available_images": ["output/writer_base.png"],
+            "writer_available_images_round_2": ["output/writer_round2.png"],
+        },
+    }
+    (task_dir / "res.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    captured: dict = {}
+
+    def _fake_finalize(**kwargs):
+        captured["allowed_images"] = kwargs.get("allowed_images")
+        result_payload = kwargs.get("result_payload", {})
+        result_payload["paper"] = kwargs.get("paper_content", "")
+        (task_dir / "res.json").write_text(json.dumps(result_payload, ensure_ascii=False), encoding="utf-8")
+        return str(task_dir / "res_v1.md"), "", ""
+
+    monkeypatch.setattr("app.services.task_service.DocumentFinalizer.finalize", _fake_finalize)
+
+    manager = TaskManager()
+    manager.save_revision(task_id=task_id, paper_content="# Revised\n", version=1)
+
+    assert captured.get("allowed_images") == ["output/writer_round2.png"]
+
+
+def test_deterministic_renderer_requires_cjk_font(monkeypatch) -> None:
+    """Chinese deterministic rendering must hard-fail when no CJK font is available."""
+    from app.artifacts import renderers
+
+    # Force empty font inventory to emulate missing CJK runtime.
+    from matplotlib import font_manager
+    monkeypatch.setattr(font_manager.fontManager, "ttflist", [])
+
+    try:
+        renderers._configure_fonts("Simplified Chinese")
+        assert False, "Expected RuntimeError when no CJK font is available"
+    except RuntimeError as exc:
+        assert "No CJK font available" in str(exc)
+
+
 def test_polish_contract_prefers_parent_contract(tmp_path: Path, monkeypatch) -> None:
     """Polish should inherit parent ProblemContract before fallback text detection."""
     from app.artifacts.contracts import ProblemContract
@@ -1022,6 +1137,42 @@ def test_polish_contract_prefers_parent_contract(tmp_path: Path, monkeypatch) ->
 
 
 def test_artifact_registry_reports_bare_string_generated_file_rejection(tmp_path: Path) -> None:
+
+    def test_artifact_registry_compat_alias_artifact_valid_images(tmp_path: Path) -> None:
+        """Registry should expose artifact_valid_images and keep legacy paper_ready_images in sync."""
+        from app.artifacts.registry import ArtifactRegistry
+
+        _write_png(tmp_path / "output" / "ok.png")
+        manifest = [
+            {
+                "path": "output/ok.png",
+                "kind": "figure",
+                "paper_ready": True,
+                "visible_text_language": "Simplified Chinese",
+                "chart_language_verified": True,
+                "visible_text_audit": ["标题", "横轴", "纵轴"],
+                "created_by": "save_paper_figure",
+                "helper_version": 3,
+                "is_placeholder": False,
+                "linked_result_ids": ["r1"],
+                "source_data": ["data.csv"],
+            }
+        ]
+        (tmp_path / "figure_artifacts.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        registry = {
+            "verified_results": [{"id": "r1", "status": "verified", "value": 1}],
+            "blocked_results": [],
+            "summary": {"verified_count": 1, "blocked_count": 0},
+        }
+        (tmp_path / "result_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+        art_reg = ArtifactRegistry.load(str(tmp_path))
+        valid = art_reg.validate_for_paper()
+
+        assert valid == ["output/ok.png"]
+        assert art_reg.artifact_valid_images == ["output/ok.png"]
+        assert art_reg.paper_ready_images == art_reg.artifact_valid_images
     """Bare string generated_files image paths should be recorded in rejection report."""
     from app.artifacts.registry import ArtifactRegistry
 
@@ -1265,6 +1416,9 @@ def test_build_failed_task_result_with_failure_report_paths(tmp_path: Path) -> N
         task_type="writing",
         work_dir=str(tmp_path),
         error_message="verified_count=0",
+        error_code="QUALITY_GATE_FAILED",
+        error_type="quality_gate",
+        error_details={"gate_reason": "verified_count=0"},
         paper_path=md_path,
         docx_path=docx_path,
         notebook_path=notebook_path,
@@ -1276,3 +1430,23 @@ def test_build_failed_task_result_with_failure_report_paths(tmp_path: Path) -> N
     assert data["paper_path"] == md_path
     assert data["docx_path"] == docx_path
     assert data["notebook_path"] == notebook_path
+    assert data["error_code"] == "QUALITY_GATE_FAILED"
+    assert data["error_type"] == "quality_gate"
+    assert data["error_details"] == {"gate_reason": "verified_count=0"}
+
+
+def test_classify_failure_maps_finalizer_error() -> None:
+    from app.artifacts.exporters import FinalizationValidationError
+    from app.core.workflow import _classify_failure
+
+    exc = FinalizationValidationError(
+        "missing image",
+        error_code="FINALIZER_MISSING_IMAGE_REF",
+        details={"paths": ["output/a.png"]},
+    )
+    message, code, failure_type, details = _classify_failure(exc)
+
+    assert message == "missing image"
+    assert code == "FINALIZER_MISSING_IMAGE_REF"
+    assert failure_type == "finalizer_validation"
+    assert details == {"paths": ["output/a.png"]}

@@ -43,8 +43,10 @@ def _configure_fonts(chart_language: str):
         ]
         chosen = [name for name in chinese_fonts if name in available]
         if not chosen:
-            logger.warning("No CJK font available, falling back to DejaVu Sans")
-            chosen = ['DejaVu Sans']
+            raise RuntimeError(
+                "No CJK font available for Simplified Chinese chart rendering. "
+                "Refusing to render paper figure with fallback fonts."
+            )
         _mpl.rcParams['font.family'] = 'sans-serif'
         _mpl.rcParams['font.sans-serif'] = chosen + ['DejaVu Sans']
         _mpl.rcParams['axes.unicode_minus'] = False
@@ -164,7 +166,11 @@ def render_line_chart(
     output_path: str,
     legend_labels: list[str] | None = None,
     chart_language: str = "Simplified Chinese",
-) -> str:
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    work_dir: str | None = None,
+    figure_role: str = "line_chart",
+) -> dict[str, Any]:
     """Render a line chart.
 
     Parameters
@@ -182,9 +188,7 @@ def render_line_chart(
     chart_language : str
         Language for font configuration.
 
-    Returns
-    -------
-    str : path to saved figure
+    Returns a FigureArtifact dict.
     """
     _ensure_matplotlib()
     _configure_fonts(chart_language)
@@ -205,7 +209,19 @@ def render_line_chart(
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    return _save_figure(fig, output_path)
+    _save_figure(fig, output_path)
+    rel_path = _to_relative_path(output_path)
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, x_label, y_label, *(legend_labels or [])[:3]],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or [],
+        figure_role=figure_role,
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact
 
 
 def render_scatter_plot(
@@ -216,7 +232,11 @@ def render_scatter_plot(
     y_label: str,
     output_path: str,
     chart_language: str = "Simplified Chinese",
-) -> str:
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    work_dir: str | None = None,
+    figure_role: str = "scatter_plot",
+) -> dict[str, Any]:
     """Render a scatter plot."""
     _ensure_matplotlib()
     _configure_fonts(chart_language)
@@ -228,7 +248,19 @@ def render_scatter_plot(
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    return _save_figure(fig, output_path)
+    _save_figure(fig, output_path)
+    rel_path = _to_relative_path(output_path)
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, x_label, y_label],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or [],
+        figure_role=figure_role,
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact
 
 
 def render_table_figure(
@@ -237,7 +269,11 @@ def render_table_figure(
     title: str,
     output_path: str,
     chart_language: str = "Simplified Chinese",
-) -> str:
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    work_dir: str | None = None,
+    figure_role: str = "table_figure",
+) -> dict[str, Any]:
     """Render a table as a figure."""
     _ensure_matplotlib()
     _configure_fonts(chart_language)
@@ -262,7 +298,20 @@ def render_table_figure(
 
     ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
     fig.tight_layout()
-    return _save_figure(fig, output_path)
+    _save_figure(fig, output_path)
+    rel_path = _to_relative_path(output_path)
+    audit_headers = headers[:3] if headers else []
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, *audit_headers],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or [],
+        figure_role=figure_role,
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact
 
 
 def render_verified_summary(

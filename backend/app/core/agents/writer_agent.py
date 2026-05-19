@@ -10,9 +10,31 @@ from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
 from app.schemas.response import SystemMessage, WriterMessage
 import json
+import re
 from app.core.functions import writer_tools
 from icecream import ic
 from app.schemas.A2A import WriterResponse
+
+
+_TOOL_PROTOCOL_RE = re.compile(
+    r"(<\s*[｜|]+\s*DSML\s*[｜|]+|</\s*[｜|]+\s*DSML\s*[｜|]+|"
+    r"\btool_calls\b|invoke\s+name\s*=|parameter\s+name\s*=|run_script)",
+    re.IGNORECASE,
+)
+
+
+def _contains_tool_protocol_text(content: str) -> bool:
+    """Return True when model/tool-call protocol text leaked into prose."""
+    if not content:
+        return False
+    matches = _TOOL_PROTOCOL_RE.findall(content)
+    if any("DSML" in str(match).upper() for match in matches):
+        return True
+    lowered = content.lower()
+    return (
+        "tool_calls" in lowered
+        and ("invoke name" in lowered or "parameter name" in lowered or "run_script" in lowered)
+    )
 
 
 class WriterAgent(Agent):
@@ -162,6 +184,23 @@ class WriterAgent(Agent):
                 continue
 
             response_content = (message.content or "").strip()
+            if _contains_tool_protocol_text(response_content):
+                logger.warning(
+                    "WriterAgent returned tool-call protocol text instead of Markdown; rejecting response."
+                )
+                response_content = ""
+                force_plaintext_response = True
+                await self.append_chat_history(
+                    {
+                        "role": "user",
+                        "content": (
+                            "你刚才输出了工具调用协议文本（例如 DSML/tool_calls/run_script），这不是论文正文。"
+                            "禁止输出任何工具调用、XML/DSML 标签、run_script 内容或调试脚本。"
+                            "请立即改为只输出完整 Markdown 论文正文。"
+                        ),
+                    }
+                )
+                continue
             if response_content:
                 break
 

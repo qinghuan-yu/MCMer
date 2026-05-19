@@ -99,6 +99,8 @@ class ArtifactRegistry:
     result_registry: dict[str, Any] = field(default_factory=dict)
 
     # Populated by validate_for_paper()
+    artifact_valid_images: list[str] = field(default_factory=list)
+    # Backward compatibility: historical name used by older code paths.
     paper_ready_images: list[str] = field(default_factory=list)
     figure_rejections: list[FigureRejection] = field(default_factory=list)
     verified_result_ids: set[str] = field(default_factory=set)
@@ -154,6 +156,7 @@ class ArtifactRegistry:
         Delegates to ``figure_artifacts.validate_figure()`` — the SINGLE source
         of truth for figure validation — and collects structured rejection reasons.
         """
+        self.artifact_valid_images = []
         self.paper_ready_images = []
         self.figure_rejections = []
         seen: set[str] = set()
@@ -170,7 +173,7 @@ class ArtifactRegistry:
                 item, document_language, root, self.verified_result_ids,
             )
             if passed:
-                self.paper_ready_images.append(path)
+                self.artifact_valid_images.append(path)
             else:
                 self.figure_rejections.append(FigureRejection(path=path, rejected_by=reasons))
 
@@ -196,7 +199,9 @@ class ArtifactRegistry:
                 elif isinstance(item, str) and is_image_path(item):
                     _reject_path(item, "generated_file_not_object")
 
-        return self.paper_ready_images
+        # Keep deprecated alias in sync for compatibility.
+        self.paper_ready_images = list(self.artifact_valid_images)
+        return self.artifact_valid_images
 
     def _load_figure_requests(self) -> list[dict[str, Any]]:
         """Load figure_requests from solve_spec.json (if present)."""
@@ -247,7 +252,7 @@ class ArtifactRegistry:
         - figure_request_id exists and is required
         - semantic_verified is True
         """
-        if not self.paper_ready_images:
+        if not self.artifact_valid_images:
             self.validate_for_paper()
 
         artifacts = self._artifact_by_path()
@@ -267,7 +272,7 @@ class ArtifactRegistry:
         diagnostics: list[dict[str, Any]] = []
         matched_request_ids: set[str] = set()
 
-        for path in self.paper_ready_images:
+        for path in self.artifact_valid_images:
             artifact = artifacts.get(path, {})
             figure_role = str(artifact.get("figure_role") or "").strip()
             figure_request_id = str(artifact.get("figure_request_id") or "").strip()
@@ -337,7 +342,7 @@ class ArtifactRegistry:
         return summary.get("blocked_count", 0) if isinstance(summary, dict) else 0
 
     def paper_ready_count(self) -> int:
-        return len(self.paper_ready_images)
+        return len(self.artifact_valid_images)
 
     def rejection_summary(self) -> list[dict[str, Any]]:
         return [r.to_dict() for r in self.figure_rejections]

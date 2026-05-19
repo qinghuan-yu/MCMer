@@ -20,6 +20,65 @@ from app.utils.common_utils import finalize_markdown_export, normalize_math_mark
 from app.utils.log_util import logger
 
 
+def _resolve_revision_allowed_images(stages: dict | None) -> list[str] | None:
+    """Resolve revision whitelist with writer-facing semantics first.
+
+    Priority:
+    1) writer_available_images_round_N / writer_available_images
+    2) figure_bundle_round_N.available_figures / figure_bundle.available_figures
+    3) legacy paper_ready_images_round_N / paper_ready_images (backward compatibility)
+    """
+    if not isinstance(stages, dict):
+        return None
+
+    def _pick_latest_prefix(prefix: str):
+        for key in sorted(stages.keys(), reverse=True):
+            if key.startswith(prefix):
+                return stages.get(key)
+        return None
+
+    def _to_path_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    def _bundle_paths(value: object) -> list[str]:
+        if not isinstance(value, dict):
+            return []
+        available = value.get("available_figures", [])
+        if not isinstance(available, list):
+            return []
+        paths: list[str] = []
+        for item in available:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if path:
+                paths.append(path)
+        return paths
+
+    writer_latest = _to_path_list(_pick_latest_prefix("writer_available_images_round_"))
+    if writer_latest:
+        return writer_latest
+    writer_base = _to_path_list(stages.get("writer_available_images"))
+    if writer_base:
+        return writer_base
+
+    bundle_latest = _bundle_paths(_pick_latest_prefix("figure_bundle_round_"))
+    if bundle_latest:
+        return bundle_latest
+    bundle_base = _bundle_paths(stages.get("figure_bundle"))
+    if bundle_base:
+        return bundle_base
+
+    # Legacy fallback for old tasks created before FigureBundle/writer images.
+    legacy_latest = _to_path_list(_pick_latest_prefix("paper_ready_images_round_"))
+    if legacy_latest:
+        return legacy_latest
+    legacy_base = _to_path_list(stages.get("paper_ready_images"))
+    return legacy_base or None
+
+
 class TaskManager:
     """任务管理器"""
 
@@ -359,15 +418,7 @@ class TaskManager:
                 if isinstance(loaded_payload, dict):
                     result_payload = loaded_payload
                 stages = result_payload.get("stages", {}) if isinstance(result_payload, dict) else {}
-                # Try the latest audit round first, then fall back to base
-                if isinstance(stages, dict):
-                    # Find the highest paper_ready_images_round_N
-                    round_images = []
-                    for key in sorted(stages.keys(), reverse=True):
-                        if key.startswith("paper_ready_images_round_"):
-                            round_images = stages[key]
-                            break
-                    allowed_images = round_images or stages.get("paper_ready_images")
+                allowed_images = _resolve_revision_allowed_images(stages)
             except Exception:
                 allowed_images = None
 
