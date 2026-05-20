@@ -9,6 +9,7 @@ from typing import Any
 from app.artifacts.renderers import (
     render_algorithm_flowchart,
     render_comparison_bar,
+    render_data_overview,
     render_distance_time_curve,
     render_fitting_curve,
     render_geometry_schematic,
@@ -365,6 +366,7 @@ class FigureStage:
             "missing_fitting_columns",
             "missing_residual_columns",
             "missing_comparison_columns",
+            "required_columns_missing",
             "missing_source_data",
             "missing_verified_result",
             "linked_result_not_verified",
@@ -417,6 +419,7 @@ class FigureStage:
                 or "missing_fitting_columns" in reason
                 or "missing_residual_columns" in reason
                 or "missing_comparison_columns" in reason
+                or "required_columns_missing" in reason
             ):
                 summary["missing_source_data"] += 1
             elif "budget" in reason or "tool calls exceeded" in reason:
@@ -792,6 +795,7 @@ class FigureStage:
                 "fitting_curve",
                 "residual_plot",
                 "comparison_bar",
+                "data_overview",
             }:
                 missing.append({
                     "figure_request_id": req_id,
@@ -851,6 +855,26 @@ class FigureStage:
                     continue
 
             if role in {"spectrum_curve", "peak_valley_annotation"}:
+                columns, _ = FigureStage.deterministic_named_columns_from_data_files(
+                    work_dir,
+                    required_data_list,
+                )
+                column_names = [str(name).strip() for name in columns.keys() if str(name).strip()]
+                spectral_tokens = [
+                    "wavenumber", "reflectance", "spectrum", "intensity",
+                    "波数", "反射率", "光谱", "强度",
+                ]
+                if column_names and not any(
+                    any(token in name.lower() for token in spectral_tokens)
+                    for name in column_names
+                ):
+                    missing.append({
+                        "figure_request_id": req_id,
+                        "required": True,
+                        "satisfied": False,
+                        "reason": "semantic_data_mismatch:spectrum_curve",
+                    })
+                    continue
                 x_values, y_values, matched_sources = FigureStage.deterministic_series_from_data_files(
                     work_dir,
                     required_data_list,
@@ -933,6 +957,35 @@ class FigureStage:
                         continue
                     comparison_values = value_col[:16]
                     categories = [f"C{i + 1}" for i in range(len(comparison_values))]
+
+            overview_columns: dict[str, list[float]] = {}
+            if role == "data_overview":
+                columns, matched_sources = FigureStage.deterministic_named_columns_from_data_files(
+                    work_dir,
+                    required_data_list,
+                )
+                if not columns:
+                    missing.append({
+                        "figure_request_id": req_id,
+                        "required": True,
+                        "satisfied": False,
+                        "reason": "missing_source_data",
+                    })
+                    continue
+                for name, values in columns.items():
+                    if not isinstance(values, list):
+                        continue
+                    clean = [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+                    if len(clean) >= 2:
+                        overview_columns[str(name)] = clean
+                if len(overview_columns) < 2:
+                    missing.append({
+                        "figure_request_id": req_id,
+                        "required": True,
+                        "satisfied": False,
+                        "reason": "insufficient_numeric_columns:data_overview",
+                    })
+                    continue
 
             output_path = str(Path(work_dir) / "output" / f"{req_id}.png")
             title = (
@@ -1025,6 +1078,10 @@ class FigureStage:
                     work_dir=work_dir,
                 )
             elif role == "spectrum_curve":
+                columns, _ = FigureStage.deterministic_named_columns_from_data_files(
+                    work_dir,
+                    required_data_list,
+                )
                 artifact = render_spectrum_curve(
                     x_values=x_values,
                     y_values=y_values,
@@ -1037,6 +1094,7 @@ class FigureStage:
                     depicts=expected_content if isinstance(expected_content, list) else ["spectrum_curve"],
                     linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
                     source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                    source_columns=list(columns.keys()),
                     work_dir=work_dir,
                 )
             elif role == "fitting_curve":
@@ -1083,6 +1141,21 @@ class FigureStage:
                     depicts=expected_content if isinstance(expected_content, list) else ["comparison_bar"],
                     linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
                     source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                    work_dir=work_dir,
+                )
+            elif role == "data_overview":
+                artifact = render_data_overview(
+                    numeric_columns=overview_columns,
+                    title=title,
+                    output_path=output_path,
+                    chart_language=chart_language,
+                    figure_request_id=req_id,
+                    subproblem_id=subproblem_id,
+                    semantic_role="data_overview",
+                    depicts=expected_content if isinstance(expected_content, list) else ["data_overview", "numeric_overview"],
+                    linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                    source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                    view_type=str(req.get("view_type") or "numeric_overview"),
                     work_dir=work_dir,
                 )
             else:

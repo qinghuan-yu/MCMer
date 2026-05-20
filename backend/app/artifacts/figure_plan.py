@@ -114,7 +114,7 @@ class FigureNeedDetector:
                     detected_needs.append("physical_principle_schematic")
                 if cls.RESULT_RE.search(method):
                     reasons.append("solve_spec_method_requires_result_figure")
-                    detected_needs.append("spectrum_curve")
+                    detected_needs.append("result_data_plot")
 
             if isinstance(input_files, list) and input_files:
                 reasons.append("solve_spec_has_input_files")
@@ -208,13 +208,21 @@ class FigureNeedDetector:
                 except Exception:
                     header = []
                 header_text = " ".join(_norm_text(h).lower() for h in header)
+                header_tokens = {
+                    token
+                    for h in header
+                    for token in re.split(r"[^a-zA-Z0-9\u4e00-\u9fff]+", _norm_text(h).lower())
+                    if token
+                }
                 if any(token in header_text for token in ["time", "时间", "t_"]):
                     reasons.append("time_series_column_detected")
                     needs.append("timeline_schematic")
                 if any(token in header_text for token in ["wavenumber", "波数", "reflectance", "反射率"]):
                     reasons.append("spectrum_columns_detected")
                     needs.extend(["spectrum_curve", "peak_valley_annotation"])
-                if any(token in header_text for token in ["x", "y", "z", "坐标"]):
+
+                spatial_tokens = {"x", "y", "z", "x_coord", "y_coord", "z_coord", "坐标"}
+                if len(header_tokens.intersection(spatial_tokens)) >= 2:
                     reasons.append("spatial_columns_detected")
                     needs.append("geometry_schematic")
 
@@ -241,6 +249,7 @@ class FigurePlanBuilder:
         "residual_plot": "residual_plot",
         "result_data_plot": "comparison_bar",
         "comparison_bar": "comparison_bar",
+        "data_overview": "data_overview",
     }
 
     @classmethod
@@ -273,7 +282,26 @@ class FigurePlanBuilder:
             chart_language=chart_language,
             available_data_files=available_data_files,
             verified_result_ids=verified_result_ids,
+            work_dir=work_dir,
         )
+
+        if need.requires_figures and not any(
+            isinstance(item, dict) and bool(item.get("required", True))
+            for item in requests
+        ):
+            requests = cls._inject_fallback_data_overview_requests(
+                requests=requests,
+                solve_spec=solve_spec,
+                chart_language=chart_language,
+                available_data_files=available_data_files,
+            )
+            requests = cls._apply_capability_constraints(
+                requests=requests,
+                chart_language=chart_language,
+                available_data_files=available_data_files,
+                verified_result_ids=verified_result_ids,
+                work_dir=work_dir,
+            )
 
         required_count = sum(1 for item in requests if isinstance(item, dict) and bool(item.get("required", True)))
         required_result_count = sum(
@@ -376,8 +404,10 @@ class FigurePlanBuilder:
         chart_language: str,
         available_data_files: list[str],
         verified_result_ids: set[str],
+        work_dir: str,
     ) -> list[dict[str, Any]]:
         available_set = {str(item).strip().replace("\\", "/") for item in available_data_files if str(item).strip()}
+        root = Path(work_dir)
         evaluated: list[dict[str, Any]] = []
 
         for raw in requests:
@@ -404,25 +434,146 @@ class FigurePlanBuilder:
             placeholder_ids = {item for item in linked_ids_list if item.lower() in PLACEHOLDER_RESULT_IDS}
             linked_ids_list = [item for item in linked_ids_list if item.lower() not in PLACEHOLDER_RESULT_IDS]
 
+            capability = DEFAULT_FIGURE_CAPABILITIES.get(role)
+            if (
+                kind == "result_figure"
+                and bool(capability and capability.requires_verified_result)
+                and not linked_ids_list
+                and verified_result_ids
+                and not placeholder_ids
+            ):
+                linked_ids_list = sorted(str(item).strip() for item in verified_result_ids if str(item).strip())[:12]
+                req["auto_bound_verified_results"] = True
+
             req["linked_result_ids"] = linked_ids_list
             depends_on["result_ids"] = linked_ids_list
             depends_on["data_files"] = data_files_list
             req["depends_on"] = depends_on
             req["required_data"] = data_files_list
 
-            capability = DEFAULT_FIGURE_CAPABILITIES.get(role)
             blocked_reason = ""
+
+            def _collect_header_tokens(files: list[str]) -> set[str]:
+                tokens: set[str] = set()
+                for rel in files:
+                    path = Path(rel)
+                    name = path.name.lower()
+                    for token in re.split(r"[^a-zA-Z0-9\u4e00-\u9fff]+", name):
+                        token = token.strip().lower()
+                        if token:
+                            tokens.add(token)
+                    disk_path = root / rel
+                    if not disk_path.exists() or not disk_path.is_file():
+                        continue
+                    try:
+                        if disk_path.suffix.lower() == ".csv":
+                            with disk_path.open("r", encoding="utf-8", newline="") as fp:
+                                reader = csv.reader(fp)
+                                header = next(reader, [])
+                        elif disk_path.suffix.lower() in {".xlsx", ".xls"}:
+                            from openpyxl import load_workbook  # type: ignore
+
+                            wb = load_workbook(disk_path, read_only=True, data_only=True)
+                            ws = wb.active
+                            first_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), [])
+                            header = list(first_row or [])
+                        else:
+                            header = []
+                    except Exception:
+                        header = []
+                    for column in header:
+                        for token in re.split(r"[^a-zA-Z0-9\u4e00-\u9fff]+", str(column or "").lower()):
+                            token = token.strip().lower()
+                            if token:
+                                tokens.add(token)
+                return tokens
+
+            def _count_numeric_columns(files: list[str]) -> int:
+                numeric_columns: set[str] = set()
+                for rel in files:
+                    disk_path = root / rel
+                    if not disk_path.exists() or not disk_path.is_file():
+                        continue
+                    suffix = disk_path.suffix.lower()
+                    try:
+                        headers: list[str] = []
+                        rows: list[list[object]] = []
+                        if suffix == ".csv":
+                            with disk_path.open("r", encoding="utf-8", newline="") as fp:
+                                reader = csv.reader(fp)
+                                headers = [str(item or "").strip() for item in next(reader, [])]
+                                for _, row in zip(range(120), reader):
+                                    rows.append(list(row))
+                        elif suffix in {".xlsx", ".xls"}:
+                            from openpyxl import load_workbook  # type: ignore
+
+                            wb = load_workbook(disk_path, read_only=True, data_only=True)
+                            ws = wb.active
+                            it = ws.iter_rows(min_row=1, max_row=140, values_only=True)
+                            header_row = next(it, [])
+                            headers = [str(item or "").strip() for item in (header_row or [])]
+                            for row in it:
+                                rows.append(list(row or []))
+                        else:
+                            continue
+
+                        for idx, name in enumerate(headers):
+                            if not name:
+                                continue
+                            numeric_hits = 0
+                            for row in rows:
+                                val = row[idx] if idx < len(row) else ""
+                                try:
+                                    text = str(val or "").strip()
+                                    if not text:
+                                        continue
+                                    float(text)
+                                    numeric_hits += 1
+                                except Exception:
+                                    continue
+                            if numeric_hits >= 2:
+                                numeric_columns.add(name.lower())
+                    except Exception:
+                        continue
+                return len(numeric_columns)
+
+            request_context = "\n".join(
+                [
+                    _norm_text(req.get("purpose")),
+                    _norm_text(req.get("chart_intent")),
+                    " ".join(str(item) for item in req.get("required_columns", []) if str(item).strip()) if isinstance(req.get("required_columns"), list) else "",
+                    " ".join(str(item) for item in req.get("expected_content", []) if str(item).strip()) if isinstance(req.get("expected_content"), list) else "",
+                ]
+            ).lower()
+            header_tokens = _collect_header_tokens(data_files_list)
 
             if not capability:
                 blocked_reason = f"unsupported_renderer:{role or 'unknown'}"
             elif chart_language not in set(capability.supports_languages):
                 blocked_reason = f"unsupported_chart_language:{chart_language}"
-            elif bool(capability.requires_data) and kind == "result_figure":
+            elif capability.domain_applicability and kind == "result_figure":
+                applies = any(token.lower() in request_context for token in capability.domain_applicability)
+                if not applies:
+                    applies = any(token.lower() in header_tokens for token in capability.domain_applicability)
+                if not applies:
+                    blocked_reason = f"semantic_data_mismatch:{role}"
+            if not blocked_reason and bool(capability and capability.requires_data) and kind == "result_figure":
                 candidates = [item for item in data_files_list if item != "result_registry.json"]
                 if not candidates:
                     blocked_reason = "missing_source_data"
                 elif not any(item in available_set for item in candidates):
                     blocked_reason = "missing_source_data"
+                elif role in {"fitting_curve", "residual_plot", "comparison_bar"}:
+                    required_columns = [
+                        str(item).strip().lower()
+                        for item in (req.get("required_columns", []) if isinstance(req.get("required_columns"), list) else [])
+                        if str(item).strip()
+                    ]
+                    if required_columns and not any(col in header_tokens for col in required_columns):
+                        blocked_reason = f"required_columns_missing:{role}"
+                elif role == "data_overview":
+                    if _count_numeric_columns(candidates) < 2:
+                        blocked_reason = "insufficient_numeric_columns:data_overview"
             if not blocked_reason and bool(capability and capability.requires_verified_result) and kind == "result_figure":
                 if placeholder_ids:
                     blocked_reason = "placeholder_linked_result_ids"
@@ -511,6 +662,7 @@ class FigurePlanBuilder:
             chart_language=chart_language,
             available_data_files=available_data_files,
             verified_result_ids=verified_result_ids,
+            work_dir=work_dir,
         )
 
     @classmethod
@@ -606,6 +758,33 @@ class FigurePlanBuilder:
             required: bool,
             depends_on: dict[str, Any],
         ) -> dict[str, Any]:
+            chart_intent = purpose
+            required_columns: list[str] = []
+            x_axis = ""
+            y_axis = ""
+            group_by = ""
+            if semantic_role == "spectrum_curve":
+                required_columns = ["wavenumber", "reflectance"]
+                x_axis = "wavenumber"
+                y_axis = "reflectance"
+            elif semantic_role == "fitting_curve":
+                required_columns = ["x", "observed", "fitted"]
+                x_axis = "x"
+                y_axis = "observed"
+            elif semantic_role == "residual_plot":
+                required_columns = ["x", "residual"]
+                x_axis = "x"
+                y_axis = "residual"
+            elif semantic_role == "comparison_bar":
+                required_columns = ["method", "metric", "value"]
+                x_axis = "method"
+                y_axis = "value"
+                group_by = "metric"
+            elif semantic_role == "data_overview":
+                required_columns = []
+                x_axis = "variables"
+                y_axis = "numeric_value"
+                group_by = ""
             return {
                 "id": req_id,
                 "problem_section": subproblem_id,
@@ -614,10 +793,16 @@ class FigurePlanBuilder:
                 "semantic_role": semantic_role,
                 "role": semantic_role,
                 "purpose": purpose,
+                "chart_intent": chart_intent,
                 "required": required,
                 "must_include_in_paper": bool(required),
                 "chart_language": chart_language,
                 "language": chart_language,
+                "required_columns": required_columns,
+                "x_axis": x_axis,
+                "y_axis": y_axis,
+                "group_by": group_by,
+                "view_type": "numeric_overview" if semantic_role == "data_overview" else "",
                 "depends_on": depends_on,
                 "required_data": list(depends_on.get("data_files", []) or []),
                 "linked_result_ids": list(depends_on.get("result_ids", []) or []),
@@ -705,4 +890,75 @@ class FigurePlanBuilder:
                         )
                     )
 
+        return requests
+
+    @classmethod
+    def _inject_fallback_data_overview_requests(
+        cls,
+        requests: list[dict[str, Any]],
+        solve_spec: dict[str, Any],
+        chart_language: str,
+        available_data_files: list[str],
+    ) -> list[dict[str, Any]]:
+        existing_ids = {
+            _norm_text(item.get("id"))
+            for item in requests
+            if isinstance(item, dict) and _norm_text(item.get("id"))
+        }
+        subproblems = _solve_spec_subproblems(solve_spec)
+        if not subproblems:
+            subproblems = [{"id": "problem_1", "objective": "problem"}]
+
+        def _resolve_data_files(sub: dict[str, Any]) -> list[str]:
+            input_files = sub.get("input_files", [])
+            names = [str(item).strip() for item in input_files if str(item).strip()] if isinstance(input_files, list) else []
+            matched: list[str] = []
+            for name in names:
+                name_base = Path(name).name.lower()
+                for rel in available_data_files:
+                    if Path(rel).name.lower() == name_base:
+                        matched.append(rel)
+            if not matched:
+                matched = [rel for rel in available_data_files if rel.lower().endswith((".csv", ".xlsx", ".xls"))]
+            if "result_registry.json" not in matched:
+                matched.append("result_registry.json")
+            return list(dict.fromkeys(matched))
+
+        for idx, sub in enumerate(subproblems, start=1):
+            sid = _norm_text(sub.get("id")) or f"problem_{idx}"
+            req_id = f"fig_{sid}_data_overview"
+            if req_id in existing_ids:
+                continue
+            objective = _norm_text(sub.get("objective")) or sid
+            requests.append(
+                {
+                    "id": req_id,
+                    "problem_section": sid,
+                    "subproblem_id": sid,
+                    "figure_kind": "result_figure",
+                    "semantic_role": "data_overview",
+                    "role": "data_overview",
+                    "purpose": f"{objective}：核心数值变量分布概览",
+                    "chart_intent": "numeric_overview",
+                    "required": True,
+                    "must_include_in_paper": True,
+                    "chart_language": chart_language,
+                    "language": chart_language,
+                    "required_columns": [],
+                    "x_axis": "variables",
+                    "y_axis": "numeric_value",
+                    "group_by": "",
+                    "view_type": "numeric_overview",
+                    "depends_on": {
+                        "model_objects": [],
+                        "formulas": [],
+                        "data_files": _resolve_data_files(sub),
+                        "result_ids": [],
+                    },
+                    "required_data": _resolve_data_files(sub),
+                    "linked_result_ids": [],
+                    "expected_content": ["核心数值变量分布概览"],
+                }
+            )
+            existing_ids.add(req_id)
         return requests

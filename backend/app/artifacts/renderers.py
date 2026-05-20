@@ -383,11 +383,20 @@ def render_spectrum_curve(
     depicts: list[str] | None = None,
     linked_result_ids: list[str] | None = None,
     source_data: list[str] | None = None,
+    source_columns: list[str] | None = None,
     work_dir: str | None = None,
 ) -> dict[str, Any]:
     """Render deterministic spectrum curve (result figure)."""
     if not x_values or not y_values or len(x_values) != len(y_values):
         return {}
+    columns = [str(item).strip().lower() for item in (source_columns or []) if str(item).strip()]
+    if columns:
+        spectral_tokens = {
+            "wavenumber", "reflectance", "spectrum", "intensity",
+            "波数", "反射率", "光谱", "强度",
+        }
+        if not any(any(token in col for token in spectral_tokens) for col in columns):
+            return {}
     _ensure_matplotlib()
     _configure_fonts(chart_language)
 
@@ -424,6 +433,118 @@ def render_spectrum_curve(
             "data_bindings": source_data or ["result_registry.json"],
             "semantic_verified": True,
             "evidence_binding_type": "verified_result",
+        }
+    )
+    if work_dir:
+        _register_artifact(artifact, work_dir)
+    return artifact
+
+
+def render_data_overview(
+    numeric_columns: dict[str, list[float]],
+    title: str,
+    output_path: str,
+    chart_language: str = "Simplified Chinese",
+    figure_request_id: str = "",
+    subproblem_id: str = "",
+    semantic_role: str = "data_overview",
+    depicts: list[str] | None = None,
+    linked_result_ids: list[str] | None = None,
+    source_data: list[str] | None = None,
+    view_type: str = "numeric_overview",
+    work_dir: str | None = None,
+) -> dict[str, Any]:
+    """Render deterministic data-overview figure from numeric columns."""
+    if not isinstance(numeric_columns, dict):
+        return {}
+
+    valid_items: list[tuple[str, list[float]]] = []
+    for name, values in numeric_columns.items():
+        if not isinstance(values, list):
+            continue
+        cleaned = [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        if len(cleaned) >= 2:
+            valid_items.append((str(name).strip() or "col", cleaned))
+
+    if len(valid_items) < 2:
+        return {}
+
+    selected = valid_items[:8]
+    labels = [item[0] for item in selected]
+    series = [item[1] for item in selected]
+
+    _ensure_matplotlib()
+    _configure_fonts(chart_language)
+
+    if chart_language == "Simplified Chinese":
+        x_label, y_label = "变量", "变量"
+        colorbar_label = "相关系数"
+        box_y_label = "数值分布"
+    else:
+        x_label, y_label = "Variable", "Variable"
+        colorbar_label = "Correlation"
+        box_y_label = "Value Distribution"
+
+    def _corr(a: list[float], b: list[float]) -> float:
+        n = min(len(a), len(b))
+        if n < 2:
+            return 0.0
+        ax = a[:n]
+        bx = b[:n]
+        ma = sum(ax) / n
+        mb = sum(bx) / n
+        cov = sum((ax[i] - ma) * (bx[i] - mb) for i in range(n))
+        va = sum((x - ma) ** 2 for x in ax)
+        vb = sum((x - mb) ** 2 for x in bx)
+        if va <= 0.0 or vb <= 0.0:
+            return 0.0
+        return max(-1.0, min(1.0, cov / ((va * vb) ** 0.5)))
+
+    try:
+        matrix = [[_corr(series[i], series[j]) for j in range(len(series))] for i in range(len(series))]
+        fig, ax = _plt.subplots(figsize=(8.4, 6.6))
+        im = ax.imshow(matrix, cmap="RdBu_r", vmin=-1.0, vmax=1.0)
+        ax.set_xticks(range(len(labels)))
+        ax.set_yticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=30, ha="right")
+        ax.set_yticklabels(labels)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(colorbar_label)
+        fig.tight_layout()
+        _save_figure(fig, output_path)
+    except Exception:
+        fig, ax = _plt.subplots(figsize=(9.0, 5.8))
+        ax.boxplot(series, labels=labels, patch_artist=True)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(box_y_label)
+        ax.grid(axis="y", alpha=0.25)
+        fig.tight_layout()
+        _save_figure(fig, output_path)
+
+    rel_path = _to_relative_path(output_path)
+    artifact = _make_figure_artifact(
+        rel_path=rel_path,
+        chart_language=chart_language,
+        visible_text_audit=[title, x_label, y_label, colorbar_label, *labels[:4]],
+        linked_result_ids=linked_result_ids or [],
+        source_data=source_data or ["result_registry.json"],
+        figure_role=semantic_role,
+        figure_kind="result_figure",
+    )
+    artifact.update(
+        {
+            "figure_request_id": figure_request_id,
+            "subproblem_id": subproblem_id,
+            "semantic_role": semantic_role,
+            "view_type": view_type,
+            "depicts": depicts or [semantic_role, "numeric_overview"],
+            "data_bindings": source_data or ["result_registry.json"],
+            "semantic_verified": True,
+            "evidence_binding_type": "source_data",
         }
     )
     if work_dir:

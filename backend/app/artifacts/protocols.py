@@ -51,6 +51,7 @@ class FigureCapability:
     requires_data: bool
     requires_verified_result: bool
     supports_languages: tuple[str, ...]
+    domain_applicability: tuple[str, ...] = ()
 
 
 DEFAULT_FIGURE_CAPABILITIES: dict[str, FigureCapability] = {
@@ -123,6 +124,18 @@ DEFAULT_FIGURE_CAPABILITIES: dict[str, FigureCapability] = {
         requires_data=True,
         requires_verified_result=False,
         supports_languages=("Simplified Chinese", "English"),
+        domain_applicability=(
+            "spectrum",
+            "wavenumber",
+            "reflectance",
+            "intensity",
+            "光谱",
+            "波数",
+            "反射率",
+            "强度",
+            "频谱",
+            "signal",
+        ),
     ),
     "peak_valley_annotation": FigureCapability(
         role="peak_valley_annotation",
@@ -130,6 +143,18 @@ DEFAULT_FIGURE_CAPABILITIES: dict[str, FigureCapability] = {
         requires_data=True,
         requires_verified_result=False,
         supports_languages=("Simplified Chinese", "English"),
+        domain_applicability=(
+            "spectrum",
+            "wavenumber",
+            "reflectance",
+            "intensity",
+            "光谱",
+            "波数",
+            "反射率",
+            "强度",
+            "峰",
+            "谷",
+        ),
     ),
     "fitting_curve": FigureCapability(
         role="fitting_curve",
@@ -150,6 +175,13 @@ DEFAULT_FIGURE_CAPABILITIES: dict[str, FigureCapability] = {
         renderer="render_comparison_bar",
         requires_data=True,
         requires_verified_result=True,
+        supports_languages=("Simplified Chinese", "English"),
+    ),
+    "data_overview": FigureCapability(
+        role="data_overview",
+        renderer="render_data_overview",
+        requires_data=True,
+        requires_verified_result=False,
         supports_languages=("Simplified Chinese", "English"),
     ),
 }

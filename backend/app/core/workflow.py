@@ -2409,6 +2409,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "FigureBundle.result_figures 应插入结果分析章节。"
             "FigureBundle.required_images 中列出的图片路径必须在 Markdown 中逐一出现。"
             "正文只允许引用 FigureBundle.available_figures；禁止引用 FigureBundle.diagnostic_figures。"
+            "当图的 semantic_role 为 data_overview 时，图注和正文只能描述数值变量分布/相关性概览，"
+            "禁止写成拟合曲线、残差分析图或算法对比实验图。"
             "每张正文图必须保持其 figure_request_id 语义，不得用 diagnostics 图替代 required 图。"
             "若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级，不能把已 verified 的结果整体写成未计算。"
             "参考文献必须来自 scholar 工具或用户材料。"
@@ -3087,6 +3089,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             f"# 图片资源清单\n{image_manifest_text}\n\n"
             f"# 可用替代图片\n{', '.join(recalculation_result.created_images) if recalculation_result.created_images else '无'}\n\n"
             "请输出修订后的完整 Markdown 论文；若需要替换图片，请同步更新 Markdown 图片路径。"
+            "若图片语义是 data_overview，只能按变量分布/相关性概览描述，禁止写成拟合曲线或残差图。"
         )
         final_paper = await _run_writer_stage(
             writer=writer,

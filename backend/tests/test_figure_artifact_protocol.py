@@ -1698,6 +1698,72 @@ def test_render_spectrum_request_from_csv_data_file(tmp_path: Path) -> None:
     assert report["satisfied"]
 
 
+def test_render_spectrum_request_blocks_semantic_data_mismatch(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "nipt_table.csv").write_text(
+        "孕周数,孕妇BMI,Z值\n12,23.1,2.8\n13,24.0,3.1\n14,22.5,2.4\n",
+        encoding="utf-8",
+    )
+
+    report = FigureStage.render_required_requests_deterministically(
+        work_dir=str(tmp_path),
+        result_registry={"verified_results": []},
+        required_requests=[
+            {
+                "id": "fig_p2_spectrum_curve",
+                "subproblem_id": "p2",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "spectrum_curve",
+                "expected_content": ["光谱曲线"],
+                "required_data": ["data/nipt_table.csv"],
+            }
+        ],
+        chart_language="Simplified Chinese",
+    )
+
+    assert report["created_images"] == []
+    assert report["satisfied"] == []
+    assert any(
+        str(item.get("reason") or "") == "semantic_data_mismatch:spectrum_curve"
+        for item in report.get("missing", [])
+        if isinstance(item, dict)
+    )
+
+
+def test_figure_plan_general_fit_does_not_default_to_spectrum(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    solve_spec = {
+        "subproblems": [
+            {
+                "id": "p1",
+                "objective": "建立回归模型并分析拟合残差",
+                "method": "多变量回归拟合",
+                "input_files": ["data/train.csv"],
+                "steps": ["拟合", "残差分析"],
+                "expected_outputs": ["回归系数"],
+            }
+        ],
+        "figure_requests": [],
+    }
+    plan = FigurePlanBuilder.build(
+        question="请基于训练数据建立回归模型并分析误差",
+        solve_spec=solve_spec,
+        problem_facts={},
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    req_roles = {
+        str(item.get("semantic_role") or "")
+        for item in plan.get("figure_requests", [])
+        if isinstance(item, dict)
+    }
+    assert "spectrum_curve" not in req_roles
+    assert "comparison_bar" in req_roles or "fitting_curve" in req_roles
+
+
 def test_figure_plan_blocks_placeholder_linked_result_ids(tmp_path: Path) -> None:
     from app.artifacts.figure_plan import FigurePlanBuilder
 
@@ -1795,6 +1861,74 @@ def test_figure_plan_pending_result_binding_not_required(tmp_path: Path) -> None
     assert req["required"] is False
     assert req["blocked_reason"] == "pending_result_binding"
     assert req["result_binding_status"] == "pending_result_binding"
+
+
+def test_figure_plan_injects_data_overview_fallback_when_advanced_blocked(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "nipt.csv").write_text(
+        "孕周数,孕妇BMI,Z值\n12,23.1,2.8\n13,24.0,3.1\n14,22.5,2.4\n",
+        encoding="utf-8",
+    )
+
+    solve_spec = {
+        "subproblems": [
+            {
+                "id": "p1",
+                "objective": "建立回归模型并分析拟合残差",
+                "method": "多变量回归拟合",
+                "input_files": ["data/nipt.csv"],
+                "steps": ["拟合", "残差分析"],
+                "expected_outputs": ["回归参数"],
+            }
+        ],
+        "figure_requests": [],
+    }
+
+    plan = FigurePlanBuilder.build(
+        question="请建立回归模型并给出结果图",
+        solve_spec=solve_spec,
+        problem_facts={},
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    fallback = [
+        item for item in plan.get("figure_requests", [])
+        if isinstance(item, dict) and str(item.get("semantic_role") or "") == "data_overview"
+    ]
+    assert fallback
+    assert any(bool(item.get("required", False)) for item in fallback)
+
+
+def test_render_data_overview_request_from_numeric_csv(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "overview.csv").write_text(
+        "week,bmi,zscore\n12,23.1,2.8\n13,24.0,3.1\n14,22.5,2.4\n",
+        encoding="utf-8",
+    )
+
+    report = FigureStage.render_required_requests_deterministically(
+        work_dir=str(tmp_path),
+        result_registry={"verified_results": []},
+        required_requests=[
+            {
+                "id": "fig_p1_data_overview",
+                "subproblem_id": "p1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "data_overview",
+                "expected_content": ["核心数值变量分布概览"],
+                "required_data": ["data/overview.csv"],
+                "view_type": "numeric_overview",
+            }
+        ],
+        chart_language="Simplified Chinese",
+    )
+
+    assert report["created_images"]
+    assert report["satisfied"]
 
 
 def test_quality_gate_reports_blocked_required_by_problem() -> None:
@@ -1899,6 +2033,95 @@ def test_figure_plan_reevaluate_promotes_pending_binding_after_solver(tmp_path: 
     assert req["required"] is True
     assert req["status"] == "required"
     assert req["result_binding_status"] == "verified_result_bound"
+
+
+def test_figure_plan_reevaluate_auto_binds_verified_results_when_ids_missing(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "summary.csv").write_text(
+        "method,metric,value\nA,risk,1.2\nB,risk,0.8\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "result_registry.json").write_text(
+        json.dumps(
+            {
+                "verified_results": [{"id": "q1_comparison_result", "value": 0.8}],
+                "blocked_results": [],
+                "summary": {"verified_count": 1, "blocked_count": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    reevaluated = FigurePlanBuilder.reevaluate_requests(
+        requests=[
+            {
+                "id": "fig_q1_comparison_bar",
+                "subproblem_id": "q1",
+                "figure_kind": "result_figure",
+                "semantic_role": "comparison_bar",
+                "required": True,
+                "required_data": ["data/summary.csv"],
+                "linked_result_ids": [],
+                "depends_on": {"data_files": ["data/summary.csv"], "result_ids": []},
+            }
+        ],
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    req = reevaluated[0]
+    assert req["required"] is True
+    assert req["status"] == "required"
+    assert req["linked_result_ids"] == ["q1_comparison_result"]
+    assert req["result_binding_status"] == "verified_result_bound"
+    assert req["auto_bound_verified_results"] is True
+
+
+def test_figure_plan_blocks_comparison_when_required_columns_missing(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "nipt.csv").write_text(
+        "孕周数,孕妇BMI,Y染色体浓度\n12,28.1,0.04\n13,29.0,0.05\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "result_registry.json").write_text(
+        json.dumps(
+            {
+                "verified_results": [{"id": "q1_result", "value": 1.0}],
+                "blocked_results": [],
+                "summary": {"verified_count": 1, "blocked_count": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    reevaluated = FigurePlanBuilder.reevaluate_requests(
+        requests=[
+            {
+                "id": "fig_q1_comparison_bar",
+                "subproblem_id": "q1",
+                "figure_kind": "result_figure",
+                "semantic_role": "comparison_bar",
+                "required": True,
+                "required_data": ["data/nipt.csv"],
+                "required_columns": ["method", "metric", "value"],
+                "linked_result_ids": [],
+                "depends_on": {"data_files": ["data/nipt.csv"], "result_ids": []},
+            }
+        ],
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    req = reevaluated[0]
+    assert req["required"] is False
+    assert req["status"] == "blocked"
+    assert req["blocked_reason"] == "required_columns_missing:comparison_bar"
 
 
 def test_required_figure_requests_filters_blocked_and_infeasible() -> None:
