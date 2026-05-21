@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.artifacts.figure_plan import FigurePlanBuilder
 from app.artifacts.registry import FigureBundle
+from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
 from app.core.figure_stage import FigureStage
@@ -427,3 +428,33 @@ def test_visualization_planner_downgrades_missing_columns_but_keeps_overview(tmp
     assert blocked["blocked_reason"] == "required_columns_missing:comparison_bar"
     assert overview["required"] is True
     assert overview["linked_result_ids"] == ["q1_comparison"]
+
+
+def test_renderer_skill_facade_renders_result_overview(tmp_path: Path) -> None:
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "q1_score", "value": 2.8, "source_data": ["result_registry.json"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_q1_result_overview",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "result_overview",
+                "required_data": ["result_registry.json"],
+                "linked_result_ids": ["q1_score"],
+                "view_type": "numeric_overview",
+            }
+        ],
+        chart_language="English",
+    )
+
+    payload = result.to_dict()
+    assert payload["renderer"] == "RendererSkill"
+    assert payload["created_images"]
+    assert payload["satisfied"]
+    assert payload["missing"] == []

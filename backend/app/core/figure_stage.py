@@ -802,6 +802,12 @@ class FigureStage:
         required_requests: list[dict[str, object]],
         chart_language: str,
     ) -> dict[str, object]:
+        """Compatibility renderer entrypoint.
+
+        New workflow code should call RendererSkill.render_required_requests().
+        This method remains while per-view renderers are migrated out of
+        FigureStage.
+        """
         created_images: list[str] = []
         satisfied: list[dict[str, object]] = []
         missing: list[dict[str, object]] = []

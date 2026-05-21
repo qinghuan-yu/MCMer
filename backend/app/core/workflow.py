@@ -21,6 +21,7 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.figure_stage import FigureStage
+from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
 from app.core.llm.llm import LLM
@@ -315,12 +316,12 @@ def _render_required_requests_deterministically(
     required_requests: list[dict[str, object]],
     chart_language: str,
 ) -> dict[str, object]:
-    return FigureStage.render_required_requests_deterministically(
+    return RendererSkill.render_required_requests(
         work_dir=work_dir,
         result_registry=result_registry,
         required_requests=required_requests,
         chart_language=chart_language,
-    )
+    ).to_dict()
 
 
 def _generate_failure_report(
