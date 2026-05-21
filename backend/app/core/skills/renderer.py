@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, canonical_caption_for_role, normalize_figure_role
-from app.artifacts.renderers import render_comparison_bar, render_data_overview, render_fitting_curve, render_residual_plot
+from app.artifacts.renderers import (
+    render_comparison_bar,
+    render_data_overview,
+    render_fitting_curve,
+    render_residual_plot,
+    render_spectrum_curve,
+)
 
 
 @dataclass(frozen=True)
@@ -62,7 +68,7 @@ class RendererSkill:
             role = normalize_figure_role(request.get("semantic_role") or request.get("role"))
             if role == RESULT_OVERVIEW_ROLE:
                 overview_requests.append(request)
-            elif role in {"comparison_bar", "fitting_curve", "residual_plot"}:
+            elif role in {"comparison_bar", "fitting_curve", "residual_plot", "spectrum_curve"}:
                 overview_requests.append(request)
             else:
                 legacy_requests.append(request)
@@ -89,6 +95,13 @@ class RendererSkill:
                 )
             elif role == "residual_plot":
                 rendered = RendererSkill._render_residual_plot(
+                    work_dir=work_dir,
+                    result_registry=result_registry,
+                    request=request,
+                    chart_language=chart_language,
+                )
+            elif role == "spectrum_curve":
+                rendered = RendererSkill._render_spectrum_curve(
                     work_dir=work_dir,
                     result_registry=result_registry,
                     request=request,
@@ -447,6 +460,57 @@ class RendererSkill:
             depicts=request.get("expected_content") if isinstance(request.get("expected_content"), list) else ["residual_plot"],
             linked_result_ids=linked_ids[:12],
             source_data=required_data_list or matched_sources or ["result_registry.json"],
+            work_dir=work_dir,
+        )
+        return RendererSkill._artifact_result(req_id, artifact)
+
+    @staticmethod
+    def _render_spectrum_curve(
+        work_dir: str,
+        result_registry: dict[str, Any],
+        request: dict[str, Any],
+        chart_language: str,
+    ) -> RendererResult:
+        from app.core.figure_stage import FigureStage
+
+        req_id, required_data_list, columns, matched_sources = RendererSkill._load_request_columns(work_dir, request)
+        if not req_id:
+            return RendererResult(missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}])
+
+        column_names = [str(name).strip().lower() for name in columns.keys() if str(name).strip()]
+        spectral_tokens = ["wavenumber", "reflectance", "spectrum", "intensity", "frequency", "wave"]
+        if column_names and not any(any(token in name for token in spectral_tokens) for name in column_names):
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "semantic_data_mismatch:spectrum_curve"}])
+
+        x_values, y_values, series_sources = FigureStage.deterministic_series_from_data_files(
+            work_dir,
+            required_data_list,
+        )
+        if len(x_values) < 2:
+            x_values, y_values, series_sources = FigureStage.deterministic_series_from_registry(
+                result_registry,
+                required_data_list,
+            )
+        if len(x_values) < 2:
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "insufficient_data_series"}])
+
+        linked_ids = RendererSkill._linked_result_ids(request, result_registry)
+        if not linked_ids:
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "missing_verified_result_binding"}])
+
+        artifact = render_spectrum_curve(
+            x_values=x_values,
+            y_values=y_values,
+            title=RendererSkill._request_title(request, "spectrum_curve", chart_language),
+            output_path=str(Path(work_dir) / "output" / f"{req_id}.png"),
+            chart_language=chart_language,
+            figure_request_id=req_id,
+            subproblem_id=RendererSkill._subproblem_id(request),
+            semantic_role="spectrum_curve",
+            depicts=request.get("expected_content") if isinstance(request.get("expected_content"), list) else ["spectrum_curve"],
+            linked_result_ids=linked_ids[:12],
+            source_data=required_data_list or series_sources or matched_sources or ["result_registry.json"],
+            source_columns=list(columns.keys()),
             work_dir=work_dir,
         )
         return RendererSkill._artifact_result(req_id, artifact)

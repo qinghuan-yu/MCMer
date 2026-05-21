@@ -571,3 +571,38 @@ def test_renderer_skill_renders_fitting_curve_and_residual_plot(tmp_path: Path) 
     ]
     assert len(result.satisfied) == 2
     assert result.missing == []
+
+
+def test_renderer_skill_renders_spectrum_curve(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "spectrum.csv").write_text(
+        "wavenumber,reflectance\n1000,0.20\n1100,0.25\n1200,0.21\n",
+        encoding="utf-8",
+    )
+
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "q1_spectrum", "value": 0.25, "source_data": ["data/spectrum.csv"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_q1_spectrum_curve",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "spectrum_curve",
+                "required_data": ["data/spectrum.csv"],
+                "linked_result_ids": ["q1_spectrum"],
+                "view_type": "spectrum_curve",
+                "expected_content": ["Spectrum curve"],
+            }
+        ],
+        chart_language="English",
+    )
+
+    assert result.created_images == ["output/fig_q1_spectrum_curve.png"]
+    assert result.satisfied == [{"figure_request_id": "fig_q1_spectrum_curve", "required": True, "satisfied": True}]
+    assert result.missing == []
