@@ -815,6 +815,80 @@ def test_confidence_level_classification() -> None:
     ) == "unverified"
 
 
+def test_result_registry_recovers_baseline_from_csv_when_key_results_missing(tmp_path: Path) -> None:
+    from app.utils.common_utils import build_result_registry
+
+    (tmp_path / "solver_structured_results.json").write_text(
+        json.dumps({
+            "section": "solve",
+            "summary": "solver wrote data but missed key_results",
+            "key_results": [],
+            "generated_files": [],
+            "warnings": [],
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "result_table.csv").write_text(
+        "metric,value\nA,1.0\nB,2.0\nC,3.0\n",
+        encoding="utf-8",
+    )
+
+    registry = build_result_registry(str(tmp_path), ["solver_structured_results.json"])
+
+    assert registry["summary"]["verified_count"] >= 1
+    assert registry["verified_results"][0]["status"] == "verified"
+    assert registry["verified_results"][0]["confidence_level"] == "verified_baseline"
+    assert registry["verified_results"][0]["source_data"] == ["result_table.csv"]
+
+
+def test_reevaluate_injects_data_overview_when_result_figures_have_no_required_request(tmp_path: Path) -> None:
+    from app.core.figure_stage import FigureStage
+
+    registry = {
+        "verified_results": [
+            {"id": "baseline_result", "status": "verified", "value": 2.0, "source_data": ["result_table.csv"]},
+        ],
+        "blocked_results": [],
+        "summary": {"verified_count": 1, "blocked_count": 0},
+    }
+    (tmp_path / "result_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+    (tmp_path / "result_table.csv").write_text(
+        "metric,value\nA,1.0\nB,2.0\nC,3.0\n",
+        encoding="utf-8",
+    )
+    solve_spec = {
+        "requires_result_figures": True,
+        "subproblems": [{"id": "q1", "objective": "result overview"}],
+        "figure_requests": [
+            {
+                "id": "fig_q1_comparison_bar",
+                "subproblem_id": "q1",
+                "figure_kind": "result_figure",
+                "semantic_role": "comparison_bar",
+                "required": False,
+                "status": "blocked",
+                "blocked_reason": "required_columns_missing:comparison_bar",
+                "required_data": ["result_table.csv"],
+            }
+        ],
+    }
+
+    reevaluated = FigureStage.reevaluate_solve_spec_requests(
+        solve_spec=solve_spec,
+        chart_language="English",
+        work_dir=str(tmp_path),
+    )
+
+    required_roles = {
+        item.get("semantic_role")
+        for item in reevaluated
+        if isinstance(item, dict) and item.get("required") is True
+    }
+    assert "data_overview" in required_roles
+    overview = next(item for item in reevaluated if item.get("semantic_role") == "data_overview")
+    assert overview["linked_result_ids"] == ["baseline_result"]
+
+
 def test_document_finalizer_exports(tmp_path: Path) -> None:
     """DocumentFinalizer should export markdown and optionally DOCX."""
     from app.artifacts.exporters import DocumentFinalizer

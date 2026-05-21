@@ -195,14 +195,67 @@ class FigureStage:
         if not isinstance(solve_spec, dict):
             return []
         current_requests = solve_spec.get("figure_requests", [])
-        if not isinstance(current_requests, list) or not current_requests:
+        if not isinstance(current_requests, list):
+            current_requests = []
+
+        available_data_files = FigurePlanBuilder._discover_input_files(work_dir)
+        verified_result_ids = FigurePlanBuilder._load_verified_result_ids(work_dir)
+
+        if not current_requests:
+            if verified_result_ids:
+                injected = FigurePlanBuilder._inject_fallback_data_overview_requests(
+                    requests=[],
+                    solve_spec=solve_spec,
+                    chart_language=chart_language,
+                    available_data_files=available_data_files,
+                    verified_result_ids=verified_result_ids,
+                )
+                reevaluated = FigurePlanBuilder._apply_capability_constraints(
+                    requests=injected,
+                    chart_language=chart_language,
+                    available_data_files=available_data_files,
+                    verified_result_ids=verified_result_ids,
+                    work_dir=work_dir,
+                )
+                solve_spec["figure_requests"] = reevaluated
+                solve_spec["required_feasible_count"] = sum(
+                    1 for item in reevaluated if isinstance(item, dict) and bool(item.get("required", True))
+                )
+                solve_spec["blocked_count"] = sum(
+                    1 for item in reevaluated if isinstance(item, dict) and str(item.get("status") or "") == "blocked"
+                )
+                return [item for item in reevaluated if isinstance(item, dict)]
             return []
 
+        normalized_requests = [item for item in current_requests if isinstance(item, dict)]
         reevaluated = FigurePlanBuilder.reevaluate_requests(
-            requests=[item for item in current_requests if isinstance(item, dict)],
+            requests=normalized_requests,
             chart_language=chart_language,
             work_dir=work_dir,
         )
+        has_required_result_request = any(
+            isinstance(item, dict)
+            and bool(item.get("required", True))
+            and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+            for item in reevaluated
+        )
+        if verified_result_ids and not has_required_result_request:
+            before_count = len(reevaluated)
+            reevaluated = FigurePlanBuilder._inject_fallback_data_overview_requests(
+                requests=reevaluated,
+                solve_spec=solve_spec,
+                chart_language=chart_language,
+                available_data_files=available_data_files,
+                verified_result_ids=verified_result_ids,
+            )
+            if len(reevaluated) > before_count:
+                reevaluated = FigurePlanBuilder._apply_capability_constraints(
+                    requests=reevaluated,
+                    chart_language=chart_language,
+                    available_data_files=available_data_files,
+                    verified_result_ids=verified_result_ids,
+                    work_dir=work_dir,
+                )
         if not reevaluated:
             return []
 
