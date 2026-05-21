@@ -353,6 +353,19 @@ class ArtifactRegistry:
                 "semantic_role": semantic_role,
                 "semantic_verified": semantic_verified,
                 "figure_kind": effective_kind,
+                "view_type": str(artifact.get("view_type") or req_payload.get("view_type") or "").strip(),
+                "linked_result_ids": [
+                    str(value).strip()
+                    for value in (artifact.get("linked_result_ids") or req_payload.get("linked_result_ids") or [])
+                    if str(value).strip()
+                ],
+                "source_data": [
+                    str(value).strip()
+                    for value in (artifact.get("source_data") or artifact.get("data_bindings") or req_payload.get("required_data") or [])
+                    if str(value).strip()
+                ],
+                "chart_language_verified": bool(artifact.get("chart_language_verified", True)),
+                "paper_ready": bool(artifact.get("paper_ready", True)),
             }
 
             is_diagnostic = (

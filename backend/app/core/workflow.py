@@ -21,6 +21,7 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.figure_stage import FigureStage
+from app.core.skills.writer_context import WriterContextSkill
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import CoderStageBudget, WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
 from app.core.prompts import POLISH_STAGE_SYSTEM_PROMPTS, WRITING_STAGE_SYSTEM_PROMPTS
@@ -2279,6 +2280,15 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["paper_ready_images"] = writer_images
         stage_outputs["figure_bundle"] = bundle_snapshot.get("figure_bundle_dict", figure_bundle.to_dict())
         stage_outputs["writer_available_images"] = writer_images
+        writer_context = WriterContextSkill.build_context(
+            result_registry=result_registry,
+            figure_bundle=figure_bundle,
+            chart_language=chart_language,
+        )
+        writer_context_path = writer_context.save(work_dir)
+        writer_context_payload = writer_context.to_dict()
+        stage_outputs["writer_context"] = writer_context_payload
+        stage_outputs["writer_context_path"] = str(writer_context_path)
         figure_plan_payload = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs.get("figure_plan"), dict) else {}
         workflow_issues = FigureStage.normalize_workflow_issues(
             figure_plan_payload if isinstance(figure_plan_payload, dict) else None
@@ -2402,13 +2412,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
             f"# 结果分析与验证\n{stage_outputs['analysis']}\n\n"
             f"# 图表与一致性\n{chart_result.coder_response}\n\n"
-            f"# FigureBundle（仅 available_figures 可写入正文）\n{_json_for_prompt(figure_bundle.to_dict(), 10000)}\n\n"
+            f"# writer_context.json（Writer 唯一图表上下文）\n{_json_for_prompt(writer_context_payload, 12000)}\n\n"
+            f"# FigureBundle（诊断兼容信息，正文图片仍以 writer_context.available_figures 为准）\n{_json_for_prompt(figure_bundle.to_dict(), 8000)}\n\n"
             "请输出完整论文 Markdown。论文中所有具体数值都必须来自 result_registry.json 的 verified_results；"
             "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。"
-            "FigureBundle.explanatory_figures 必须优先插入到模型建立、符号说明、几何关系或算法流程章节。"
-            "FigureBundle.result_figures 应插入结果分析章节。"
-            "FigureBundle.required_images 中列出的图片路径必须在 Markdown 中逐一出现。"
-            "正文只允许引用 FigureBundle.available_figures；禁止引用 FigureBundle.diagnostic_figures。"
+            "writer_context.explanatory_figures 必须优先插入到模型建立、符号说明、几何关系或算法流程章节。"
+            "writer_context.result_figures 应插入结果分析章节。"
+            "writer_context.required_images 中列出的图片路径必须在 Markdown 中逐一出现。"
+            "正文只允许引用 writer_context.available_figures；禁止引用 FigureBundle.diagnostic_figures。"
             "当图的 semantic_role 为 data_overview 时，图注和正文只能描述数值变量分布/相关性概览，"
             "禁止写成拟合曲线、残差分析图或算法对比实验图。"
             "每张正文图必须保持其 figure_request_id 语义，不得用 diagnostics 图替代 required 图。"
@@ -2786,6 +2797,16 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs[f"paper_ready_images_round_{audit_round}"] = writer_images
             stage_outputs[f"figure_bundle_round_{audit_round}"] = bundle_snapshot.get("figure_bundle_dict", figure_bundle.to_dict())
             stage_outputs[f"writer_available_images_round_{audit_round}"] = writer_images
+            writer_context = WriterContextSkill.build_context(
+                result_registry=result_registry,
+                figure_bundle=figure_bundle,
+                chart_language=chart_language,
+            )
+            writer_context_path = writer_context.save(work_dir)
+            writer_context_payload = writer_context.to_dict()
+            stage_outputs[f"writer_context_round_{audit_round}"] = writer_context_payload
+            stage_outputs["writer_context"] = writer_context_payload
+            stage_outputs["writer_context_path"] = str(writer_context_path)
 
             gate_passed, gate_reason = _quality_gate_before_writing(
                 result_registry,
@@ -2810,6 +2831,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 已生成论文\n{final_paper}\n\n"
                 f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
                 f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
+                f"# writer_context.json（Writer 唯一图表上下文）\n{_json_for_prompt(writer_context_payload, 12000)}\n\n"
                 f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 12000)}\n\n"
                 f"# 更新后的建模方案\n{stage_outputs['modeling']}\n\n"
                 f"# 更新后的模型审查\n{stage_outputs['review']}\n\n"
@@ -2841,6 +2863,15 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["paper_ready_images"] = writer_images
         stage_outputs["figure_bundle"] = figure_bundle.to_dict()
         stage_outputs["writer_available_images"] = writer_images
+        writer_context = WriterContextSkill.build_context(
+            result_registry=result_registry,
+            figure_bundle=figure_bundle,
+            chart_language=chart_language,
+        )
+        writer_context_path = writer_context.save(work_dir)
+        writer_context_payload = writer_context.to_dict()
+        stage_outputs["writer_context"] = writer_context_payload
+        stage_outputs["writer_context_path"] = str(writer_context_path)
 
         paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
             work_dir=work_dir,
@@ -3078,6 +3109,16 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         stage_outputs["paper_ready_images"] = writer_images
         stage_outputs["figure_bundle"] = polish_bundle_snapshot.get("figure_bundle_dict", polish_figure_bundle.to_dict())
         stage_outputs["writer_available_images"] = writer_images
+        polish_result_registry = build_result_registry(work_dir, recalculation_result.structured_result_files)
+        writer_context = WriterContextSkill.build_context(
+            result_registry=polish_result_registry,
+            figure_bundle=polish_figure_bundle,
+            chart_language=chart_language,
+        )
+        writer_context_path = writer_context.save(work_dir)
+        writer_context_payload = writer_context.to_dict()
+        stage_outputs["writer_context"] = writer_context_payload
+        stage_outputs["writer_context_path"] = str(writer_context_path)
         wording_prompt = (
             f"# 原始题目\n{question or '未提供'}\n\n"
             f"# 原论文\n{paper_content}\n\n"
@@ -3086,6 +3127,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             f"# 模型一致性审查\n{stage_outputs['consistency']}\n\n"
             f"# 数据计算复核\n{recalculation_result.coder_response}\n\n"
             f"# 图文一致性审查\n{stage_outputs['chart_consistency']}\n\n"
+            f"# writer_context.json（Writer 唯一图表上下文）\n{_json_for_prompt(writer_context_payload, 12000)}\n\n"
             f"# 图片资源清单\n{image_manifest_text}\n\n"
             f"# 可用替代图片\n{', '.join(recalculation_result.created_images) if recalculation_result.created_images else '无'}\n\n"
             "请输出修订后的完整 Markdown 论文；若需要替换图片，请同步更新 Markdown 图片路径。"

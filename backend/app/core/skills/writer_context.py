@@ -6,38 +6,41 @@ folders or infer image semantics by filename.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from app.artifacts.registry import FigureBundle
+from app.artifacts.writer_context import WriterContext
 
 
 class WriterContextSkill:
     """Assemble the only figure payload the writer is allowed to use."""
 
     @staticmethod
-    def build(result_registry: dict[str, Any], figure_bundle: FigureBundle) -> dict[str, Any]:
-        return {
-            "verified_results": [
-                item for item in result_registry.get("verified_results", [])
-                if isinstance(item, dict)
-            ],
-            "blocked_results": [
-                item for item in result_registry.get("blocked_results", [])
-                if isinstance(item, dict)
-            ],
-            "available_figures": figure_bundle.available_figures,
-            "result_figures": figure_bundle.result_figures,
-            "explanatory_figures": figure_bundle.explanatory_figures,
-            "required_images": figure_bundle.required_images,
-            "rules": {
-                "writer_may_reference_only_available_figures": True,
-                "result_overview_caption": "核心结果概览图",
-                "do_not_relabel_result_overview": [
-                    "fitting_curve",
-                    "residual_plot",
-                    "comparison_bar",
-                    "mechanism",
-                    "workflow",
-                ],
-            },
-        }
+    def build(
+        result_registry: dict[str, Any],
+        figure_bundle: FigureBundle,
+        chart_language: str = "Simplified Chinese",
+    ) -> dict[str, Any]:
+        return WriterContext.build(result_registry, figure_bundle, chart_language).to_dict()
+
+    @staticmethod
+    def build_context(
+        result_registry: dict[str, Any],
+        figure_bundle: FigureBundle,
+        chart_language: str = "Simplified Chinese",
+    ) -> WriterContext:
+        return WriterContext.build(result_registry, figure_bundle, chart_language)
+
+    @staticmethod
+    def save(
+        work_dir: str | Path,
+        result_registry: dict[str, Any],
+        figure_bundle: FigureBundle,
+        chart_language: str = "Simplified Chinese",
+    ) -> Path:
+        return WriterContextSkill.build_context(
+            result_registry=result_registry,
+            figure_bundle=figure_bundle,
+            chart_language=chart_language,
+        ).save(work_dir)

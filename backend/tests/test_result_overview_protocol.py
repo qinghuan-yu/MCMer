@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 
 from app.artifacts.figure_plan import FigurePlanBuilder
+from app.artifacts.registry import FigureBundle
+from app.core.skills.writer_context import WriterContextSkill
 from app.core.figure_stage import FigureStage
 
 
@@ -284,3 +286,59 @@ def test_reevaluate_does_not_create_unbound_overview_when_verified_results_exist
     assert len(fallback) == 1
     assert fallback[0]["linked_result_ids"] == ["global_result"]
     assert all(item.get("linked_result_ids") for item in fallback)
+
+
+def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Path) -> None:
+    bundle = FigureBundle(
+        available_figures=[
+            {
+                "path": "output/fig_q1_result_overview.png",
+                "caption": "Core result overview",
+                "canonical_caption": "Core result overview",
+                "figure_request_id": "fig_q1_result_overview",
+                "semantic_role": "result_overview",
+                "figure_kind": "result_figure",
+                "view_type": "numeric_overview",
+                "linked_result_ids": ["q1_result"],
+                "source_data": ["result_registry.json"],
+                "semantic_verified": True,
+                "chart_language_verified": True,
+                "paper_ready": True,
+            }
+        ],
+        result_figures=[
+            {
+                "path": "output/fig_q1_result_overview.png",
+                "caption": "Core result overview",
+                "canonical_caption": "Core result overview",
+                "figure_request_id": "fig_q1_result_overview",
+                "semantic_role": "result_overview",
+                "figure_kind": "result_figure",
+                "view_type": "numeric_overview",
+                "linked_result_ids": ["q1_result"],
+                "source_data": ["result_registry.json"],
+                "semantic_verified": True,
+                "chart_language_verified": True,
+                "paper_ready": True,
+            }
+        ],
+        required_images=["output/fig_q1_result_overview.png"],
+    )
+    result_registry = {
+        "verified_results": [{"id": "q1_result", "value": 2.8}],
+        "blocked_results": [],
+    }
+
+    context = WriterContextSkill.build_context(
+        result_registry=result_registry,
+        figure_bundle=bundle,
+        chart_language="English",
+    )
+    path = context.save(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["available_figures"][0]["semantic_role"] == "result_overview"
+    assert payload["available_figures"][0]["caption"] == "Core result overview"
+    assert payload["available_figures"][0]["linked_result_ids"] == ["q1_result"]
+    assert payload["rules"]["writer_must_use_canonical_caption"] is True
+    assert "comparison_bar" in payload["rules"]["do_not_relabel_result_overview"]
