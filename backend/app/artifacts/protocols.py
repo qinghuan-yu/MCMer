@@ -11,6 +11,27 @@ from enum import Enum
 from typing import Any
 
 
+RESULT_OVERVIEW_ROLE = "result_overview"
+
+FIGURE_ROLE_ALIASES = {
+    "data_overview": RESULT_OVERVIEW_ROLE,
+}
+
+
+def normalize_figure_role(role: object) -> str:
+    """Return the canonical semantic role used by figure planning/gating."""
+    normalized = str(role or "").strip().lower()
+    return FIGURE_ROLE_ALIASES.get(normalized, normalized)
+
+
+def canonical_caption_for_role(role: object, chart_language: str = "Simplified Chinese") -> str:
+    """Caption prefix controlled by protocol, not by the writer."""
+    normalized = normalize_figure_role(role)
+    if normalized == RESULT_OVERVIEW_ROLE:
+        return "核心结果概览图" if chart_language == "Simplified Chinese" else "Core result overview"
+    return str(role or "").strip()
+
+
 class FigureRequestState(str, Enum):
     planned = "planned"
     pending_result_binding = "pending_result_binding"
@@ -177,11 +198,18 @@ DEFAULT_FIGURE_CAPABILITIES: dict[str, FigureCapability] = {
         requires_verified_result=True,
         supports_languages=("Simplified Chinese", "English"),
     ),
-    "data_overview": FigureCapability(
-        role="data_overview",
+    "result_overview": FigureCapability(
+        role="result_overview",
         renderer="render_data_overview",
-        requires_data=True,
-        requires_verified_result=False,
+        requires_data=False,
+        requires_verified_result=True,
+        supports_languages=("Simplified Chinese", "English"),
+    ),
+    "data_overview": FigureCapability(
+        role="result_overview",
+        renderer="render_data_overview",
+        requires_data=False,
+        requires_verified_result=True,
         supports_languages=("Simplified Chinese", "English"),
     ),
 }

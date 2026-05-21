@@ -20,6 +20,11 @@ from app.artifacts.renderers import (
     render_trajectory_shielding_2d,
 )
 from app.artifacts.figure_plan import FigurePlanBuilder
+from app.artifacts.protocols import (
+    RESULT_OVERVIEW_ROLE,
+    canonical_caption_for_role,
+    normalize_figure_role,
+)
 from app.artifacts.registry import ArtifactRegistry
 
 
@@ -755,6 +760,41 @@ class FigureStage:
         return []
 
     @staticmethod
+    def deterministic_overview_columns_from_registry(
+        result_registry: dict[str, object],
+    ) -> tuple[dict[str, list[float]], list[str], list[str]]:
+        verified = result_registry.get("verified_results", []) if isinstance(result_registry, dict) else []
+        if not isinstance(verified, list):
+            return {}, [], []
+
+        values: list[float] = []
+        linked_ids: list[str] = []
+        sources: set[str] = set()
+        for entry in verified:
+            if not isinstance(entry, dict):
+                continue
+            result_id = str(entry.get("id") or "").strip()
+            value = FigureStage.coerce_numeric_value(entry.get("value"))
+            if not result_id or value is None:
+                continue
+            values.append(value)
+            linked_ids.append(result_id)
+            for src in entry.get("source_data", []) or []:
+                text = str(src or "").strip()
+                if text:
+                    sources.add(text)
+            if len(values) >= 24:
+                break
+
+        if len(values) < 2:
+            return {}, [], []
+        columns = {
+            "result_index": [float(i + 1) for i in range(len(values))],
+            "result_value": values,
+        }
+        return columns, linked_ids, sorted(sources) or ["result_registry.json"]
+
+    @staticmethod
     def render_required_requests_deterministically(
         work_dir: str,
         result_registry: dict[str, object],
@@ -768,7 +808,7 @@ class FigureStage:
         for req in required_requests:
             req_id = str(req.get("id") or "").strip()
             subproblem_id = str(req.get("subproblem_id") or "").strip()
-            role = str(req.get("semantic_role") or req.get("role") or "").strip().lower()
+            role = normalize_figure_role(req.get("semantic_role") or req.get("role"))
             figure_kind = str(req.get("figure_kind") or "result_figure").strip().lower()
             expected_content = req.get("expected_content", [])
             required_data = req.get("required_data", [])
@@ -796,6 +836,7 @@ class FigureStage:
                 "residual_plot",
                 "comparison_bar",
                 "data_overview",
+                RESULT_OVERVIEW_ROLE,
             }:
                 missing.append({
                     "figure_request_id": req_id,
@@ -816,7 +857,7 @@ class FigureStage:
 
             if required_data_list:
                 missing_files = [src for src in required_data_list if not (Path(work_dir) / src).exists()]
-                if missing_files and role not in {"spectrum_curve", "peak_valley_annotation"}:
+                if missing_files and role not in {"spectrum_curve", "peak_valley_annotation", RESULT_OVERVIEW_ROLE}:
                     missing.append({
                         "figure_request_id": req_id,
                         "required": True,
@@ -840,6 +881,8 @@ class FigureStage:
             fitted_values: list[float] = []
             categories: list[str] = []
             comparison_values: list[float] = []
+            registry_linked_ids: list[str] = []
+            registry_sources: list[str] = []
             if role in {"trajectory_shielding", "distance_time_curve"}:
                 x_values, y_values, matched_sources = FigureStage.deterministic_series_from_registry(
                     result_registry,
@@ -959,19 +1002,11 @@ class FigureStage:
                     categories = [f"C{i + 1}" for i in range(len(comparison_values))]
 
             overview_columns: dict[str, list[float]] = {}
-            if role == "data_overview":
+            if role == RESULT_OVERVIEW_ROLE:
                 columns, matched_sources = FigureStage.deterministic_named_columns_from_data_files(
                     work_dir,
                     required_data_list,
                 )
-                if not columns:
-                    missing.append({
-                        "figure_request_id": req_id,
-                        "required": True,
-                        "satisfied": False,
-                        "reason": "missing_source_data",
-                    })
-                    continue
                 for name, values in columns.items():
                     if not isinstance(values, list):
                         continue
@@ -979,13 +1014,17 @@ class FigureStage:
                     if len(clean) >= 2:
                         overview_columns[str(name)] = clean
                 if len(overview_columns) < 2:
-                    missing.append({
-                        "figure_request_id": req_id,
-                        "required": True,
-                        "satisfied": False,
-                        "reason": "insufficient_numeric_columns:data_overview",
-                    })
-                    continue
+                    overview_columns, registry_linked_ids, registry_sources = FigureStage.deterministic_overview_columns_from_registry(result_registry)
+                    if registry_linked_ids:
+                        matched_sources = registry_sources
+                    if len(overview_columns) < 2:
+                        missing.append({
+                            "figure_request_id": req_id,
+                            "required": True,
+                            "satisfied": False,
+                            "reason": f"insufficient_numeric_columns:{RESULT_OVERVIEW_ROLE}",
+                        })
+                        continue
 
             output_path = str(Path(work_dir) / "output" / f"{req_id}.png")
             title = (
@@ -1143,18 +1182,39 @@ class FigureStage:
                     source_data=required_data_list or (matched_sources or ["result_registry.json"]),
                     work_dir=work_dir,
                 )
-            elif role == "data_overview":
+            elif role == RESULT_OVERVIEW_ROLE:
+                request_linked_ids = [
+                    str(item).strip()
+                    for item in (req.get("linked_result_ids", []) if isinstance(req.get("linked_result_ids"), list) else [])
+                    if str(item).strip()
+                ]
+                if not request_linked_ids:
+                    request_linked_ids = registry_linked_ids
+                if not request_linked_ids:
+                    request_linked_ids = [
+                        str(item.get("id") or "").strip()
+                        for item in (result_registry.get("verified_results", []) if isinstance(result_registry, dict) else [])
+                        if isinstance(item, dict) and str(item.get("id") or "").strip()
+                    ][:12]
+                if not request_linked_ids:
+                    missing.append({
+                        "figure_request_id": req_id,
+                        "required": True,
+                        "satisfied": False,
+                        "reason": "missing_verified_result_binding",
+                    })
+                    continue
                 artifact = render_data_overview(
                     numeric_columns=overview_columns,
-                    title=title,
+                    title=canonical_caption_for_role(RESULT_OVERVIEW_ROLE, chart_language),
                     output_path=output_path,
                     chart_language=chart_language,
                     figure_request_id=req_id,
                     subproblem_id=subproblem_id,
-                    semantic_role="data_overview",
-                    depicts=expected_content if isinstance(expected_content, list) else ["data_overview", "numeric_overview"],
-                    linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
-                    source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                    semantic_role=RESULT_OVERVIEW_ROLE,
+                    depicts=[RESULT_OVERVIEW_ROLE, "numeric_overview"],
+                    linked_result_ids=request_linked_ids[:12],
+                    source_data=matched_sources or required_data_list or ["result_registry.json"],
                     view_type=str(req.get("view_type") or "numeric_overview"),
                     work_dir=work_dir,
                 )

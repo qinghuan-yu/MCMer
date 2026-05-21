@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from app.artifacts.contracts import ProblemContract
+from app.artifacts.protocols import canonical_caption_for_role, normalize_figure_role
 from app.utils.figure_artifacts import (
     FIGURE_MANIFEST,
     validate_figure,
@@ -328,9 +329,9 @@ class ArtifactRegistry:
 
         for path in self.artifact_valid_images:
             artifact = artifacts.get(path, {})
-            figure_role = str(artifact.get("figure_role") or "").strip()
+            figure_role = normalize_figure_role(artifact.get("figure_role") or "")
             figure_request_id = str(artifact.get("figure_request_id") or "").strip()
-            semantic_role = str(artifact.get("semantic_role") or figure_role).strip()
+            semantic_role = normalize_figure_role(artifact.get("semantic_role") or figure_role)
             semantic_verified = bool(artifact.get("semantic_verified"))
             paper_section = str(artifact.get("paper_section") or "").strip().lower()
             figure_kind = str(artifact.get("figure_kind") or "").strip().lower()
@@ -338,10 +339,16 @@ class ArtifactRegistry:
             req_payload = request_by_id.get(figure_request_id, {})
             req_kind = str(req_payload.get("figure_kind") or "").strip().lower()
             effective_kind = figure_kind or req_kind or ("explanatory_figure" if semantic_role in explanatory_roles else "result_figure")
+            canonical_caption = (
+                str(req_payload.get("canonical_caption") or "").strip()
+                or str(artifact.get("canonical_caption") or "").strip()
+                or canonical_caption_for_role(semantic_role, self.contract.chart_language if self.contract else "Simplified Chinese")
+            )
 
             item = {
                 "path": path,
-                "caption": str(artifact.get("caption") or artifact.get("figure_caption") or semantic_role or path),
+                "caption": canonical_caption or str(artifact.get("caption") or artifact.get("figure_caption") or semantic_role or path),
+                "canonical_caption": canonical_caption,
                 "figure_request_id": figure_request_id,
                 "semantic_role": semantic_role,
                 "semantic_verified": semantic_verified,

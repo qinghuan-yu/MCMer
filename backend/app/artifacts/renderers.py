@@ -11,6 +11,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.artifacts.protocols import (
+    RESULT_OVERVIEW_ROLE,
+    canonical_caption_for_role,
+    normalize_figure_role,
+)
+
 logger = logging.getLogger(__name__)
 
 # Lazy imports for matplotlib to avoid import errors when not needed
@@ -447,14 +453,17 @@ def render_data_overview(
     chart_language: str = "Simplified Chinese",
     figure_request_id: str = "",
     subproblem_id: str = "",
-    semantic_role: str = "data_overview",
+    semantic_role: str = RESULT_OVERVIEW_ROLE,
     depicts: list[str] | None = None,
     linked_result_ids: list[str] | None = None,
     source_data: list[str] | None = None,
     view_type: str = "numeric_overview",
     work_dir: str | None = None,
 ) -> dict[str, Any]:
-    """Render deterministic data-overview figure from numeric columns."""
+    """Render deterministic result-overview figure from numeric columns."""
+    semantic_role = normalize_figure_role(semantic_role)
+    if semantic_role == RESULT_OVERVIEW_ROLE:
+        title = canonical_caption_for_role(RESULT_OVERVIEW_ROLE, chart_language)
     if not isinstance(numeric_columns, dict):
         return {}
 
@@ -545,6 +554,8 @@ def render_data_overview(
             "data_bindings": source_data or ["result_registry.json"],
             "semantic_verified": True,
             "evidence_binding_type": "source_data",
+            "caption": canonical_caption_for_role(semantic_role, chart_language),
+            "canonical_caption": canonical_caption_for_role(semantic_role, chart_language),
         }
     )
     if work_dir:

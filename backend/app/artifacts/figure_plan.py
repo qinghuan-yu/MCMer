@@ -20,7 +20,15 @@ from typing import Any
 from app.artifacts.protocols import (
     DEFAULT_FIGURE_CAPABILITIES,
     FigureRequestState,
+    RESULT_OVERVIEW_ROLE,
     WorkflowIssue,
+    canonical_caption_for_role,
+    normalize_figure_role,
+)
+from app.artifacts.visualization_protocol import (
+    VerifiedResult,
+    normalize_verified_results,
+    result_overview_request,
 )
 from app.utils.common_utils import save_json
 
@@ -249,7 +257,8 @@ class FigurePlanBuilder:
         "residual_plot": "residual_plot",
         "result_data_plot": "comparison_bar",
         "comparison_bar": "comparison_bar",
-        "data_overview": "data_overview",
+        "data_overview": RESULT_OVERVIEW_ROLE,
+        "result_overview": RESULT_OVERVIEW_ROLE,
     }
 
     @classmethod
@@ -262,12 +271,24 @@ class FigurePlanBuilder:
         work_dir: str,
     ) -> dict[str, Any]:
         need = FigureNeedDetector.detect(question, solve_spec, problem_facts, work_dir)
+        requires_result_requested = bool(
+            need.requires_result_figures
+            or (isinstance(solve_spec, dict) and solve_spec.get("requires_result_figures") is True)
+            or (isinstance(solve_spec, dict) and solve_spec.get("requires_result_figures_by_problem") is True)
+        )
+        requires_any_requested = bool(
+            need.requires_figures
+            or requires_result_requested
+            or (isinstance(solve_spec, dict) and solve_spec.get("requires_figures") is True)
+            or (isinstance(solve_spec, dict) and solve_spec.get("requires_figures_by_problem") is True)
+        )
         requests = cls._seed_from_existing_requests(solve_spec, chart_language)
         available_data_files = cls._discover_input_files(work_dir)
         verified_result_ids = cls._load_verified_result_ids(work_dir)
+        verified_results = normalize_verified_results(cls._load_result_registry(work_dir))
 
         # Rule-based backfill if detector says figures are needed but requests are empty/incomplete.
-        if need.requires_figures:
+        if requires_any_requested:
             requests = cls._backfill_requests(
                 requests=requests,
                 solve_spec=solve_spec,
@@ -285,15 +306,37 @@ class FigurePlanBuilder:
             work_dir=work_dir,
         )
 
-        if need.requires_figures and not any(
+        if requires_any_requested and not any(
             isinstance(item, dict) and bool(item.get("required", True))
             for item in requests
         ):
-            requests = cls._inject_fallback_data_overview_requests(
+            requests = cls._inject_fallback_result_overview_requests(
                 requests=requests,
                 solve_spec=solve_spec,
                 chart_language=chart_language,
                 available_data_files=available_data_files,
+                verified_results=verified_results,
+            )
+            requests = cls._apply_capability_constraints(
+                requests=requests,
+                chart_language=chart_language,
+                available_data_files=available_data_files,
+                verified_result_ids=verified_result_ids,
+                work_dir=work_dir,
+            )
+
+        if requires_result_requested and not any(
+            isinstance(item, dict)
+            and bool(item.get("required", True))
+            and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+            for item in requests
+        ):
+            requests = cls._inject_fallback_result_overview_requests(
+                requests=requests,
+                solve_spec=solve_spec,
+                chart_language=chart_language,
+                available_data_files=available_data_files,
+                verified_results=verified_results,
             )
             requests = cls._apply_capability_constraints(
                 requests=requests,
@@ -332,11 +375,11 @@ class FigurePlanBuilder:
         )
 
         plan = {
-            "requires_figures": bool(need.requires_figures),
-            "requires_result_figures": bool(need.requires_result_figures),
+            "requires_figures": bool(requires_any_requested),
+            "requires_result_figures": bool(requires_result_requested),
             "requires_explanatory_figures": bool(need.requires_explanatory_figures),
-            "requires_figures_by_problem": bool(need.requires_figures),
-            "requires_result_figures_by_problem": bool(need.requires_result_figures),
+            "requires_figures_by_problem": bool(requires_any_requested),
+            "requires_result_figures_by_problem": bool(requires_result_requested),
             "requires_explanatory_figures_by_problem": bool(need.requires_explanatory_figures),
             "confidence": need.confidence,
             "reasons": need.reasons,
@@ -398,6 +441,17 @@ class FigurePlanBuilder:
         }
 
     @classmethod
+    def _load_result_registry(cls, work_dir: str) -> dict[str, Any]:
+        path = Path(work_dir) / "result_registry.json"
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @classmethod
     def _apply_capability_constraints(
         cls,
         requests: list[dict[str, Any]],
@@ -414,7 +468,7 @@ class FigurePlanBuilder:
             if not isinstance(raw, dict):
                 continue
             req = dict(raw)
-            role = _norm_text(req.get("semantic_role") or req.get("role")).lower()
+            role = normalize_figure_role(req.get("semantic_role") or req.get("role"))
             kind = _norm_text(req.get("figure_kind") or "result_figure").lower()
             required = bool(req.get("required", True))
             req.setdefault("figure_kind", kind or "result_figure")
@@ -571,9 +625,9 @@ class FigurePlanBuilder:
                     ]
                     if required_columns and not any(col in header_tokens for col in required_columns):
                         blocked_reason = f"required_columns_missing:{role}"
-                elif role == "data_overview":
+                elif role == RESULT_OVERVIEW_ROLE:
                     if _count_numeric_columns(candidates) < 2:
-                        blocked_reason = "insufficient_numeric_columns:data_overview"
+                        blocked_reason = f"insufficient_numeric_columns:{RESULT_OVERVIEW_ROLE}"
             if not blocked_reason and bool(capability and capability.requires_verified_result) and kind == "result_figure":
                 if placeholder_ids:
                     blocked_reason = "placeholder_linked_result_ids"
@@ -697,6 +751,8 @@ class FigurePlanBuilder:
             payload.setdefault("language", chart_language)
             payload.setdefault("figure_kind", "result_figure")
             payload.setdefault("semantic_role", _norm_text(payload.get("role")) or "result_visualization")
+            payload["semantic_role"] = normalize_figure_role(payload.get("semantic_role"))
+            payload["role"] = payload["semantic_role"]
             payload.setdefault("must_include_in_paper", bool(payload.get("required", True)))
             payload.setdefault("depends_on", {
                 "model_objects": [],
@@ -780,11 +836,12 @@ class FigurePlanBuilder:
                 x_axis = "method"
                 y_axis = "value"
                 group_by = "metric"
-            elif semantic_role == "data_overview":
+            elif semantic_role == RESULT_OVERVIEW_ROLE:
                 required_columns = []
                 x_axis = "variables"
                 y_axis = "numeric_value"
                 group_by = ""
+            canonical_caption = canonical_caption_for_role(semantic_role, chart_language)
             return {
                 "id": req_id,
                 "problem_section": subproblem_id,
@@ -792,6 +849,7 @@ class FigurePlanBuilder:
                 "figure_kind": figure_kind,
                 "semantic_role": semantic_role,
                 "role": semantic_role,
+                "canonical_caption": canonical_caption,
                 "purpose": purpose,
                 "chart_intent": chart_intent,
                 "required": required,
@@ -802,7 +860,7 @@ class FigurePlanBuilder:
                 "x_axis": x_axis,
                 "y_axis": y_axis,
                 "group_by": group_by,
-                "view_type": "numeric_overview" if semantic_role == "data_overview" else "",
+                "view_type": "numeric_overview" if semantic_role == RESULT_OVERVIEW_ROLE else "",
                 "depends_on": depends_on,
                 "required_data": list(depends_on.get("data_files", []) or []),
                 "linked_result_ids": list(depends_on.get("result_ids", []) or []),
@@ -899,6 +957,25 @@ class FigurePlanBuilder:
         solve_spec: dict[str, Any],
         chart_language: str,
         available_data_files: list[str],
+        verified_results: list[VerifiedResult] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Backward-compatible wrapper for the canonical result overview fallback."""
+        return cls._inject_fallback_result_overview_requests(
+            requests=requests,
+            solve_spec=solve_spec,
+            chart_language=chart_language,
+            available_data_files=available_data_files,
+            verified_results=verified_results,
+        )
+
+    @classmethod
+    def _inject_fallback_result_overview_requests(
+        cls,
+        requests: list[dict[str, Any]],
+        solve_spec: dict[str, Any],
+        chart_language: str,
+        available_data_files: list[str],
+        verified_results: list[VerifiedResult] | None = None,
     ) -> list[dict[str, Any]]:
         existing_ids = {
             _norm_text(item.get("id"))
@@ -926,19 +1003,47 @@ class FigurePlanBuilder:
 
         for idx, sub in enumerate(subproblems, start=1):
             sid = _norm_text(sub.get("id")) or f"problem_{idx}"
-            req_id = f"fig_{sid}_data_overview"
+            req_id = f"fig_{sid}_{RESULT_OVERVIEW_ROLE}"
             if req_id in existing_ids:
                 continue
             objective = _norm_text(sub.get("objective")) or sid
+            caption = canonical_caption_for_role(RESULT_OVERVIEW_ROLE, chart_language)
+            data_files = _resolve_data_files(sub)
+            matched_result = next(
+                (
+                    result for result in (verified_results or [])
+                    if (result.section and result.section == sid)
+                    or (not result.section and idx == 1)
+                ),
+                None,
+            )
+            if matched_result is not None:
+                request = result_overview_request(
+                    result=matched_result,
+                    chart_language=chart_language,
+                    data_files=data_files,
+                )
+                request["id"] = req_id
+                request["problem_section"] = sid
+                request["subproblem_id"] = sid
+                request["purpose"] = f"{objective}: {caption}"
+                request["depends_on"]["result_ids"] = [
+                    result.id for result in (verified_results or []) if result.id
+                ][:12]
+                request["linked_result_ids"] = list(request["depends_on"]["result_ids"])
+                requests.append(request)
+                existing_ids.add(req_id)
+                continue
             requests.append(
                 {
                     "id": req_id,
                     "problem_section": sid,
                     "subproblem_id": sid,
                     "figure_kind": "result_figure",
-                    "semantic_role": "data_overview",
-                    "role": "data_overview",
-                    "purpose": f"{objective}：核心数值变量分布概览",
+                    "semantic_role": RESULT_OVERVIEW_ROLE,
+                    "role": RESULT_OVERVIEW_ROLE,
+                    "canonical_caption": caption,
+                    "purpose": f"{objective}: {caption}",
                     "chart_intent": "numeric_overview",
                     "required": True,
                     "must_include_in_paper": True,
@@ -952,12 +1057,12 @@ class FigurePlanBuilder:
                     "depends_on": {
                         "model_objects": [],
                         "formulas": [],
-                        "data_files": _resolve_data_files(sub),
+                        "data_files": data_files,
                         "result_ids": [],
                     },
-                    "required_data": _resolve_data_files(sub),
+                    "required_data": data_files,
                     "linked_result_ids": [],
-                    "expected_content": ["核心数值变量分布概览"],
+                    "expected_content": [caption],
                 }
             )
             existing_ids.add(req_id)
