@@ -786,12 +786,13 @@ class FigureStage:
             if len(values) >= 24:
                 break
 
-        if len(values) < 2:
+        if len(values) < 1:
             return {}, [], []
         columns = {
-            "result_index": [float(i + 1) for i in range(len(values))],
             "result_value": values,
         }
+        if len(values) >= 2:
+            columns["result_index"] = [float(i + 1) for i in range(len(values))]
         return columns, linked_ids, sorted(sources) or ["result_registry.json"]
 
     @staticmethod

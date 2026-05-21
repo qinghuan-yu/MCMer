@@ -82,6 +82,34 @@ def test_result_overview_renders_from_verified_results_without_csv(tmp_path: Pat
     assert report["satisfied"]
 
 
+def test_result_overview_renders_single_scalar_verified_result(tmp_path: Path) -> None:
+    report = FigureStage.render_required_requests_deterministically(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "q1_score", "value": 2.8, "source_data": ["result_registry.json"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_q1_result_overview",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "result_overview",
+                "required_data": ["result_registry.json"],
+                "linked_result_ids": ["q1_score"],
+                "view_type": "numeric_overview",
+            }
+        ],
+        chart_language="English",
+    )
+
+    assert report["created_images"]
+    assert report["satisfied"]
+    assert report["missing"] == []
+
+
 def test_result_overview_rejects_unbound_overview(tmp_path: Path) -> None:
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data" / "summary.csv").write_text(
