@@ -458,3 +458,31 @@ def test_renderer_skill_facade_renders_result_overview(tmp_path: Path) -> None:
     assert payload["created_images"]
     assert payload["satisfied"]
     assert payload["missing"] == []
+
+
+def test_renderer_skill_result_overview_accepts_single_verified_scalar(tmp_path: Path) -> None:
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "single_scalar", "value": "score = 7.5", "source_data": ["result_registry.json"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_scalar_result_overview",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "result_overview",
+                "required_data": ["result_registry.json"],
+                "linked_result_ids": ["single_scalar"],
+                "view_type": "numeric_overview",
+            }
+        ],
+        chart_language="English",
+    )
+
+    assert result.created_images
+    assert result.satisfied
+    assert result.missing == []
