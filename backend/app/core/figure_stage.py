@@ -571,6 +571,40 @@ class FigureStage:
         return x_values, values, sorted(matched_sources)
 
     @staticmethod
+    def deterministic_overview_columns_from_registry(
+        result_registry: dict[str, object],
+    ) -> tuple[dict[str, list[float]], list[str], list[str]]:
+        verified = result_registry.get("verified_results", []) if isinstance(result_registry, dict) else []
+        if not isinstance(verified, list):
+            return {}, [], []
+
+        values: list[float] = []
+        linked_ids: list[str] = []
+        sources: set[str] = set()
+        for entry in verified:
+            if not isinstance(entry, dict):
+                continue
+            result_id = str(entry.get("id") or "").strip()
+            value = FigureStage.coerce_numeric_value(entry.get("value"))
+            if not result_id or value is None:
+                continue
+            values.append(value)
+            linked_ids.append(result_id)
+            for src in entry.get("source_data", []) or []:
+                text = str(src or "").strip()
+                if text:
+                    sources.add(text)
+            if len(values) >= 24:
+                break
+
+        if len(values) < 1:
+            return {}, [], []
+        columns = {"result_value": values}
+        if len(values) >= 2:
+            columns["result_index"] = [float(i + 1) for i in range(len(values))]
+        return columns, linked_ids, sorted(sources) or ["result_registry.json"]
+
+    @staticmethod
     def deterministic_series_from_data_files(
         work_dir: str,
         data_files: list[str],
@@ -815,7 +849,11 @@ class FigureStage:
                 continue
 
             if required_data_list:
-                missing_files = [src for src in required_data_list if not (Path(work_dir) / src).exists()]
+                missing_files = [
+                    src for src in required_data_list
+                    if not (role == "data_overview" and src == "result_registry.json")
+                    and not (Path(work_dir) / src).exists()
+                ]
                 if missing_files and role not in {"spectrum_curve", "peak_valley_annotation"}:
                     missing.append({
                         "figure_request_id": req_id,
@@ -960,10 +998,15 @@ class FigureStage:
 
             overview_columns: dict[str, list[float]] = {}
             if role == "data_overview":
+                registry_sources: list[str] = []
                 columns, matched_sources = FigureStage.deterministic_named_columns_from_data_files(
                     work_dir,
                     required_data_list,
                 )
+                if not columns:
+                    columns, registry_linked_ids, registry_sources = FigureStage.deterministic_overview_columns_from_registry(result_registry)
+                    if registry_linked_ids:
+                        req["linked_result_ids"] = registry_linked_ids
                 if not columns:
                     missing.append({
                         "figure_request_id": req_id,
@@ -979,13 +1022,19 @@ class FigureStage:
                     if len(clean) >= 2:
                         overview_columns[str(name)] = clean
                 if len(overview_columns) < 2:
-                    missing.append({
-                        "figure_request_id": req_id,
-                        "required": True,
-                        "satisfied": False,
-                        "reason": "insufficient_numeric_columns:data_overview",
-                    })
-                    continue
+                    registry_columns, registry_linked_ids, registry_sources = FigureStage.deterministic_overview_columns_from_registry(result_registry)
+                    if registry_columns:
+                        overview_columns = registry_columns
+                        if registry_linked_ids:
+                            req["linked_result_ids"] = registry_linked_ids
+                    else:
+                        missing.append({
+                            "figure_request_id": req_id,
+                            "required": True,
+                            "satisfied": False,
+                            "reason": "insufficient_numeric_columns:data_overview",
+                        })
+                        continue
 
             output_path = str(Path(work_dir) / "output" / f"{req_id}.png")
             title = (
@@ -1153,8 +1202,8 @@ class FigureStage:
                     subproblem_id=subproblem_id,
                     semantic_role="data_overview",
                     depicts=expected_content if isinstance(expected_content, list) else ["data_overview", "numeric_overview"],
-                    linked_result_ids=[str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
-                    source_data=required_data_list or (matched_sources or ["result_registry.json"]),
+                    linked_result_ids=[str(item).strip() for item in (req.get("linked_result_ids", []) or []) if str(item).strip()] or [str(item.get("id") or "").strip() for item in (result_registry.get("verified_results", []) or []) if isinstance(item, dict) and str(item.get("id") or "").strip()][:12],
+                    source_data=required_data_list or (matched_sources or registry_sources or ["result_registry.json"]),
                     view_type=str(req.get("view_type") or "numeric_overview"),
                     work_dir=work_dir,
                 )

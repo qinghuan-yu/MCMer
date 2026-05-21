@@ -398,6 +398,33 @@ class FigurePlanBuilder:
         }
 
     @classmethod
+    def _solve_spec_from_requests(cls, requests: list[dict[str, Any]]) -> dict[str, Any]:
+        subproblems: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            sid = _norm_text(item.get("subproblem_id") or item.get("problem_section"))
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            depends_on = item.get("depends_on", {}) if isinstance(item.get("depends_on"), dict) else {}
+            data_files = depends_on.get("data_files", []) if isinstance(depends_on.get("data_files"), list) else []
+            required_data = item.get("required_data", []) if isinstance(item.get("required_data"), list) else []
+            subproblems.append(
+                {
+                    "id": sid,
+                    "objective": _norm_text(item.get("purpose")) or sid,
+                    "input_files": [
+                        str(value).strip()
+                        for value in [*required_data, *data_files]
+                        if str(value).strip()
+                    ],
+                }
+            )
+        return {"subproblems": subproblems or [{"id": "problem_1", "objective": "problem"}]}
+
+    @classmethod
     def _apply_capability_constraints(
         cls,
         requests: list[dict[str, Any]],
@@ -559,7 +586,10 @@ class FigurePlanBuilder:
                     blocked_reason = f"semantic_data_mismatch:{role}"
             if not blocked_reason and bool(capability and capability.requires_data) and kind == "result_figure":
                 candidates = [item for item in data_files_list if item != "result_registry.json"]
-                if not candidates:
+                registry_bound_overview = role == "data_overview" and bool(linked_ids_list)
+                if registry_bound_overview:
+                    pass
+                elif not candidates:
                     blocked_reason = "missing_source_data"
                 elif not any(item in available_set for item in candidates):
                     blocked_reason = "missing_source_data"
@@ -657,13 +687,50 @@ class FigurePlanBuilder:
         available_data_files = cls._discover_input_files(work_dir)
         verified_result_ids = cls._load_verified_result_ids(work_dir)
         normalized = [dict(item) for item in requests if isinstance(item, dict)]
-        return cls._apply_capability_constraints(
+        had_required_request = any(
+            isinstance(item, dict) and bool(item.get("required", True))
+            for item in normalized
+        )
+        had_result_request = any(
+            isinstance(item, dict)
+            and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+            for item in normalized
+        )
+        evaluated = cls._apply_capability_constraints(
             requests=normalized,
             chart_language=chart_language,
             available_data_files=available_data_files,
             verified_result_ids=verified_result_ids,
             work_dir=work_dir,
         )
+        has_required_request = any(
+            isinstance(item, dict) and bool(item.get("required", True))
+            for item in evaluated
+        )
+        has_required_result_request = any(
+            isinstance(item, dict)
+            and bool(item.get("required", True))
+            and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+            for item in evaluated
+        )
+        if had_required_request and (not has_required_request or (had_result_request and not has_required_result_request)):
+            before_count = len(evaluated)
+            evaluated = cls._inject_fallback_data_overview_requests(
+                requests=evaluated,
+                solve_spec=cls._solve_spec_from_requests(normalized),
+                chart_language=chart_language,
+                available_data_files=available_data_files,
+                verified_result_ids=verified_result_ids,
+            )
+            if len(evaluated) > before_count:
+                evaluated = cls._apply_capability_constraints(
+                    requests=evaluated,
+                    chart_language=chart_language,
+                    available_data_files=available_data_files,
+                    verified_result_ids=verified_result_ids,
+                    work_dir=work_dir,
+                )
+        return evaluated
 
     @classmethod
     def _planning_basis_from_reasons(cls, reasons: list[str]) -> list[str]:
@@ -899,6 +966,7 @@ class FigurePlanBuilder:
         solve_spec: dict[str, Any],
         chart_language: str,
         available_data_files: list[str],
+        verified_result_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         existing_ids = {
             _norm_text(item.get("id"))
@@ -930,6 +998,7 @@ class FigurePlanBuilder:
             if req_id in existing_ids:
                 continue
             objective = _norm_text(sub.get("objective")) or sid
+            linked_ids = sorted(verified_result_ids or [])
             requests.append(
                 {
                     "id": req_id,
@@ -953,10 +1022,10 @@ class FigurePlanBuilder:
                         "model_objects": [],
                         "formulas": [],
                         "data_files": _resolve_data_files(sub),
-                        "result_ids": [],
+                        "result_ids": linked_ids,
                     },
                     "required_data": _resolve_data_files(sub),
-                    "linked_result_ids": [],
+                    "linked_result_ids": linked_ids,
                     "expected_content": ["核心数值变量分布概览"],
                 }
             )

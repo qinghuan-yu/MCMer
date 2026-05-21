@@ -1931,6 +1931,35 @@ def test_render_data_overview_request_from_numeric_csv(tmp_path: Path) -> None:
     assert report["satisfied"]
 
 
+def test_render_data_overview_request_from_single_verified_result(tmp_path: Path) -> None:
+    report = FigureStage.render_required_requests_deterministically(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "q1_result", "value": 2.8, "source_data": ["result_registry.json"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_p1_data_overview",
+                "subproblem_id": "p1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "data_overview",
+                "expected_content": ["Core result overview"],
+                "required_data": ["result_registry.json"],
+                "linked_result_ids": ["q1_result"],
+                "view_type": "numeric_overview",
+            }
+        ],
+        chart_language="English",
+    )
+
+    assert report["created_images"]
+    assert report["satisfied"]
+    assert report["missing"] == []
+
+
 def test_quality_gate_reports_blocked_required_by_problem() -> None:
     registry = {
         "verified_results": [{"id": "r1", "status": "verified"}],
@@ -2122,6 +2151,53 @@ def test_figure_plan_blocks_comparison_when_required_columns_missing(tmp_path: P
     assert req["required"] is False
     assert req["status"] == "blocked"
     assert req["blocked_reason"] == "required_columns_missing:comparison_bar"
+
+
+def test_figure_plan_injects_data_overview_after_required_comparison_is_blocked(tmp_path: Path) -> None:
+    from app.artifacts.figure_plan import FigurePlanBuilder
+
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "nipt.csv").write_text(
+        "week,bmi,zscore\n12,28.1,0.04\n13,29.0,0.05\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "result_registry.json").write_text(
+        json.dumps(
+            {
+                "verified_results": [{"id": "q1_result", "value": 1.0}],
+                "blocked_results": [],
+                "summary": {"verified_count": 1, "blocked_count": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    reevaluated = FigurePlanBuilder.reevaluate_requests(
+        requests=[
+            {
+                "id": "fig_q1_comparison_bar",
+                "subproblem_id": "q1",
+                "figure_kind": "result_figure",
+                "semantic_role": "comparison_bar",
+                "required": True,
+                "required_data": ["data/nipt.csv"],
+                "required_columns": ["method", "metric", "value"],
+                "linked_result_ids": ["q1_result"],
+                "depends_on": {"data_files": ["data/nipt.csv"], "result_ids": ["q1_result"]},
+            }
+        ],
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    fallback = [
+        item for item in reevaluated
+        if isinstance(item, dict) and item.get("semantic_role") == "data_overview"
+    ]
+    assert fallback
+    assert fallback[0]["required"] is True
+    assert fallback[0]["linked_result_ids"] == ["q1_result"]
 
 
 def test_required_figure_requests_filters_blocked_and_infeasible() -> None:
