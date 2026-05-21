@@ -21,6 +21,7 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.figure_stage import FigureStage
+from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import CoderStageBudget, WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
@@ -1179,6 +1180,36 @@ def _verify_plan_requires_agent(verify_plan: dict[str, object]) -> bool:
     return any(str(item.get("status", "")).lower() != "blocked" for item in items if isinstance(item, dict))
 
 
+def _refresh_result_driven_figure_plan(
+    work_dir: str,
+    solve_spec: dict[str, object],
+    result_registry: dict[str, object],
+    chart_language: str,
+    solve_spec_path: str,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Regenerate figure_plan from verified results and mirror requests to solve_spec."""
+    if not isinstance(solve_spec, dict) or not isinstance(result_registry, dict):
+        return {}, []
+    if not result_registry.get("verified_results"):
+        return {}, []
+
+    figure_plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=result_registry,
+        chart_language=chart_language,
+        work_dir=work_dir,
+        solve_spec=solve_spec,
+    )
+    FigurePlanBuilder.save(work_dir, figure_plan)
+    figure_requests = [
+        item for item in figure_plan.get("figure_requests", [])
+        if isinstance(item, dict)
+    ]
+    solve_spec["figure_requests"] = figure_requests
+    _apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
+    save_json(solve_spec, solve_spec_path)
+    return figure_plan, figure_requests
+
+
 def _should_run_chart_agent(
     workflow_mode: str,
     result_registry: dict[str, object],
@@ -1895,6 +1926,18 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         save_json(result_registry, result_registry_path)
         stage_outputs["result_registry"] = result_registry
         stage_outputs["result_registry_file"] = os.path.basename(result_registry_path)
+        result_driven_plan, result_driven_requests = _refresh_result_driven_figure_plan(
+            work_dir=work_dir,
+            solve_spec=solve_spec,
+            result_registry=result_registry,
+            chart_language=chart_language,
+            solve_spec_path=solve_spec_path,
+        )
+        if result_driven_plan:
+            stage_outputs["figure_plan"] = result_driven_plan
+            stage_outputs["figure_plan_file"] = "figure_plan.json"
+            stage_outputs["figure_requests"] = result_driven_requests
+            stage_outputs["figure_request_count"] = len(result_driven_requests)
         trace.add_stage("solve", "completed",
                         f"verified={len(result_registry.get('verified_results', []) or [])}",
                         _time.monotonic() - _stage_start)
@@ -1948,6 +1991,18 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             save_json(result_registry, result_registry_path)
             stage_outputs["result_registry"] = result_registry
+            result_driven_plan, result_driven_requests = _refresh_result_driven_figure_plan(
+                work_dir=work_dir,
+                solve_spec=solve_spec,
+                result_registry=result_registry,
+                chart_language=chart_language,
+                solve_spec_path=solve_spec_path,
+            )
+            if result_driven_plan:
+                stage_outputs["figure_plan"] = result_driven_plan
+                stage_outputs["figure_plan_file"] = "figure_plan.json"
+                stage_outputs["figure_requests"] = result_driven_requests
+                stage_outputs["figure_request_count"] = len(result_driven_requests)
             yield _message("verification", _preview(verification_result.coder_response), section="数值复核")
         else:
             if workflow_mode != "fast":
@@ -2039,6 +2094,18 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             save_json(result_registry, result_registry_path)
             stage_outputs["result_registry"] = result_registry
+            result_driven_plan, result_driven_requests = _refresh_result_driven_figure_plan(
+                work_dir=work_dir,
+                solve_spec=solve_spec,
+                result_registry=result_registry,
+                chart_language=chart_language,
+                solve_spec_path=solve_spec_path,
+            )
+            if result_driven_plan:
+                stage_outputs["figure_plan"] = result_driven_plan
+                stage_outputs["figure_plan_file"] = "figure_plan.json"
+                stage_outputs["figure_requests"] = result_driven_requests
+                stage_outputs["figure_request_count"] = len(result_driven_requests)
             yield _message("charts", _preview(chart_result.coder_response), section="图表与一致性")
         else:
             verified_count = len(result_registry.get("verified_results", []) or [])

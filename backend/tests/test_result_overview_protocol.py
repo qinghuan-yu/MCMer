@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.artifacts.figure_plan import FigurePlanBuilder
 from app.artifacts.registry import FigureBundle
+from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
 from app.core.figure_stage import FigureStage
 
@@ -342,3 +343,87 @@ def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Pat
     assert payload["available_figures"][0]["linked_result_ids"] == ["q1_result"]
     assert payload["rules"]["writer_must_use_canonical_caption"] is True
     assert "comparison_bar" in payload["rules"]["do_not_relabel_result_overview"]
+
+
+def test_visualization_planner_uses_verified_result_contract_views(tmp_path: Path) -> None:
+    (tmp_path / "result_registry.json").write_text(
+        json.dumps(
+            {
+                "verified_results": [
+                    {
+                        "id": "q1_fit",
+                        "section": "q1",
+                        "value": 2.8,
+                        "result_type": "regression_model",
+                        "source_data": ["result_registry.json"],
+                        "visualization_contract": {
+                            "result_id": "q1_fit",
+                            "required_views": ["fitting_curve"],
+                            "fallback_views": ["result_overview"],
+                        },
+                    }
+                ],
+                "blocked_results": [],
+                "summary": {"verified_count": 1, "blocked_count": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    registry = json.loads((tmp_path / "result_registry.json").read_text(encoding="utf-8"))
+
+    plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=registry,
+        chart_language="English",
+        work_dir=str(tmp_path),
+        solve_spec={"requires_result_figures": True},
+    )
+
+    roles = [item.get("semantic_role") for item in plan["figure_requests"]]
+    assert "fitting_curve" in roles
+    assert "result_overview" in roles
+    overview = [item for item in plan["figure_requests"] if item.get("semantic_role") == "result_overview"][0]
+    assert overview["linked_result_ids"] == ["q1_fit"]
+    assert plan["planner"] == "VisualizationPlannerSkill"
+    assert plan["source"] == "result_registry"
+
+
+def test_visualization_planner_downgrades_missing_columns_but_keeps_overview(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "summary.csv").write_text(
+        "week,bmi,zscore\n12,23.1,2.8\n13,24.0,3.1\n",
+        encoding="utf-8",
+    )
+    registry = {
+        "verified_results": [
+            {
+                "id": "q1_comparison",
+                "section": "q1",
+                "value": 2.8,
+                "result_type": "unknown",
+                "source_data": ["data/summary.csv"],
+                "visualization_contract": {
+                    "result_id": "q1_comparison",
+                    "required_views": ["comparison_bar"],
+                    "fallback_views": ["result_overview"],
+                },
+            }
+        ],
+        "blocked_results": [],
+        "summary": {"verified_count": 1, "blocked_count": 0},
+    }
+    (tmp_path / "result_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+
+    plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=registry,
+        chart_language="English",
+        work_dir=str(tmp_path),
+        solve_spec={"requires_result_figures": True},
+    )
+
+    blocked = [item for item in plan["figure_requests"] if item.get("semantic_role") == "comparison_bar"][0]
+    overview = [item for item in plan["figure_requests"] if item.get("semantic_role") == "result_overview"][0]
+    assert blocked["status"] == "blocked"
+    assert blocked["blocked_reason"] == "required_columns_missing:comparison_bar"
+    assert overview["required"] is True
+    assert overview["linked_result_ids"] == ["q1_comparison"]
