@@ -108,3 +108,53 @@ def test_result_overview_rejects_unbound_overview(tmp_path: Path) -> None:
 
     assert report["created_images"] == []
     assert report["missing"][0]["reason"] == "missing_verified_result_binding"
+
+
+def test_reevaluate_injects_result_overview_when_comparison_columns_missing(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "summary.csv").write_text(
+        "week,bmi,zscore\n12,23.1,2.8\n13,24.0,3.1\n14,22.5,2.4\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "result_registry.json").write_text(
+        json.dumps(
+            {
+                "verified_results": [{"id": "q1_result", "value": 2.8}],
+                "blocked_results": [],
+                "summary": {"verified_count": 1, "blocked_count": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    reevaluated = FigurePlanBuilder.reevaluate_requests(
+        requests=[
+            {
+                "id": "fig_q1_comparison_bar",
+                "subproblem_id": "q1",
+                "figure_kind": "result_figure",
+                "semantic_role": "comparison_bar",
+                "required": True,
+                "required_data": ["data/summary.csv"],
+                "required_columns": ["method", "metric", "value"],
+                "linked_result_ids": ["q1_result"],
+                "depends_on": {"data_files": ["data/summary.csv"], "result_ids": ["q1_result"]},
+            }
+        ],
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    blocked_comparison = [
+        item for item in reevaluated
+        if item.get("semantic_role") == "comparison_bar"
+    ][0]
+    fallback = [
+        item for item in reevaluated
+        if item.get("semantic_role") == "result_overview"
+    ]
+    assert blocked_comparison["blocked_reason"] == "required_columns_missing:comparison_bar"
+    assert fallback
+    assert fallback[0]["required"] is True
+    assert fallback[0]["linked_result_ids"] == ["q1_result"]

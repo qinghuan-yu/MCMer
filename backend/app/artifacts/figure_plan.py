@@ -710,14 +710,79 @@ class FigurePlanBuilder:
     ) -> list[dict[str, Any]]:
         available_data_files = cls._discover_input_files(work_dir)
         verified_result_ids = cls._load_verified_result_ids(work_dir)
+        verified_results = normalize_verified_results(cls._load_result_registry(work_dir))
         normalized = [dict(item) for item in requests if isinstance(item, dict)]
-        return cls._apply_capability_constraints(
+        evaluated = cls._apply_capability_constraints(
             requests=normalized,
             chart_language=chart_language,
             available_data_files=available_data_files,
             verified_result_ids=verified_result_ids,
             work_dir=work_dir,
         )
+        had_required_request = any(
+            isinstance(item, dict) and bool(item.get("required", True))
+            for item in normalized
+        )
+        had_result_request = any(
+            isinstance(item, dict)
+            and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+            for item in normalized
+        )
+        has_required_request = any(
+            isinstance(item, dict) and bool(item.get("required", True))
+            for item in evaluated
+        )
+        has_required_result_request = any(
+            isinstance(item, dict)
+            and bool(item.get("required", True))
+            and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+            for item in evaluated
+        )
+        if had_required_request and (not has_required_request or (had_result_request and not has_required_result_request)):
+            pseudo_solve_spec = cls._solve_spec_from_requests(normalized)
+            before_count = len(evaluated)
+            evaluated = cls._inject_fallback_result_overview_requests(
+                requests=evaluated,
+                solve_spec=pseudo_solve_spec,
+                chart_language=chart_language,
+                available_data_files=available_data_files,
+                verified_results=verified_results,
+            )
+            if len(evaluated) > before_count:
+                evaluated = cls._apply_capability_constraints(
+                    requests=evaluated,
+                    chart_language=chart_language,
+                    available_data_files=available_data_files,
+                    verified_result_ids=verified_result_ids,
+                    work_dir=work_dir,
+                )
+        return evaluated
+
+    @classmethod
+    def _solve_spec_from_requests(cls, requests: list[dict[str, Any]]) -> dict[str, Any]:
+        subproblems: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            sid = _norm_text(item.get("subproblem_id") or item.get("problem_section"))
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            data_files = []
+            required_data = item.get("required_data", [])
+            if isinstance(required_data, list):
+                data_files = [str(src).strip() for src in required_data if str(src).strip()]
+            subproblems.append(
+                {
+                    "id": sid,
+                    "objective": _norm_text(item.get("purpose")) or sid,
+                    "input_files": [src for src in data_files if src != "result_registry.json"],
+                }
+            )
+        if not subproblems:
+            subproblems = [{"id": "problem_1", "objective": "problem", "input_files": []}]
+        return {"subproblems": subproblems}
 
     @classmethod
     def _planning_basis_from_reasons(cls, reasons: list[str]) -> list[str]:
