@@ -522,3 +522,52 @@ def test_renderer_skill_renders_comparison_bar(tmp_path: Path) -> None:
     assert result.created_images == ["output/fig_q1_comparison_bar.png"]
     assert result.satisfied == [{"figure_request_id": "fig_q1_comparison_bar", "required": True, "satisfied": True}]
     assert result.missing == []
+
+
+def test_renderer_skill_renders_fitting_curve_and_residual_plot(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "fit.csv").write_text(
+        "x,observed,fitted,residual\n1,1.1,1.0,0.1\n2,1.9,2.0,-0.1\n3,3.2,3.0,0.2\n",
+        encoding="utf-8",
+    )
+
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "q1_fit", "value": 0.95, "source_data": ["data/fit.csv"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_q1_fitting_curve",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "fitting_curve",
+                "required_data": ["data/fit.csv"],
+                "linked_result_ids": ["q1_fit"],
+                "view_type": "fitting_curve",
+                "expected_content": ["Fitting curve"],
+            },
+            {
+                "id": "fig_q1_residual_plot",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "residual_plot",
+                "required_data": ["data/fit.csv"],
+                "linked_result_ids": ["q1_fit"],
+                "view_type": "residual_plot",
+                "expected_content": ["Residual plot"],
+            },
+        ],
+        chart_language="English",
+    )
+
+    assert result.created_images == [
+        "output/fig_q1_fitting_curve.png",
+        "output/fig_q1_residual_plot.png",
+    ]
+    assert len(result.satisfied) == 2
+    assert result.missing == []
