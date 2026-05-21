@@ -712,13 +712,6 @@ class FigurePlanBuilder:
         verified_result_ids = cls._load_verified_result_ids(work_dir)
         verified_results = normalize_verified_results(cls._load_result_registry(work_dir))
         normalized = [dict(item) for item in requests if isinstance(item, dict)]
-        evaluated = cls._apply_capability_constraints(
-            requests=normalized,
-            chart_language=chart_language,
-            available_data_files=available_data_files,
-            verified_result_ids=verified_result_ids,
-            work_dir=work_dir,
-        )
         had_required_request = any(
             isinstance(item, dict) and bool(item.get("required", True))
             for item in normalized
@@ -727,6 +720,13 @@ class FigurePlanBuilder:
             isinstance(item, dict)
             and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
             for item in normalized
+        )
+        evaluated = cls._apply_capability_constraints(
+            requests=normalized,
+            chart_language=chart_language,
+            available_data_files=available_data_files,
+            verified_result_ids=verified_result_ids,
+            work_dir=work_dir,
         )
         has_required_request = any(
             isinstance(item, dict) and bool(item.get("required", True))
@@ -1082,9 +1082,27 @@ class FigurePlanBuilder:
                 ),
                 None,
             )
-            if matched_result is not None:
+            result_ids_for_overview = [
+                result.id
+                for result in (verified_results or [])
+                if result.id and (
+                    (result.section and result.section == sid)
+                    or (not result.section and idx == 1)
+                )
+            ]
+            if not result_ids_for_overview and idx == 1:
+                result_ids_for_overview = [
+                    result.id for result in (verified_results or []) if result.id
+                ][:12]
+            if matched_result is not None or result_ids_for_overview:
+                overview_result = matched_result or next(
+                    (result for result in (verified_results or []) if result.id),
+                    None,
+                )
+                if overview_result is None:
+                    continue
                 request = result_overview_request(
-                    result=matched_result,
+                    result=overview_result,
                     chart_language=chart_language,
                     data_files=data_files,
                 )
@@ -1092,12 +1110,12 @@ class FigurePlanBuilder:
                 request["problem_section"] = sid
                 request["subproblem_id"] = sid
                 request["purpose"] = f"{objective}: {caption}"
-                request["depends_on"]["result_ids"] = [
-                    result.id for result in (verified_results or []) if result.id
-                ][:12]
+                request["depends_on"]["result_ids"] = result_ids_for_overview
                 request["linked_result_ids"] = list(request["depends_on"]["result_ids"])
                 requests.append(request)
                 existing_ids.add(req_id)
+                continue
+            if verified_results:
                 continue
             requests.append(
                 {

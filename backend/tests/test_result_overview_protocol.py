@@ -186,3 +186,101 @@ def test_reevaluate_injects_result_overview_when_comparison_columns_missing(tmp_
     assert fallback
     assert fallback[0]["required"] is True
     assert fallback[0]["linked_result_ids"] == ["q1_result"]
+
+
+def test_reevaluate_injects_overview_when_result_section_does_not_match_subproblem(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "summary.csv").write_text(
+        "week,bmi,zscore\n12,23.1,2.8\n13,24.0,3.1\n14,22.5,2.4\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "result_registry.json").write_text(
+        json.dumps(
+            {
+                "verified_results": [
+                    {"id": "global_result", "section": "summary", "value": 2.8}
+                ],
+                "blocked_results": [],
+                "summary": {"verified_count": 1, "blocked_count": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    reevaluated = FigurePlanBuilder.reevaluate_requests(
+        requests=[
+            {
+                "id": "fig_q1_comparison_bar",
+                "subproblem_id": "q1",
+                "figure_kind": "result_figure",
+                "semantic_role": "comparison_bar",
+                "required": True,
+                "required_data": ["data/summary.csv"],
+                "required_columns": ["method", "metric", "value"],
+                "linked_result_ids": ["global_result"],
+                "depends_on": {"data_files": ["data/summary.csv"], "result_ids": ["global_result"]},
+            }
+        ],
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    fallback = [
+        item for item in reevaluated
+        if item.get("semantic_role") == "result_overview"
+    ]
+    assert fallback
+    assert fallback[0]["required"] is True
+    assert fallback[0]["linked_result_ids"] == ["global_result"]
+
+
+def test_reevaluate_does_not_create_unbound_overview_when_verified_results_exist(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "summary.csv").write_text(
+        "week,bmi,zscore\n12,23.1,2.8\n13,24.0,3.1\n14,22.5,2.4\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "result_registry.json").write_text(
+        json.dumps(
+            {
+                "verified_results": [
+                    {"id": "global_result", "section": "summary", "value": 2.8}
+                ],
+                "blocked_results": [],
+                "summary": {"verified_count": 1, "blocked_count": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    requests = []
+    for idx in range(1, 4):
+        requests.append(
+            {
+                "id": f"fig_q{idx}_comparison_bar",
+                "subproblem_id": f"q{idx}",
+                "figure_kind": "result_figure",
+                "semantic_role": "comparison_bar",
+                "required": True,
+                "required_data": ["data/summary.csv"],
+                "required_columns": ["method", "metric", "value"],
+                "linked_result_ids": ["global_result"],
+                "depends_on": {"data_files": ["data/summary.csv"], "result_ids": ["global_result"]},
+            }
+        )
+
+    reevaluated = FigurePlanBuilder.reevaluate_requests(
+        requests=requests,
+        chart_language="Simplified Chinese",
+        work_dir=str(tmp_path),
+    )
+
+    fallback = [
+        item for item in reevaluated
+        if item.get("semantic_role") == "result_overview"
+    ]
+    assert len(fallback) == 1
+    assert fallback[0]["linked_result_ids"] == ["global_result"]
+    assert all(item.get("linked_result_ids") for item in fallback)
