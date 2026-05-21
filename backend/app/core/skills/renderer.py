@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, canonical_caption_for_role, normalize_figure_role
-from app.artifacts.renderers import render_data_overview
+from app.artifacts.renderers import render_comparison_bar, render_data_overview
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,8 @@ class RendererSkill:
             role = normalize_figure_role(request.get("semantic_role") or request.get("role"))
             if role == RESULT_OVERVIEW_ROLE:
                 overview_requests.append(request)
+            elif role == "comparison_bar":
+                overview_requests.append(request)
             else:
                 legacy_requests.append(request)
 
@@ -70,12 +72,21 @@ class RendererSkill:
         missing: list[dict[str, Any]] = []
 
         for request in overview_requests:
-            rendered = RendererSkill._render_result_overview(
-                work_dir=work_dir,
-                result_registry=result_registry,
-                request=request,
-                chart_language=chart_language,
-            )
+            role = normalize_figure_role(request.get("semantic_role") or request.get("role"))
+            if role == "comparison_bar":
+                rendered = RendererSkill._render_comparison_bar(
+                    work_dir=work_dir,
+                    result_registry=result_registry,
+                    request=request,
+                    chart_language=chart_language,
+                )
+            else:
+                rendered = RendererSkill._render_result_overview(
+                    work_dir=work_dir,
+                    result_registry=result_registry,
+                    request=request,
+                    chart_language=chart_language,
+                )
             created_images.extend(rendered.created_images)
             satisfied.extend(rendered.satisfied)
             missing.extend(rendered.missing)
@@ -223,3 +234,134 @@ class RendererSkill:
             created_images=[artifact_path],
             satisfied=[{"figure_request_id": req_id, "required": True, "satisfied": True}],
         )
+
+    @staticmethod
+    def _render_comparison_bar(
+        work_dir: str,
+        result_registry: dict[str, Any],
+        request: dict[str, Any],
+        chart_language: str,
+    ) -> RendererResult:
+        from app.core.figure_stage import FigureStage
+
+        req_id = str(request.get("id") or "").strip()
+        if not req_id:
+            return RendererResult(
+                missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}]
+            )
+
+        required_data = request.get("required_data", [])
+        required_data_list = [
+            str(item).strip()
+            for item in required_data
+            if str(item).strip()
+        ] if isinstance(required_data, list) else []
+        columns, matched_sources = FigureStage.deterministic_named_columns_from_data_files(
+            work_dir,
+            required_data_list,
+        )
+        if not columns:
+            return RendererResult(
+                missing=[
+                    {
+                        "figure_request_id": req_id,
+                        "required": True,
+                        "satisfied": False,
+                        "reason": "missing_source_data",
+                    }
+                ]
+            )
+
+        value_col = FigureStage.extract_named_series(columns, ["value", "metric", "score", "误差", "指标"])
+        if not value_col:
+            for _, values in columns.items():
+                if len(values) >= 2:
+                    value_col = values
+                    break
+        if not value_col:
+            return RendererResult(
+                missing=[
+                    {
+                        "figure_request_id": req_id,
+                        "required": True,
+                        "satisfied": False,
+                        "reason": "missing_comparison_columns",
+                    }
+                ]
+            )
+
+        categories = RendererSkill._comparison_categories(columns, len(value_col))
+        comparison_values = value_col[:16]
+        categories = categories[: len(comparison_values)]
+        if len(categories) != len(comparison_values):
+            categories = [f"C{i + 1}" for i in range(len(comparison_values))]
+
+        request_linked_ids = [
+            str(item).strip()
+            for item in (request.get("linked_result_ids", []) if isinstance(request.get("linked_result_ids"), list) else [])
+            if str(item).strip()
+        ] or [
+            str(item.get("id") or "").strip()
+            for item in (result_registry.get("verified_results", []) if isinstance(result_registry, dict) else [])
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ][:12]
+        if not request_linked_ids:
+            return RendererResult(
+                missing=[
+                    {
+                        "figure_request_id": req_id,
+                        "required": True,
+                        "satisfied": False,
+                        "reason": "missing_verified_result_binding",
+                    }
+                ]
+            )
+
+        expected_content = request.get("expected_content", [])
+        title = (
+            str(expected_content[0]).strip()
+            if isinstance(expected_content, list) and expected_content and str(expected_content[0]).strip()
+            else canonical_caption_for_role("comparison_bar", chart_language) or "comparison_bar"
+        )
+        subproblem_id = str(request.get("subproblem_id") or request.get("problem_section") or "").strip()
+        output_path = str(Path(work_dir) / "output" / f"{req_id}.png")
+        artifact = render_comparison_bar(
+            categories=categories,
+            values=comparison_values,
+            title=title,
+            output_path=output_path,
+            chart_language=chart_language,
+            figure_request_id=req_id,
+            subproblem_id=subproblem_id,
+            semantic_role="comparison_bar",
+            depicts=expected_content if isinstance(expected_content, list) else ["comparison_bar"],
+            linked_result_ids=request_linked_ids[:12],
+            source_data=required_data_list or matched_sources or ["result_registry.json"],
+            work_dir=work_dir,
+        )
+        artifact_path = str(artifact.get("path") or "").strip() if isinstance(artifact, dict) else ""
+        if not artifact_path:
+            return RendererResult(
+                missing=[
+                    {
+                        "figure_request_id": req_id,
+                        "required": True,
+                        "satisfied": False,
+                        "reason": "renderer_failed",
+                    }
+                ]
+            )
+        return RendererResult(
+            created_images=[artifact_path],
+            satisfied=[{"figure_request_id": req_id, "required": True, "satisfied": True}],
+        )
+
+    @staticmethod
+    def _comparison_categories(columns: dict[str, list[float]], count: int) -> list[str]:
+        for name, values in columns.items():
+            lowered = name.lower()
+            if any(token in lowered for token in ["method", "category", "group", "class", "方案", "类别", "方法"]):
+                labels = [str(value) for value in values[:count]]
+                if labels:
+                    return labels
+        return [f"C{i + 1}" for i in range(count)]

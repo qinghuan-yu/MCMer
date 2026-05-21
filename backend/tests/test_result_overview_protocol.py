@@ -486,3 +486,39 @@ def test_renderer_skill_result_overview_accepts_single_verified_scalar(tmp_path:
     assert result.created_images
     assert result.satisfied
     assert result.missing == []
+
+
+def test_renderer_skill_renders_comparison_bar(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "comparison.csv").write_text(
+        "method,metric,value\nA,risk,1.2\nB,risk,0.8\nC,risk,1.5\n",
+        encoding="utf-8",
+    )
+
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "q1_comparison", "value": 0.8, "source_data": ["data/comparison.csv"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_q1_comparison_bar",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "comparison_bar",
+                "required_data": ["data/comparison.csv"],
+                "required_columns": ["method", "metric", "value"],
+                "linked_result_ids": ["q1_comparison"],
+                "view_type": "comparison_bar",
+                "expected_content": ["Comparison bar"],
+            }
+        ],
+        chart_language="English",
+    )
+
+    assert result.created_images == ["output/fig_q1_comparison_bar.png"]
+    assert result.satisfied == [{"figure_request_id": "fig_q1_comparison_bar", "required": True, "satisfied": True}]
+    assert result.missing == []
