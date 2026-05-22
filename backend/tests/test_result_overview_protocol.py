@@ -295,8 +295,8 @@ def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Pat
         available_figures=[
             {
                 "path": "output/fig_q1_result_overview.png",
-                "caption": "Core result overview",
-                "canonical_caption": "Core result overview",
+                "caption": "Residual plot",
+                "canonical_caption": "Residual plot",
                 "figure_request_id": "fig_q1_result_overview",
                 "semantic_role": "result_overview",
                 "figure_kind": "result_figure",
@@ -311,8 +311,8 @@ def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Pat
         result_figures=[
             {
                 "path": "output/fig_q1_result_overview.png",
-                "caption": "Core result overview",
-                "canonical_caption": "Core result overview",
+                "caption": "Residual plot",
+                "canonical_caption": "Residual plot",
                 "figure_request_id": "fig_q1_result_overview",
                 "semantic_role": "result_overview",
                 "figure_kind": "result_figure",
@@ -322,6 +322,14 @@ def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Pat
                 "semantic_verified": True,
                 "chart_language_verified": True,
                 "paper_ready": True,
+            }
+        ],
+        diagnostic_figures=[
+            {
+                "path": "output/workflow_debug.png",
+                "caption": "Workflow debug",
+                "semantic_role": "workflow",
+                "paper_ready": False,
             }
         ],
         required_images=["output/fig_q1_result_overview.png"],
@@ -342,7 +350,10 @@ def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Pat
     assert payload["available_figures"][0]["semantic_role"] == "result_overview"
     assert payload["available_figures"][0]["caption"] == "Core result overview"
     assert payload["available_figures"][0]["linked_result_ids"] == ["q1_result"]
+    assert payload["allowed_image_paths"] == ["output/fig_q1_result_overview.png"]
+    assert payload["forbidden_image_paths"] == ["output/workflow_debug.png"]
     assert payload["rules"]["writer_must_use_canonical_caption"] is True
+    assert "data_overview" in payload["rules"]["result_overview_aliases"]
     assert "comparison_bar" in payload["rules"]["do_not_relabel_result_overview"]
 
 

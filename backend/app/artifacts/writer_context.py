@@ -34,11 +34,14 @@ class WriterFigure:
     @classmethod
     def from_bundle_item(cls, item: dict[str, Any], chart_language: str) -> "WriterFigure":
         semantic_role = normalize_figure_role(item.get("semantic_role") or item.get("figure_role") or "")
-        caption = (
-            str(item.get("canonical_caption") or "").strip()
-            or str(item.get("caption") or "").strip()
-            or canonical_caption_for_role(semantic_role, chart_language)
-        )
+        if semantic_role == RESULT_OVERVIEW_ROLE:
+            caption = canonical_caption_for_role(semantic_role, chart_language)
+        else:
+            caption = (
+                str(item.get("canonical_caption") or "").strip()
+                or str(item.get("caption") or "").strip()
+                or canonical_caption_for_role(semantic_role, chart_language)
+            )
         return cls(
             path=str(item.get("path") or "").strip(),
             caption=caption,
@@ -74,6 +77,8 @@ class WriterContext:
     result_figures: list[WriterFigure]
     explanatory_figures: list[WriterFigure]
     required_images: list[str]
+    allowed_image_paths: list[str]
+    forbidden_image_paths: list[str]
     rules: dict[str, Any]
 
     @classmethod
@@ -91,6 +96,17 @@ class WriterContext:
             ]
 
         overview_caption = canonical_caption_for_role(RESULT_OVERVIEW_ROLE, chart_language)
+        available_figures = _figures(figure_bundle.available_figures)
+        result_figures = _figures(figure_bundle.result_figures)
+        explanatory_figures = _figures(figure_bundle.explanatory_figures)
+        allowed_image_paths = list(dict.fromkeys(item.path for item in available_figures if item.path))
+        forbidden_image_paths = list(
+            dict.fromkeys(
+                str(item.get("path") or "").strip()
+                for item in figure_bundle.diagnostic_figures
+                if isinstance(item, dict) and str(item.get("path") or "").strip()
+            )
+        )
         return cls(
             verified_results=[
                 item for item in result_registry.get("verified_results", [])
@@ -100,14 +116,17 @@ class WriterContext:
                 item for item in result_registry.get("blocked_results", [])
                 if isinstance(item, dict)
             ],
-            available_figures=_figures(figure_bundle.available_figures),
-            result_figures=_figures(figure_bundle.result_figures),
-            explanatory_figures=_figures(figure_bundle.explanatory_figures),
+            available_figures=available_figures,
+            result_figures=result_figures,
+            explanatory_figures=explanatory_figures,
             required_images=list(figure_bundle.required_images),
+            allowed_image_paths=allowed_image_paths,
+            forbidden_image_paths=forbidden_image_paths,
             rules={
                 "writer_may_reference_only_available_figures": True,
                 "writer_must_use_canonical_caption": True,
                 "result_overview_caption": overview_caption,
+                "result_overview_aliases": ["result_overview", "data_overview"],
                 "do_not_relabel_result_overview": [
                     "fitting_curve",
                     "residual_plot",
@@ -126,6 +145,8 @@ class WriterContext:
             "result_figures": [item.to_dict() for item in self.result_figures],
             "explanatory_figures": [item.to_dict() for item in self.explanatory_figures],
             "required_images": self.required_images,
+            "allowed_image_paths": self.allowed_image_paths,
+            "forbidden_image_paths": self.forbidden_image_paths,
             "rules": self.rules,
         }
 
