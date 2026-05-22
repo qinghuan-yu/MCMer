@@ -388,6 +388,8 @@ def test_writer_stage_prepares_context_as_only_image_whitelist(tmp_path: Path) -
     assert Path(snapshot.path).name == "writer_context.json"
     assert snapshot.payload["available_figures"][0]["semantic_role"] == "result_overview"
     assert snapshot.payload["forbidden_image_paths"] == ["output/workflow_debug.png"]
+    assert "writer_context.allowed_image_paths" in WriterStage.context_contract_text()
+    assert "forbidden_image_paths" in WriterStage.context_contract_text()
 
 
 def test_figure_gate_stage_builds_bundle_snapshot(monkeypatch) -> None:

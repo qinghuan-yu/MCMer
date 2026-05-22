@@ -28,6 +28,18 @@ class WriterStage:
     """
 
     @staticmethod
+    def context_contract_text() -> str:
+        """Return the shared writer protocol text used by all writer paths."""
+        return (
+            "WriterContext contract: Markdown image paths must be selected from "
+            "writer_context.allowed_image_paths only; never reference "
+            "writer_context.forbidden_image_paths. For semantic_role result_overview "
+            "or data_overview, use writer_context.rules.result_overview_caption as "
+            "the figure caption and never relabel it as fitting_curve, residual_plot, "
+            "comparison_bar, mechanism, or workflow.\n\n"
+        )
+
+    @staticmethod
     def prepare_context(
         *,
         work_dir: str | Path,
