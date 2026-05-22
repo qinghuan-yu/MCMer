@@ -13,12 +13,15 @@ from typing import Any
 
 from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, canonical_caption_for_role, normalize_figure_role
 from app.artifacts.renderers import (
+    render_algorithm_flowchart,
     render_comparison_bar,
     render_data_overview,
     render_distance_time_curve,
     render_fitting_curve,
+    render_geometry_schematic,
     render_residual_plot,
     render_spectrum_curve,
+    render_timeline_schematic,
     render_trajectory_shielding_2d,
 )
 
@@ -77,6 +80,13 @@ class RendererSkill:
                 "spectrum_curve",
                 "trajectory_shielding",
                 "distance_time_curve",
+                "geometry_schematic",
+                "trajectory_overview",
+                "optimization_variable_diagram",
+                "physical_principle_schematic",
+                "optical_path_diagram",
+                "timeline_schematic",
+                "algorithm_flowchart",
             }:
                 overview_requests.append(request)
             else:
@@ -127,6 +137,31 @@ class RendererSkill:
                 rendered = RendererSkill._render_distance_time_curve(
                     work_dir=work_dir,
                     result_registry=result_registry,
+                    request=request,
+                    chart_language=chart_language,
+                )
+            elif role in {
+                "geometry_schematic",
+                "trajectory_overview",
+                "optimization_variable_diagram",
+                "physical_principle_schematic",
+                "optical_path_diagram",
+            }:
+                rendered = RendererSkill._render_geometry_schematic(
+                    work_dir=work_dir,
+                    request=request,
+                    chart_language=chart_language,
+                    role=role,
+                )
+            elif role == "timeline_schematic":
+                rendered = RendererSkill._render_timeline_schematic(
+                    work_dir=work_dir,
+                    request=request,
+                    chart_language=chart_language,
+                )
+            elif role == "algorithm_flowchart":
+                rendered = RendererSkill._render_algorithm_flowchart(
+                    work_dir=work_dir,
                     request=request,
                     chart_language=chart_language,
                 )
@@ -618,6 +653,91 @@ class RendererSkill:
         return RendererSkill._artifact_result(req_id, artifact)
 
     @staticmethod
+    def _render_geometry_schematic(
+        work_dir: str,
+        request: dict[str, Any],
+        chart_language: str,
+        role: str,
+    ) -> RendererResult:
+        req_id, required_data_list = RendererSkill._request_id_and_data(request)
+        if not req_id:
+            return RendererResult(missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}])
+
+        model_objects, formulas, source_refs = RendererSkill._model_contract(request)
+        artifact = render_geometry_schematic(
+            title=RendererSkill._request_title(request, role, chart_language),
+            output_path=str(Path(work_dir) / "output" / f"{req_id}.png"),
+            chart_language=chart_language,
+            figure_request_id=req_id,
+            subproblem_id=RendererSkill._subproblem_id(request),
+            semantic_role=role,
+            depicts=request.get("expected_content") if isinstance(request.get("expected_content"), list) else [role],
+            linked_result_ids=[],
+            source_data=required_data_list or ["result_registry.json"],
+            model_objects=model_objects or ["model_core"],
+            formulas=formulas,
+            source_problem_refs=source_refs or ([RendererSkill._subproblem_id(request)] if RendererSkill._subproblem_id(request) else ["problem"]),
+            work_dir=work_dir,
+        )
+        return RendererSkill._artifact_result(req_id, artifact)
+
+    @staticmethod
+    def _render_timeline_schematic(
+        work_dir: str,
+        request: dict[str, Any],
+        chart_language: str,
+    ) -> RendererResult:
+        req_id, required_data_list = RendererSkill._request_id_and_data(request)
+        if not req_id:
+            return RendererResult(missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}])
+
+        model_objects, formulas, source_refs = RendererSkill._model_contract(request)
+        artifact = render_timeline_schematic(
+            title=RendererSkill._request_title(request, "timeline_schematic", chart_language),
+            output_path=str(Path(work_dir) / "output" / f"{req_id}.png"),
+            chart_language=chart_language,
+            figure_request_id=req_id,
+            subproblem_id=RendererSkill._subproblem_id(request),
+            semantic_role="timeline_schematic",
+            depicts=request.get("expected_content") if isinstance(request.get("expected_content"), list) else ["timeline_schematic"],
+            linked_result_ids=[],
+            source_data=required_data_list or ["result_registry.json"],
+            model_objects=model_objects or ["process_stage"],
+            formulas=formulas,
+            source_problem_refs=source_refs or ([RendererSkill._subproblem_id(request)] if RendererSkill._subproblem_id(request) else ["problem"]),
+            work_dir=work_dir,
+        )
+        return RendererSkill._artifact_result(req_id, artifact)
+
+    @staticmethod
+    def _render_algorithm_flowchart(
+        work_dir: str,
+        request: dict[str, Any],
+        chart_language: str,
+    ) -> RendererResult:
+        req_id, required_data_list = RendererSkill._request_id_and_data(request)
+        if not req_id:
+            return RendererResult(missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}])
+
+        model_objects, formulas, source_refs = RendererSkill._model_contract(request)
+        artifact = render_algorithm_flowchart(
+            title=RendererSkill._request_title(request, "algorithm_flowchart", chart_language),
+            output_path=str(Path(work_dir) / "output" / f"{req_id}.png"),
+            chart_language=chart_language,
+            figure_request_id=req_id,
+            subproblem_id=RendererSkill._subproblem_id(request),
+            semantic_role="algorithm_flowchart",
+            depicts=request.get("expected_content") if isinstance(request.get("expected_content"), list) else ["algorithm_flowchart"],
+            linked_result_ids=[],
+            source_data=required_data_list or ["result_registry.json"],
+            model_objects=model_objects or ["algorithm_pipeline"],
+            formulas=formulas,
+            source_problem_refs=source_refs or ([RendererSkill._subproblem_id(request)] if RendererSkill._subproblem_id(request) else ["problem"]),
+            work_dir=work_dir,
+        )
+        return RendererSkill._artifact_result(req_id, artifact)
+
+    @staticmethod
     def _comparison_categories(columns: dict[str, list[float]], count: int) -> list[str]:
         for name, values in columns.items():
             lowered = name.lower()
@@ -660,6 +780,18 @@ class RendererSkill:
             if str(item).strip()
         ] if isinstance(required_data, list) else []
         return req_id, required_data_list
+
+    @staticmethod
+    def _model_contract(request: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+        depends_on = request.get("depends_on", {}) if isinstance(request.get("depends_on"), dict) else {}
+
+        def _clean_list(key: str) -> list[str]:
+            value = depends_on.get(key, [])
+            if not isinstance(value, list):
+                return []
+            return [str(item).strip() for item in value if str(item).strip()]
+
+        return _clean_list("model_objects"), _clean_list("formulas"), _clean_list("source_problem_refs")
 
     @staticmethod
     def _load_request_columns(work_dir: str, request: dict[str, Any]) -> tuple[str, list[str], dict[str, list[float]], list[str]]:

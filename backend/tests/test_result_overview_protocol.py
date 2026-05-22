@@ -651,3 +651,55 @@ def test_renderer_skill_renders_registry_series_curves(tmp_path: Path) -> None:
     ]
     assert len(result.satisfied) == 2
     assert result.missing == []
+
+
+def test_renderer_skill_renders_explanatory_schematics(tmp_path: Path) -> None:
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={"verified_results": []},
+        required_requests=[
+            {
+                "id": "fig_q1_physical_principle_schematic",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "explanatory_figure",
+                "semantic_role": "physical_principle_schematic",
+                "required_data": ["result_registry.json"],
+                "expected_content": ["Physical principle"],
+                "depends_on": {
+                    "model_objects": ["model_core"],
+                    "formulas": ["x = vt"],
+                    "source_problem_refs": ["q1"],
+                },
+            },
+            {
+                "id": "fig_q1_timeline_schematic",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "explanatory_figure",
+                "semantic_role": "timeline_schematic",
+                "required_data": ["result_registry.json"],
+                "expected_content": ["Timeline"],
+                "depends_on": {"model_objects": ["stage"], "source_problem_refs": ["q1"]},
+            },
+            {
+                "id": "fig_q1_algorithm_flowchart",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "explanatory_figure",
+                "semantic_role": "algorithm_flowchart",
+                "required_data": ["result_registry.json"],
+                "expected_content": ["Algorithm flow"],
+                "depends_on": {"model_objects": ["algorithm"], "source_problem_refs": ["q1"]},
+            },
+        ],
+        chart_language="English",
+    )
+
+    assert result.created_images == [
+        "output/fig_q1_physical_principle_schematic.png",
+        "output/fig_q1_timeline_schematic.png",
+        "output/fig_q1_algorithm_flowchart.png",
+    ]
+    assert len(result.satisfied) == 3
+    assert result.missing == []
