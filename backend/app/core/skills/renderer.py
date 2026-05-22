@@ -15,9 +15,11 @@ from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, canonical_caption_for_
 from app.artifacts.renderers import (
     render_comparison_bar,
     render_data_overview,
+    render_distance_time_curve,
     render_fitting_curve,
     render_residual_plot,
     render_spectrum_curve,
+    render_trajectory_shielding_2d,
 )
 
 
@@ -68,7 +70,14 @@ class RendererSkill:
             role = normalize_figure_role(request.get("semantic_role") or request.get("role"))
             if role == RESULT_OVERVIEW_ROLE:
                 overview_requests.append(request)
-            elif role in {"comparison_bar", "fitting_curve", "residual_plot", "spectrum_curve"}:
+            elif role in {
+                "comparison_bar",
+                "fitting_curve",
+                "residual_plot",
+                "spectrum_curve",
+                "trajectory_shielding",
+                "distance_time_curve",
+            }:
                 overview_requests.append(request)
             else:
                 legacy_requests.append(request)
@@ -102,6 +111,20 @@ class RendererSkill:
                 )
             elif role == "spectrum_curve":
                 rendered = RendererSkill._render_spectrum_curve(
+                    work_dir=work_dir,
+                    result_registry=result_registry,
+                    request=request,
+                    chart_language=chart_language,
+                )
+            elif role == "trajectory_shielding":
+                rendered = RendererSkill._render_trajectory_shielding(
+                    work_dir=work_dir,
+                    result_registry=result_registry,
+                    request=request,
+                    chart_language=chart_language,
+                )
+            elif role == "distance_time_curve":
+                rendered = RendererSkill._render_distance_time_curve(
                     work_dir=work_dir,
                     result_registry=result_registry,
                     request=request,
@@ -516,6 +539,85 @@ class RendererSkill:
         return RendererSkill._artifact_result(req_id, artifact)
 
     @staticmethod
+    def _render_trajectory_shielding(
+        work_dir: str,
+        result_registry: dict[str, Any],
+        request: dict[str, Any],
+        chart_language: str,
+    ) -> RendererResult:
+        from app.core.figure_stage import FigureStage
+
+        req_id, required_data_list = RendererSkill._request_id_and_data(request)
+        if not req_id:
+            return RendererResult(missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}])
+
+        x_values, y_values, matched_sources = FigureStage.deterministic_series_from_registry(
+            result_registry,
+            required_data_list,
+        )
+        if len(x_values) < 2:
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "insufficient_verified_numeric_series"}])
+
+        linked_ids = RendererSkill._linked_result_ids(request, result_registry)
+        if not linked_ids:
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "missing_verified_result_binding"}])
+
+        artifact = render_trajectory_shielding_2d(
+            points=list(zip(x_values, y_values)),
+            title=RendererSkill._request_title(request, "trajectory_shielding", chart_language),
+            output_path=str(Path(work_dir) / "output" / f"{req_id}.png"),
+            chart_language=chart_language,
+            figure_request_id=req_id,
+            subproblem_id=RendererSkill._subproblem_id(request),
+            semantic_role="trajectory_shielding",
+            depicts=request.get("expected_content") if isinstance(request.get("expected_content"), list) else ["trajectory_shielding"],
+            linked_result_ids=linked_ids[:12],
+            source_data=required_data_list or matched_sources or ["result_registry.json"],
+            work_dir=work_dir,
+        )
+        return RendererSkill._artifact_result(req_id, artifact)
+
+    @staticmethod
+    def _render_distance_time_curve(
+        work_dir: str,
+        result_registry: dict[str, Any],
+        request: dict[str, Any],
+        chart_language: str,
+    ) -> RendererResult:
+        from app.core.figure_stage import FigureStage
+
+        req_id, required_data_list = RendererSkill._request_id_and_data(request)
+        if not req_id:
+            return RendererResult(missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}])
+
+        x_values, y_values, matched_sources = FigureStage.deterministic_series_from_registry(
+            result_registry,
+            required_data_list,
+        )
+        if len(x_values) < 2:
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "insufficient_verified_numeric_series"}])
+
+        linked_ids = RendererSkill._linked_result_ids(request, result_registry)
+        if not linked_ids:
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "missing_verified_result_binding"}])
+
+        artifact = render_distance_time_curve(
+            times=x_values,
+            distances=y_values,
+            title=RendererSkill._request_title(request, "distance_time_curve", chart_language),
+            output_path=str(Path(work_dir) / "output" / f"{req_id}.png"),
+            chart_language=chart_language,
+            figure_request_id=req_id,
+            subproblem_id=RendererSkill._subproblem_id(request),
+            semantic_role="distance_time_curve",
+            depicts=request.get("expected_content") if isinstance(request.get("expected_content"), list) else ["distance_time_curve"],
+            linked_result_ids=linked_ids[:12],
+            source_data=required_data_list or matched_sources or ["result_registry.json"],
+            work_dir=work_dir,
+        )
+        return RendererSkill._artifact_result(req_id, artifact)
+
+    @staticmethod
     def _comparison_categories(columns: dict[str, list[float]], count: int) -> list[str]:
         for name, values in columns.items():
             lowered = name.lower()
@@ -549,9 +651,7 @@ class RendererSkill:
         return str(request.get("subproblem_id") or request.get("problem_section") or "").strip()
 
     @staticmethod
-    def _load_request_columns(work_dir: str, request: dict[str, Any]) -> tuple[str, list[str], dict[str, list[float]], list[str]]:
-        from app.core.figure_stage import FigureStage
-
+    def _request_id_and_data(request: dict[str, Any]) -> tuple[str, list[str]]:
         req_id = str(request.get("id") or "").strip()
         required_data = request.get("required_data", [])
         required_data_list = [
@@ -559,6 +659,13 @@ class RendererSkill:
             for item in required_data
             if str(item).strip()
         ] if isinstance(required_data, list) else []
+        return req_id, required_data_list
+
+    @staticmethod
+    def _load_request_columns(work_dir: str, request: dict[str, Any]) -> tuple[str, list[str], dict[str, list[float]], list[str]]:
+        from app.core.figure_stage import FigureStage
+
+        req_id, required_data_list = RendererSkill._request_id_and_data(request)
         columns, matched_sources = FigureStage.deterministic_named_columns_from_data_files(
             work_dir,
             required_data_list,

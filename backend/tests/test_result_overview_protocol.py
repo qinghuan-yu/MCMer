@@ -606,3 +606,48 @@ def test_renderer_skill_renders_spectrum_curve(tmp_path: Path) -> None:
     assert result.created_images == ["output/fig_q1_spectrum_curve.png"]
     assert result.satisfied == [{"figure_request_id": "fig_q1_spectrum_curve", "required": True, "satisfied": True}]
     assert result.missing == []
+
+
+def test_renderer_skill_renders_registry_series_curves(tmp_path: Path) -> None:
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "q1_t1", "value": 1.2, "source_data": ["trajectory.csv"]},
+                {"id": "q1_t2", "value": 2.4, "source_data": ["trajectory.csv"]},
+                {"id": "q1_t3", "value": 3.6, "source_data": ["trajectory.csv"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_q1_trajectory_shielding",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "trajectory_shielding",
+                "required_data": ["trajectory.csv"],
+                "linked_result_ids": ["q1_t1", "q1_t2", "q1_t3"],
+                "view_type": "trajectory_shielding",
+                "expected_content": ["Trajectory shielding"],
+            },
+            {
+                "id": "fig_q1_distance_time_curve",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "distance_time_curve",
+                "required_data": ["trajectory.csv"],
+                "linked_result_ids": ["q1_t1", "q1_t2", "q1_t3"],
+                "view_type": "distance_time_curve",
+                "expected_content": ["Distance time curve"],
+            },
+        ],
+        chart_language="English",
+    )
+
+    assert result.created_images == [
+        "output/fig_q1_trajectory_shielding.png",
+        "output/fig_q1_distance_time_curve.png",
+    ]
+    assert len(result.satisfied) == 2
+    assert result.missing == []
