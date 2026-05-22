@@ -6,6 +6,7 @@ from app.artifacts.registry import FigureBundle
 from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
+from app.core.stages.figure_gate_stage import FigureGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.figure_stage import FigureStage
 
@@ -387,6 +388,29 @@ def test_writer_stage_prepares_context_as_only_image_whitelist(tmp_path: Path) -
     assert Path(snapshot.path).name == "writer_context.json"
     assert snapshot.payload["available_figures"][0]["semantic_role"] == "result_overview"
     assert snapshot.payload["forbidden_image_paths"] == ["output/workflow_debug.png"]
+
+
+def test_figure_gate_stage_builds_bundle_snapshot(monkeypatch) -> None:
+    bundle = FigureBundle(available_figures=[{"path": "output/fig.png"}])
+
+    class FakeRegistry:
+        def validate_for_paper(self):
+            return ["output/fig.png"]
+
+    monkeypatch.setattr(
+        "app.core.stages.figure_gate_stage.LegacyFigureStage.build_bundle_snapshot",
+        lambda registry: {
+            "figure_bundle": bundle,
+            "figure_bundle_dict": bundle.to_dict(),
+            "writer_images": ["output/fig.png"],
+        },
+    )
+
+    snapshot = FigureGateStage.from_registry(FakeRegistry())
+
+    assert snapshot.artifact_valid_images == ["output/fig.png"]
+    assert snapshot.figure_bundle is bundle
+    assert snapshot.writer_images == ["output/fig.png"]
 
 
 def test_visualization_planner_uses_verified_result_contract_views(tmp_path: Path) -> None:

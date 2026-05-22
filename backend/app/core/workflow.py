@@ -23,6 +23,7 @@ from app.core.agents.writer_agent import WriterAgent
 from app.core.figure_stage import FigureStage
 from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
+from app.core.stages.figure_gate_stage import FigureGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import CoderStageBudget, WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
@@ -2339,14 +2340,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "The workflow stopped instead of silently producing a paper with missing figures. "
                 "Ensure the solver/chart stage generates at least one figure via save_paper_figure()."
             )
-        bundle_snapshot = FigureStage.build_bundle_snapshot(art_registry)
-        figure_bundle = bundle_snapshot.get("figure_bundle")
-        writer_images = bundle_snapshot.get("writer_images", [])
-        if figure_bundle is None or not isinstance(writer_images, list):
-            raise ValueError("Failed to resolve writer image bundle snapshot.")
+        figure_gate_snapshot = FigureGateStage.from_registry(art_registry)
+        artifact_valid_images = figure_gate_snapshot.artifact_valid_images
+        figure_bundle = figure_gate_snapshot.figure_bundle
+        writer_images = figure_gate_snapshot.writer_images
         stage_outputs["artifact_valid_images"] = artifact_valid_images
         stage_outputs["paper_ready_images"] = writer_images
-        stage_outputs["figure_bundle"] = bundle_snapshot.get("figure_bundle_dict", figure_bundle.to_dict())
+        stage_outputs["figure_bundle"] = figure_gate_snapshot.figure_bundle_payload
         stage_outputs["writer_available_images"] = writer_images
         writer_context_snapshot = WriterStage.prepare_context(
             work_dir=work_dir,
@@ -2861,14 +2861,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 )
 
             # Rebuild semantic bundle after audit repairs and re-run request-level quality gate.
-            bundle_snapshot = FigureStage.build_bundle_snapshot(art_registry)
-            figure_bundle = bundle_snapshot.get("figure_bundle")
-            writer_images = bundle_snapshot.get("writer_images", [])
-            if figure_bundle is None or not isinstance(writer_images, list):
-                raise ValueError(f"Audit round {audit_round}: failed to resolve writer image bundle snapshot.")
+            figure_gate_snapshot = FigureGateStage.from_registry(art_registry)
+            artifact_valid_images = figure_gate_snapshot.artifact_valid_images
+            figure_bundle = figure_gate_snapshot.figure_bundle
+            writer_images = figure_gate_snapshot.writer_images
             stage_outputs[f"artifact_valid_images_round_{audit_round}"] = artifact_valid_images
             stage_outputs[f"paper_ready_images_round_{audit_round}"] = writer_images
-            stage_outputs[f"figure_bundle_round_{audit_round}"] = bundle_snapshot.get("figure_bundle_dict", figure_bundle.to_dict())
+            stage_outputs[f"figure_bundle_round_{audit_round}"] = figure_gate_snapshot.figure_bundle_payload
             stage_outputs[f"writer_available_images_round_{audit_round}"] = writer_images
             writer_context_snapshot = WriterStage.prepare_context(
                 work_dir=work_dir,
@@ -3181,14 +3180,13 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             raise ValueError(
                 "Polish generated replacement figures, but none passed the strict FigureArtifact language gate."
             )
-        polish_bundle_snapshot = FigureStage.build_bundle_snapshot(polish_art_registry)
-        polish_figure_bundle = polish_bundle_snapshot.get("figure_bundle")
-        writer_images = polish_bundle_snapshot.get("writer_images", [])
-        if polish_figure_bundle is None or not isinstance(writer_images, list):
-            raise ValueError("Polish: failed to resolve writer image bundle snapshot.")
+        polish_gate_snapshot = FigureGateStage.from_registry(polish_art_registry)
+        artifact_valid_images = polish_gate_snapshot.artifact_valid_images
+        polish_figure_bundle = polish_gate_snapshot.figure_bundle
+        writer_images = polish_gate_snapshot.writer_images
         stage_outputs["artifact_valid_images"] = artifact_valid_images
         stage_outputs["paper_ready_images"] = writer_images
-        stage_outputs["figure_bundle"] = polish_bundle_snapshot.get("figure_bundle_dict", polish_figure_bundle.to_dict())
+        stage_outputs["figure_bundle"] = polish_gate_snapshot.figure_bundle_payload
         stage_outputs["writer_available_images"] = writer_images
         polish_result_registry = build_result_registry(work_dir, recalculation_result.structured_result_files)
         writer_context_snapshot = WriterStage.prepare_context(
