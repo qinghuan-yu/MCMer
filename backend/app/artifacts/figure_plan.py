@@ -1047,6 +1047,17 @@ class FigurePlanBuilder:
             for item in requests
             if isinstance(item, dict) and _norm_text(item.get("id"))
         }
+        existing_overview = next(
+            (
+                item for item in requests
+                if isinstance(item, dict)
+                and normalize_figure_role(item.get("semantic_role") or item.get("role")) == RESULT_OVERVIEW_ROLE
+            ),
+            None,
+        )
+        if existing_overview is not None:
+            return cls._collapse_result_overview_requests(requests)
+
         subproblems = _solve_spec_subproblems(solve_spec)
         if not subproblems:
             subproblems = [{"id": "problem_1", "objective": "problem"}]
@@ -1149,4 +1160,51 @@ class FigurePlanBuilder:
                 }
             )
             existing_ids.add(req_id)
-        return requests
+            break
+        return cls._collapse_result_overview_requests(requests)
+
+    @staticmethod
+    def _collapse_result_overview_requests(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        overview: dict[str, Any] | None = None
+        linked_ids: list[str] = []
+        source_data: list[str] = []
+        has_required_specific = any(
+            isinstance(item, dict)
+            and normalize_figure_role(item.get("semantic_role") or item.get("role")) != RESULT_OVERVIEW_ROLE
+            and bool(item.get("required", True))
+            and str(item.get("status") or "").strip() != "blocked"
+            and not str(item.get("blocked_reason") or "").strip()
+            for item in requests
+        )
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            role = normalize_figure_role(item.get("semantic_role") or item.get("role"))
+            if role != RESULT_OVERVIEW_ROLE:
+                output.append(item)
+                continue
+            if overview is None:
+                overview = dict(item)
+            for rid in item.get("linked_result_ids", []) or []:
+                text = str(rid).strip()
+                if text:
+                    linked_ids.append(text)
+            for src in item.get("required_data", []) or item.get("source_data", []) or []:
+                text = str(src).strip()
+                if text:
+                    source_data.append(text)
+        if overview is not None:
+            overview["id"] = f"fig_{RESULT_OVERVIEW_ROLE}"
+            overview["problem_section"] = "paper"
+            overview["subproblem_id"] = "paper"
+            overview["required"] = not has_required_specific
+            overview["must_include_in_paper"] = not has_required_specific
+            if linked_ids:
+                overview["linked_result_ids"] = list(dict.fromkeys(linked_ids))[:12]
+                overview.setdefault("depends_on", {})["result_ids"] = list(overview["linked_result_ids"])
+            if source_data:
+                overview["required_data"] = list(dict.fromkeys(source_data))
+                overview.setdefault("depends_on", {})["data_files"] = list(overview["required_data"])
+            output.append(overview)
+        return output

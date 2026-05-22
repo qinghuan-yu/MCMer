@@ -296,6 +296,32 @@ def test_reevaluate_does_not_create_unbound_overview_when_verified_results_exist
     assert all(item.get("linked_result_ids") for item in fallback)
 
 
+def test_visualization_planner_limits_overview_fallback_to_one(tmp_path: Path) -> None:
+    registry = {
+        "verified_results": [
+            {"id": "q1", "section": "q1", "value": 1.0},
+            {"id": "q2", "section": "q2", "value": 2.0},
+            {"id": "q3", "section": "q3", "value": 3.0},
+        ],
+        "blocked_results": [],
+    }
+
+    plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=registry,
+        chart_language="English",
+        work_dir=str(tmp_path),
+        solve_spec={"requires_result_figures": True},
+    )
+
+    overview = [
+        item for item in plan["figure_requests"]
+        if item.get("semantic_role") == "result_overview"
+    ]
+    assert len(overview) == 1
+    assert overview[0]["id"] == "fig_result_overview"
+    assert overview[0]["linked_result_ids"] == ["q1", "q2", "q3"]
+
+
 def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Path) -> None:
     bundle = FigureBundle(
         available_figures=[

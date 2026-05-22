@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.artifacts.diagnostics import FigureGateReport, QualityGateReport, WorkflowTrace
+from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, normalize_figure_role
 from app.artifacts.registry import ArtifactRegistry, FigureBundle
 from app.core.figure_stage import FigureStage
 
@@ -45,12 +46,20 @@ class QualityGateStage:
     ) -> QualityGateSnapshot:
         workflow_issues = FigureStage.normalize_workflow_issues(figure_plan_payload)
         workflow_issue_summary = FigureStage.workflow_issue_summary(workflow_issues)
+        result_roles = [
+            normalize_figure_role(item.get("semantic_role") or item.get("role"))
+            for item in figure_bundle.result_figures
+            if isinstance(item, dict)
+        ]
+        overview_only = bool(result_roles) and all(role == RESULT_OVERVIEW_ROLE for role in result_roles)
         figure_plan_diagnostics = {
             "requires_figures_by_problem": bool((solve_spec or {}).get("requires_figures_by_problem", False)),
             "required_feasible_count": int((solve_spec or {}).get("required_feasible_count", 0) or 0),
             "blocked_request_count": len(figure_bundle.blocked_requests),
             "blocked_requests": figure_bundle.blocked_requests,
             "recommended_request_count": len(figure_bundle.recommended_requests),
+            "result_figure_roles": result_roles,
+            "overview_only_result_figures": overview_only,
             "workflow_issue_count": int(workflow_issue_summary.get("count", 0) or 0),
             "workflow_issue_summary": workflow_issue_summary,
         }

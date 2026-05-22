@@ -47,23 +47,23 @@ class VisualizationPlannerSkill:
         chart_language: str,
         default_source_data: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        requests: list[dict[str, Any]] = []
-        seen_sections: set[str] = set()
         source_data = default_source_data or ["result_registry.json"]
-
-        for result in normalize_verified_results(result_registry):
-            section = result.section or "problem_1"
-            if section in seen_sections:
-                continue
-            seen_sections.add(section)
-            requests.append(
-                result_overview_request(
-                    result=result,
-                    chart_language=chart_language,
-                    data_files=result.data_artifacts or source_data,
-                )
-            )
-        return requests
+        results = normalize_verified_results(result_registry)
+        if not results:
+            return []
+        anchor = results[0]
+        request = result_overview_request(
+            result=anchor,
+            chart_language=chart_language,
+            data_files=anchor.data_artifacts or source_data,
+        )
+        request["id"] = f"fig_{RESULT_OVERVIEW_ROLE}"
+        request["problem_section"] = "paper"
+        request["subproblem_id"] = "paper"
+        request["linked_result_ids"] = [result.id for result in results if result.id][:12]
+        request["depends_on"]["result_ids"] = list(request["linked_result_ids"])
+        request["purpose"] = canonical_caption_for_role(RESULT_OVERVIEW_ROLE, chart_language)
+        return [request]
 
     @classmethod
     def build_figure_plan(
@@ -90,6 +90,8 @@ class VisualizationPlannerSkill:
                 chart_language=chart_language,
                 default_source_data=default_sources,
             )
+
+        requests = cls._limit_result_overview_requests(requests)
 
         reevaluated = FigurePlanBuilder.reevaluate_requests(
             requests=requests,
@@ -172,7 +174,54 @@ class VisualizationPlannerSkill:
                     required=index == 0 or view == RESULT_OVERVIEW_ROLE,
                 )
                 requests.append(request)
-        return cls._dedupe_requests(requests)
+        return cls._limit_result_overview_requests(cls._dedupe_requests(requests))
+
+    @staticmethod
+    def _limit_result_overview_requests(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep at most one overview fallback and do not let it crowd out real views."""
+        overview: dict[str, Any] | None = None
+        output: list[dict[str, Any]] = []
+        has_required_specific = any(
+            isinstance(item, dict)
+            and normalize_figure_role(item.get("semantic_role") or item.get("role")) != RESULT_OVERVIEW_ROLE
+            and bool(item.get("required", True))
+            and str(item.get("status") or "").strip() != "blocked"
+            and not str(item.get("blocked_reason") or "").strip()
+            for item in requests
+        )
+        linked_ids: list[str] = []
+        source_data: list[str] = []
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            role = normalize_figure_role(item.get("semantic_role") or item.get("role"))
+            if role != RESULT_OVERVIEW_ROLE:
+                output.append(item)
+                continue
+            if overview is None:
+                overview = dict(item)
+            for rid in item.get("linked_result_ids", []) or []:
+                text = str(rid).strip()
+                if text:
+                    linked_ids.append(text)
+            for src in item.get("required_data", []) or item.get("source_data", []) or []:
+                text = str(src).strip()
+                if text:
+                    source_data.append(text)
+        if overview is not None:
+            overview["id"] = f"fig_{RESULT_OVERVIEW_ROLE}"
+            overview["problem_section"] = "paper"
+            overview["subproblem_id"] = "paper"
+            overview["required"] = not has_required_specific
+            overview["must_include_in_paper"] = not has_required_specific
+            if linked_ids:
+                overview["linked_result_ids"] = list(dict.fromkeys(linked_ids))[:12]
+                overview.setdefault("depends_on", {})["result_ids"] = list(overview["linked_result_ids"])
+            if source_data:
+                overview["required_data"] = list(dict.fromkeys(source_data))
+                overview.setdefault("depends_on", {})["data_files"] = list(overview["required_data"])
+            output.append(overview)
+        return output
 
     @staticmethod
     def _request_for_view(
