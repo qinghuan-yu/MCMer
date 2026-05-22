@@ -6,6 +6,7 @@ from app.artifacts.registry import FigureBundle
 from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
+from app.core.stages.writer_stage import WriterStage
 from app.core.figure_stage import FigureStage
 
 
@@ -355,6 +356,37 @@ def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Pat
     assert payload["rules"]["writer_must_use_canonical_caption"] is True
     assert "data_overview" in payload["rules"]["result_overview_aliases"]
     assert "comparison_bar" in payload["rules"]["do_not_relabel_result_overview"]
+
+
+def test_writer_stage_prepares_context_as_only_image_whitelist(tmp_path: Path) -> None:
+    bundle = FigureBundle(
+        available_figures=[
+            {
+                "path": "output/fig_q1_result_overview.png",
+                "figure_request_id": "fig_q1_result_overview",
+                "semantic_role": "data_overview",
+                "figure_kind": "result_figure",
+                "linked_result_ids": ["q1_result"],
+                "source_data": ["result_registry.json"],
+                "semantic_verified": True,
+                "chart_language_verified": True,
+                "paper_ready": True,
+            }
+        ],
+        diagnostic_figures=[{"path": "output/workflow_debug.png", "semantic_role": "workflow"}],
+    )
+
+    snapshot = WriterStage.prepare_context(
+        work_dir=tmp_path,
+        result_registry={"verified_results": [{"id": "q1_result"}], "blocked_results": []},
+        figure_bundle=bundle,
+        chart_language="Simplified Chinese",
+    )
+
+    assert snapshot.allowed_images == ["output/fig_q1_result_overview.png"]
+    assert Path(snapshot.path).name == "writer_context.json"
+    assert snapshot.payload["available_figures"][0]["semantic_role"] == "result_overview"
+    assert snapshot.payload["forbidden_image_paths"] == ["output/workflow_debug.png"]
 
 
 def test_visualization_planner_uses_verified_result_contract_views(tmp_path: Path) -> None:

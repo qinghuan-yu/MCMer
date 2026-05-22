@@ -23,7 +23,7 @@ from app.core.agents.writer_agent import WriterAgent
 from app.core.figure_stage import FigureStage
 from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
-from app.core.skills.writer_context import WriterContextSkill
+from app.core.stages.writer_stage import WriterStage
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import CoderStageBudget, WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
 from app.core.prompts import POLISH_STAGE_SYSTEM_PROMPTS, WRITING_STAGE_SYSTEM_PROMPTS
@@ -2348,16 +2348,16 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["paper_ready_images"] = writer_images
         stage_outputs["figure_bundle"] = bundle_snapshot.get("figure_bundle_dict", figure_bundle.to_dict())
         stage_outputs["writer_available_images"] = writer_images
-        writer_context = WriterContextSkill.build_context(
+        writer_context_snapshot = WriterStage.prepare_context(
+            work_dir=work_dir,
             result_registry=result_registry,
             figure_bundle=figure_bundle,
             chart_language=chart_language,
         )
-        writer_context_path = writer_context.save(work_dir)
-        writer_context_payload = writer_context.to_dict()
-        writer_allowed_images = list(writer_context_payload.get("allowed_image_paths") or [])
+        writer_context_payload = writer_context_snapshot.payload
+        writer_allowed_images = writer_context_snapshot.allowed_images
         stage_outputs["writer_context"] = writer_context_payload
-        stage_outputs["writer_context_path"] = str(writer_context_path)
+        stage_outputs["writer_context_path"] = writer_context_snapshot.path
         stage_outputs["writer_available_images"] = writer_allowed_images
         figure_plan_payload = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs.get("figure_plan"), dict) else {}
         workflow_issues = FigureStage.normalize_workflow_issues(
@@ -2870,17 +2870,17 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs[f"paper_ready_images_round_{audit_round}"] = writer_images
             stage_outputs[f"figure_bundle_round_{audit_round}"] = bundle_snapshot.get("figure_bundle_dict", figure_bundle.to_dict())
             stage_outputs[f"writer_available_images_round_{audit_round}"] = writer_images
-            writer_context = WriterContextSkill.build_context(
+            writer_context_snapshot = WriterStage.prepare_context(
+                work_dir=work_dir,
                 result_registry=result_registry,
                 figure_bundle=figure_bundle,
                 chart_language=chart_language,
             )
-            writer_context_path = writer_context.save(work_dir)
-            writer_context_payload = writer_context.to_dict()
-            writer_allowed_images = list(writer_context_payload.get("allowed_image_paths") or [])
+            writer_context_payload = writer_context_snapshot.payload
+            writer_allowed_images = writer_context_snapshot.allowed_images
             stage_outputs[f"writer_context_round_{audit_round}"] = writer_context_payload
             stage_outputs["writer_context"] = writer_context_payload
-            stage_outputs["writer_context_path"] = str(writer_context_path)
+            stage_outputs["writer_context_path"] = writer_context_snapshot.path
             stage_outputs[f"writer_available_images_round_{audit_round}"] = writer_allowed_images
             stage_outputs["writer_available_images"] = writer_allowed_images
 
@@ -2942,16 +2942,16 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["paper_ready_images"] = writer_images
         stage_outputs["figure_bundle"] = figure_bundle.to_dict()
         stage_outputs["writer_available_images"] = writer_images
-        writer_context = WriterContextSkill.build_context(
+        writer_context_snapshot = WriterStage.prepare_context(
+            work_dir=work_dir,
             result_registry=result_registry,
             figure_bundle=figure_bundle,
             chart_language=chart_language,
         )
-        writer_context_path = writer_context.save(work_dir)
-        writer_context_payload = writer_context.to_dict()
-        writer_allowed_images = list(writer_context_payload.get("allowed_image_paths") or [])
+        writer_context_payload = writer_context_snapshot.payload
+        writer_allowed_images = writer_context_snapshot.allowed_images
         stage_outputs["writer_context"] = writer_context_payload
-        stage_outputs["writer_context_path"] = str(writer_context_path)
+        stage_outputs["writer_context_path"] = writer_context_snapshot.path
         stage_outputs["writer_available_images"] = writer_allowed_images
 
         paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
@@ -3191,16 +3191,16 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         stage_outputs["figure_bundle"] = polish_bundle_snapshot.get("figure_bundle_dict", polish_figure_bundle.to_dict())
         stage_outputs["writer_available_images"] = writer_images
         polish_result_registry = build_result_registry(work_dir, recalculation_result.structured_result_files)
-        writer_context = WriterContextSkill.build_context(
+        writer_context_snapshot = WriterStage.prepare_context(
+            work_dir=work_dir,
             result_registry=polish_result_registry,
             figure_bundle=polish_figure_bundle,
             chart_language=chart_language,
         )
-        writer_context_path = writer_context.save(work_dir)
-        writer_context_payload = writer_context.to_dict()
-        writer_allowed_images = list(writer_context_payload.get("allowed_image_paths") or [])
+        writer_context_payload = writer_context_snapshot.payload
+        writer_allowed_images = writer_context_snapshot.allowed_images
         stage_outputs["writer_context"] = writer_context_payload
-        stage_outputs["writer_context_path"] = str(writer_context_path)
+        stage_outputs["writer_context_path"] = writer_context_snapshot.path
         stage_outputs["writer_available_images"] = writer_allowed_images
         wording_prompt = (
             f"# 原始题目\n{question or '未提供'}\n\n"
