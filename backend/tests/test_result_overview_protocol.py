@@ -322,6 +322,44 @@ def test_visualization_planner_limits_overview_fallback_to_one(tmp_path: Path) -
     assert overview[0]["linked_result_ids"] == ["q1", "q2", "q3"]
 
 
+def test_visualization_planner_infers_spectrum_view_from_verified_results(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "spectrum.csv").write_text(
+        "wavenumber,reflectance\n400,0.13\n500,0.42\n600,0.31\n",
+        encoding="utf-8",
+    )
+    registry = {
+        "verified_results": [
+            {
+                "id": "q1_calculated_thickness",
+                "section": "q1",
+                "name": "Calculated thickness",
+                "value": "121.69",
+                "source_data": ["final_results.csv"],
+            }
+        ],
+        "blocked_results": [],
+    }
+
+    plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=registry,
+        chart_language="English",
+        work_dir=str(tmp_path),
+        solve_spec={"requires_result_figures": True},
+    )
+
+    roles = [item.get("semantic_role") for item in plan["figure_requests"]]
+    spectrum = [
+        item for item in plan["figure_requests"]
+        if item.get("semantic_role") == "spectrum_curve"
+    ]
+    assert "spectrum_curve" in roles
+    assert spectrum[0]["required"] is True
+    assert spectrum[0]["linked_result_ids"] == ["q1_calculated_thickness"]
+    assert spectrum[0]["required_data"] == ["data/spectrum.csv"]
+    assert any(item.get("semantic_role") == "result_overview" for item in plan["figure_requests"])
+
+
 def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Path) -> None:
     bundle = FigureBundle(
         available_figures=[

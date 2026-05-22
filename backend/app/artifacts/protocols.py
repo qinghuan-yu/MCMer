@@ -27,8 +27,17 @@ def normalize_figure_role(role: object) -> str:
 def canonical_caption_for_role(role: object, chart_language: str = "Simplified Chinese") -> str:
     """Caption prefix controlled by protocol, not by the writer."""
     normalized = normalize_figure_role(role)
-    if normalized == RESULT_OVERVIEW_ROLE:
-        return "核心结果概览图" if chart_language == "Simplified Chinese" else "Core result overview"
+    zh = chart_language == "Simplified Chinese"
+    captions = {
+        RESULT_OVERVIEW_ROLE: ("核心结果概览图", "Core result overview"),
+        "spectrum_curve": ("反射光谱曲线图", "Reflectance spectrum curve"),
+        "peak_valley_annotation": ("光谱峰谷标注图", "Spectrum peak-valley annotation"),
+        "comparison_bar": ("核心结果对比图", "Core result comparison"),
+        "fitting_curve": ("模型拟合曲线图", "Model fitting curve"),
+        "residual_plot": ("残差诊断图", "Residual diagnostic plot"),
+    }
+    if normalized in captions:
+        return captions[normalized][0 if zh else 1]
     return str(role or "").strip()
 
 

@@ -838,7 +838,28 @@ class RendererSkill:
 
         column_names = [str(name).strip().lower() for name in columns.keys() if str(name).strip()]
         spectral_tokens = ["wavenumber", "reflectance", "spectrum", "intensity", "frequency", "wave"]
-        if column_names and not any(any(token in name for token in spectral_tokens) for name in column_names):
+        request_context = " ".join(
+            str(item or "")
+            for item in [
+                request.get("id"),
+                request.get("purpose"),
+                request.get("chart_intent"),
+                request.get("semantic_role"),
+                request.get("view_type"),
+                " ".join(str(x) for x in request.get("expected_content", []) if str(x).strip())
+                if isinstance(request.get("expected_content"), list)
+                else "",
+            ]
+        ).lower()
+        explicit_spectrum_request = any(token in request_context for token in spectral_tokens) or any(
+            token in request_context for token in ["光谱", "波数", "反射率", "峰", "谷"]
+        )
+        has_numeric_pair = sum(1 for values in columns.values() if isinstance(values, list) and len(values) >= 2) >= 2
+        if (
+            column_names
+            and not any(any(token in name for token in spectral_tokens) for name in column_names)
+            and not (explicit_spectrum_request and has_numeric_pair)
+        ):
             return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "semantic_data_mismatch:spectrum_curve"}])
 
         x_values, y_values, series_sources = FigureStage.deterministic_series_from_data_files(

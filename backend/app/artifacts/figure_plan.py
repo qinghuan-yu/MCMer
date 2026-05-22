@@ -1190,7 +1190,7 @@ class FigurePlanBuilder:
                 text = str(rid).strip()
                 if text:
                     linked_ids.append(text)
-            for src in item.get("required_data", []) or item.get("source_data", []) or []:
+            for src in cls._coerce_text_list(item.get("required_data") or item.get("source_data")):
                 text = str(src).strip()
                 if text:
                     source_data.append(text)
@@ -1208,3 +1208,13 @@ class FigurePlanBuilder:
                 overview.setdefault("depends_on", {})["data_files"] = list(overview["required_data"])
             output.append(overview)
         return output
+
+    @staticmethod
+    def _coerce_text_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, tuple):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return [value.strip()] if value.strip() else []
+        return []

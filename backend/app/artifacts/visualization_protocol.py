@@ -13,6 +13,16 @@ from typing import Any
 from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, canonical_caption_for_role, normalize_figure_role
 
 
+def _coerce_text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    return []
+
+
 @dataclass(frozen=True)
 class VisualizationContract:
     result_id: str
@@ -67,11 +77,7 @@ class VerifiedResult:
             verified=payload.get("verified", True) is not False and str(payload.get("status") or "verified").lower() != "blocked",
             result_type=str(payload.get("result_type") or payload.get("type") or "unknown").strip() or "unknown",
             claim_text=str(payload.get("claim_text") or payload.get("name") or "").strip(),
-            data_artifacts=[
-                str(item).strip()
-                for item in (payload.get("data_artifacts") or payload.get("source_data") or [])
-                if str(item).strip()
-            ],
+            data_artifacts=_coerce_text_list(payload.get("data_artifacts") or payload.get("source_data")),
             columns=payload.get("columns") if isinstance(payload.get("columns"), dict) else {},
             visualization_contract=contract,
         )
