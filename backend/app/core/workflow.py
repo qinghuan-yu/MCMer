@@ -2171,10 +2171,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 art_registry = deterministic_snapshot.artifact_registry
                 artifact_valid_images = deterministic_snapshot.artifact_valid_images
 
-        semantic_bundle = FigureStage.build_bundle_snapshot(art_registry).get("figure_bundle")
-        if semantic_bundle is None:
-            raise ValueError("Failed to build figure bundle snapshot.")
-        missing_required_requests = list(semantic_bundle.missing_requests)
+        semantic_bundle_snapshot = FigureGateStage.from_registry(art_registry)
+        artifact_valid_images = semantic_bundle_snapshot.artifact_valid_images
+        missing_required_requests = list(semantic_bundle_snapshot.figure_bundle.missing_requests)
         image_evidence_paths = _generated_image_evidence_paths(
             work_dir,
             structured_result_files_for_figures,
@@ -2267,10 +2266,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     contract=contract,
                 )
                 artifact_valid_images = art_registry.validate_for_paper()
-                semantic_bundle = FigureStage.build_bundle_snapshot(art_registry).get("figure_bundle")
-                if semantic_bundle is None:
-                    raise ValueError("Failed to build figure bundle snapshot during repair loop.")
-                missing_required_requests = list(semantic_bundle.missing_requests)
+                semantic_bundle_snapshot = FigureGateStage.from_registry(art_registry)
+                artifact_valid_images = semantic_bundle_snapshot.artifact_valid_images
+                missing_required_requests = list(semantic_bundle_snapshot.figure_bundle.missing_requests)
                 if not missing_required_requests:
                     break
 
