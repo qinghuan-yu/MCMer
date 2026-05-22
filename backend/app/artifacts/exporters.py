@@ -95,6 +95,7 @@ class DocumentFinalizer:
             )
         normalized = normalize_math_markdown(paper_content)
         normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
+        normalized = DocumentFinalizer._ensure_required_image_refs(normalized, allowed_images, required_images)
         DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
 
@@ -192,6 +193,7 @@ class DocumentFinalizer:
             )
         normalized = normalize_math_markdown(paper_content)
         normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
+        normalized = DocumentFinalizer._ensure_required_image_refs(normalized, allowed_images, required_images)
         DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
 
@@ -388,6 +390,42 @@ class DocumentFinalizer:
             if normalized:
                 targets.append(normalized)
         return targets
+
+    @staticmethod
+    def _ensure_required_image_refs(
+        markdown: str,
+        allowed_images: list[str] | None,
+        required_images: list[str] | None,
+    ) -> str:
+        """Append missing required image refs before hard validation.
+
+        This keeps the finalizer strict while making all export outlets robust
+        against writer/revision text that accidentally omits required figures.
+        """
+        if not required_images:
+            return markdown
+
+        allowed = {
+            normalize_artifact_path(path)
+            for path in (allowed_images or [])
+            if str(path).strip()
+        }
+        refs = set(DocumentFinalizer._extract_markdown_image_targets(markdown))
+        missing = [
+            normalize_artifact_path(path)
+            for path in required_images
+            if str(path).strip()
+            and normalize_artifact_path(path) not in refs
+            and (not allowed or normalize_artifact_path(path) in allowed)
+        ]
+        if not missing:
+            return markdown
+
+        additions = ["", "## 图表补充"]
+        for path in missing:
+            caption = Path(path).stem.replace("_", " ").strip() or "required figure"
+            additions.append(f"\n![{caption}]({path})")
+        return (markdown or "").rstrip() + "\n\n" + "\n".join(additions).strip() + "\n"
 
     @staticmethod
     def _validate_image_references(

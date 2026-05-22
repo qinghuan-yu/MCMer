@@ -61,6 +61,26 @@ def test_required_figure_references_are_appended_when_writer_misses_them() -> No
     assert "![optical path diagram](output/fig_2_optical_path_diagram.png)" in fixed
 
 
+def test_finalizer_appends_missing_required_image_refs_before_validation() -> None:
+    from app.artifacts.exporters import DocumentFinalizer
+
+    markdown = "# Paper\n\nNo required figures yet.\n"
+    required = [
+        "output/fig_problem_1_algorithm_flowchart.png",
+        "output/fig_problem_2_physical_principle_schematic.png",
+        "output/fig_problem_1_physical_principle_schematic.png",
+    ]
+
+    fixed = DocumentFinalizer._ensure_required_image_refs(
+        markdown,
+        allowed_images=required,
+        required_images=required,
+    )
+
+    for path in required:
+        assert f"]({path})" in fixed
+
+
 def test_chinese_task_rejects_english_figure_artifact(tmp_path: Path) -> None:
     _write_png(tmp_path / "output" / "english.png")
     payload = {
