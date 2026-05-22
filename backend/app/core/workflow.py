@@ -19,9 +19,9 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.figure_stage import FigureStage
-from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.stages.figure_gate_stage import FigureGateStage
+from app.core.stages.figure_recovery_stage import FigureRecoveryStage
 from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.llm.llm import LLM
@@ -308,20 +308,6 @@ def _extract_named_series(
     aliases: list[str],
 ) -> list[float]:
     return FigureStage.extract_named_series(columns, aliases)
-
-
-def _render_required_requests_deterministically(
-    work_dir: str,
-    result_registry: dict[str, object],
-    required_requests: list[dict[str, object]],
-    chart_language: str,
-) -> dict[str, object]:
-    return RendererSkill.render_required_requests(
-        work_dir=work_dir,
-        result_registry=result_registry,
-        required_requests=required_requests,
-        chart_language=chart_language,
-    ).to_dict()
 
 
 def _generate_failure_report(
@@ -2150,45 +2136,39 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
         artifact_valid_images = art_registry.validate_for_paper()
 
-        reevaluated = FigureStage.reevaluate_solve_spec_requests(
-            solve_spec=solve_spec,
-            chart_language=chart_language,
-            work_dir=work_dir,
-        ) if isinstance(solve_spec, dict) else []
-        if reevaluated:
-            stage_outputs["figure_requests"] = reevaluated
-            stage_outputs["figure_request_count"] = len(reevaluated)
-            save_json(solve_spec, solve_spec_path)
+        if isinstance(solve_spec, dict):
             figure_plan_payload = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs.get("figure_plan"), dict) else {}
-            if isinstance(figure_plan_payload, dict):
-                figure_plan_payload["figure_requests"] = reevaluated
-                figure_plan_payload["required_feasible_count"] = solve_spec["required_feasible_count"]
-                figure_plan_payload["blocked_count"] = solve_spec["blocked_count"]
-                FigurePlanBuilder.save(work_dir, figure_plan_payload)
-                stage_outputs["figure_plan"] = figure_plan_payload
+            reevaluation = FigureRecoveryStage.reevaluate_solve_spec_requests(
+                work_dir=work_dir,
+                solve_spec=solve_spec,
+                chart_language=chart_language,
+                solve_spec_path=solve_spec_path,
+                figure_plan_payload=figure_plan_payload if isinstance(figure_plan_payload, dict) else {},
+            )
+            if reevaluation.requests:
+                stage_outputs["figure_requests"] = reevaluation.requests
+                stage_outputs["figure_request_count"] = len(reevaluation.requests)
+                if reevaluation.figure_plan_payload:
+                    stage_outputs["figure_plan"] = reevaluation.figure_plan_payload
 
         required_requests = _required_figure_requests(solve_spec)
 
         # Phase-2: deterministic-first recovery per required request.
         if required_requests:
-            deterministic_report = _render_required_requests_deterministically(
+            deterministic_snapshot = FigureRecoveryStage.render_required_requests(
                 work_dir=work_dir,
                 result_registry=result_registry,
                 required_requests=required_requests,
                 chart_language=chart_language,
+                chart_images=chart_images,
+                structured_result_files=structured_result_files_for_figures,
+                contract=contract,
             )
-            if deterministic_report.get("created_images"):
-                chart_images = list(dict.fromkeys([
-                    *chart_images,
-                    *list(deterministic_report.get("created_images", [])),
-                ]))
-                stage_outputs["deterministic_request_recovery"] = deterministic_report
-                art_registry = ArtifactRegistry.load(
-                    work_dir,
-                    structured_result_files=structured_result_files_for_figures,
-                    contract=contract,
-                )
-                artifact_valid_images = art_registry.validate_for_paper()
+            if deterministic_snapshot.report.get("created_images"):
+                chart_images = deterministic_snapshot.chart_images
+                stage_outputs["deterministic_request_recovery"] = deterministic_snapshot.report
+                art_registry = deterministic_snapshot.artifact_registry
+                artifact_valid_images = deterministic_snapshot.artifact_valid_images
 
         semantic_bundle = FigureStage.build_bundle_snapshot(art_registry).get("figure_bundle")
         if semantic_bundle is None:

@@ -8,6 +8,7 @@ from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
 from app.core.stages.figure_gate_stage import FigureGateStage
+from app.core.stages.figure_recovery_stage import FigureRecoveryStage
 from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.figure_stage import FigureStage
@@ -444,6 +445,39 @@ def test_quality_gate_stage_writes_reports_and_trace(tmp_path: Path) -> None:
     assert (tmp_path / "figure_artifact_gate_report.json").exists()
     assert (tmp_path / "quality_gate_report.json").exists()
     assert trace.stages and trace.stages[-1]["name"] == "figure_gate"
+
+
+def test_figure_recovery_stage_refreshes_registry_after_render(monkeypatch, tmp_path: Path) -> None:
+    class FakeRenderReport:
+        def to_dict(self):
+            return {"created_images": ["output/fig_q1.png"], "missing": []}
+
+    class FakeRegistry:
+        def validate_for_paper(self):
+            return ["output/fig_q1.png"]
+
+    monkeypatch.setattr(
+        "app.core.stages.figure_recovery_stage.RendererSkill.render_required_requests",
+        lambda **kwargs: FakeRenderReport(),
+    )
+    monkeypatch.setattr(
+        "app.core.stages.figure_recovery_stage.ArtifactRegistry.load",
+        lambda *args, **kwargs: FakeRegistry(),
+    )
+
+    snapshot = FigureRecoveryStage.render_required_requests(
+        work_dir=tmp_path,
+        result_registry={"verified_results": [{"id": "q1"}]},
+        required_requests=[{"id": "fig_q1"}],
+        chart_language="English",
+        chart_images=["output/existing.png"],
+        structured_result_files=["solve_structured_results.json"],
+        contract=None,
+    )
+
+    assert snapshot.report["created_images"] == ["output/fig_q1.png"]
+    assert snapshot.chart_images == ["output/existing.png", "output/fig_q1.png"]
+    assert snapshot.artifact_valid_images == ["output/fig_q1.png"]
 
 
 def test_visualization_planner_uses_verified_result_contract_views(tmp_path: Path) -> None:
