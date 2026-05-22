@@ -321,6 +321,75 @@ def _render_required_requests_deterministically(
     )
 
 
+def _markdown_image_targets(markdown: str) -> set[str]:
+    targets: set[str] = set()
+    if not markdown:
+        return targets
+
+    def _strip_title(raw: str) -> str:
+        target = raw.strip()
+        if target.startswith("<"):
+            end = target.find(">")
+            if end != -1:
+                return target[1:end].strip()
+        for sep in (' "', " '"):
+            if sep in target:
+                return target.split(sep, 1)[0].strip()
+        return target
+
+    for match in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", markdown):
+        target = normalize_artifact_path(_strip_title(match.group(1)))
+        if target:
+            targets.add(target)
+    return targets
+
+
+def _ensure_required_figure_references(
+    markdown: str,
+    figure_bundle: object,
+    chart_language: str,
+) -> str:
+    """Deterministically append any required FigureBundle images the writer missed."""
+    bundle = figure_bundle.to_dict() if hasattr(figure_bundle, "to_dict") else figure_bundle
+    if not isinstance(bundle, dict):
+        return markdown
+
+    required = [
+        normalize_artifact_path(path)
+        for path in (bundle.get("required_images", []) if isinstance(bundle.get("required_images"), list) else [])
+        if str(path).strip()
+    ]
+    if not required:
+        return markdown
+
+    refs = _markdown_image_targets(markdown)
+    missing = [path for path in required if path not in refs]
+    if not missing:
+        return markdown
+
+    available = {
+        normalize_artifact_path(item.get("path")): item
+        for item in (bundle.get("available_figures", []) if isinstance(bundle.get("available_figures"), list) else [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    }
+    if chart_language == "English":
+        heading = "## Supplementary Figures"
+        fallback_caption = "Required figure"
+    else:
+        heading = "## 图表补充"
+        fallback_caption = "必要图表"
+
+    additions = ["", heading]
+    for path in missing:
+        item = available.get(path, {})
+        caption = str(item.get("caption") or item.get("semantic_role") or fallback_caption).strip()
+        if not caption:
+            caption = fallback_caption
+        additions.append(f"\n![{caption}]({path})")
+
+    return (markdown or "").rstrip() + "\n\n" + "\n".join(additions).strip() + "\n"
+
+
 def _generate_failure_report(
     question: str,
     result_registry: dict[str, object],
@@ -2427,6 +2496,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             raise ValueError("最终写作阶段返回空内容")
         yield _message("writing", _preview(final_paper), section="论文组织与润色")
 
+        final_paper = _ensure_required_figure_references(final_paper, figure_bundle, chart_language)
+
         audit_report = ""
         audit_report_machine: dict[str, object] = {"status": "SKIP", "blocks": []}
         if workflow_mode == "strict":
@@ -2831,6 +2902,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 sub_title=f"审查后修订第{audit_round}轮",
                 budget=budget,
             )
+            final_paper = _ensure_required_figure_references(final_paper, figure_bundle, chart_language)
             stage_outputs[f"writing_revision_round_{audit_round}"] = final_paper
             yield _message("writing", _preview(final_paper), section=f"审查后修订第{audit_round}轮")
 
@@ -3100,6 +3172,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         )
         if not final_paper.strip():
             raise ValueError("论文措辞修订阶段返回空内容")
+        final_paper = _ensure_required_figure_references(final_paper, polish_figure_bundle, contract.chart_language)
         stage_outputs["wording"] = final_paper
         yield _message("wording", _preview(final_paper), section="论文措辞修订")
 

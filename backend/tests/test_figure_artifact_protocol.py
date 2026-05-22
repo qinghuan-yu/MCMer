@@ -6,7 +6,12 @@ from pathlib import Path
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import _contains_tool_protocol_text
 from app.core.figure_stage import FigureStage
-from app.core.workflow import _generated_image_evidence_paths, _has_generated_image_evidence, _language_verified_generated_images
+from app.core.workflow import (
+    _ensure_required_figure_references,
+    _generated_image_evidence_paths,
+    _has_generated_image_evidence,
+    _language_verified_generated_images,
+)
 from app.utils.common_utils import finalize_markdown_export
 from app.utils.figure_artifacts import is_verified_paper_figure, is_placeholder_filename, contains_placeholder_text
 
@@ -37,6 +42,23 @@ def test_writer_rejects_tool_protocol_text() -> None:
     assert _contains_tool_protocol_text('<||DSML||tool_calls><||DSML||invoke name="run_script">')
     assert not _contains_tool_protocol_text("# 正文\n\n这是普通 Markdown 论文正文。")
     assert not export_guard("# 正文\n\n这是普通 Markdown 论文正文。")
+
+def test_required_figure_references_are_appended_when_writer_misses_them() -> None:
+    markdown = "# Paper\n\nNo image yet.\n"
+    bundle = {
+        "required_images": ["output/fig_2_optical_path_diagram.png"],
+        "available_figures": [
+            {
+                "path": "output/fig_2_optical_path_diagram.png",
+                "caption": "optical path diagram",
+                "semantic_role": "optical_path_diagram",
+            }
+        ],
+    }
+
+    fixed = _ensure_required_figure_references(markdown, bundle, "English")
+
+    assert "![optical path diagram](output/fig_2_optical_path_diagram.png)" in fixed
 
 
 def test_chinese_task_rejects_english_figure_artifact(tmp_path: Path) -> None:
