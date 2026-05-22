@@ -1091,8 +1091,8 @@ def test_save_revision_preserves_existing_res_payload(tmp_path: Path, monkeypatc
     assert "Updated content" in updated.get("paper", "")
 
 
-def test_save_revision_prefers_writer_available_images(tmp_path: Path, monkeypatch) -> None:
-    """Revision whitelist must prioritize writer_available_images over legacy paper_ready_images."""
+def test_save_revision_prefers_writer_context_allowed_images(tmp_path: Path, monkeypatch) -> None:
+    """Revision whitelist must prioritize writer_context over legacy image lists."""
     from app.config.setting import settings
     from app.services.task_service import TaskManager
 
@@ -1109,6 +1109,14 @@ def test_save_revision_prefers_writer_available_images(tmp_path: Path, monkeypat
             "paper_ready_images_round_3": ["output/legacy_round.png"],
             "writer_available_images": ["output/writer_base.png"],
             "writer_available_images_round_2": ["output/writer_round2.png"],
+            "writer_context": {
+                "allowed_image_paths": ["output/context_base.png"],
+                "required_images": ["output/context_base.png"],
+            },
+            "writer_context_round_4": {
+                "allowed_image_paths": ["output/context_round4.png"],
+                "required_images": ["output/context_round4.png"],
+            },
         },
     }
     (task_dir / "res.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -1117,6 +1125,7 @@ def test_save_revision_prefers_writer_available_images(tmp_path: Path, monkeypat
 
     def _fake_finalize(**kwargs):
         captured["allowed_images"] = kwargs.get("allowed_images")
+        captured["required_images"] = kwargs.get("required_images")
         result_payload = kwargs.get("result_payload", {})
         result_payload["paper"] = kwargs.get("paper_content", "")
         (task_dir / "res.json").write_text(json.dumps(result_payload, ensure_ascii=False), encoding="utf-8")
@@ -1127,7 +1136,8 @@ def test_save_revision_prefers_writer_available_images(tmp_path: Path, monkeypat
     manager = TaskManager()
     manager.save_revision(task_id=task_id, paper_content="# Revised\n", version=1)
 
-    assert captured.get("allowed_images") == ["output/writer_round2.png"]
+    assert captured.get("allowed_images") == ["output/context_round4.png"]
+    assert captured.get("required_images") == ["output/context_round4.png"]
 
 
 def test_deterministic_renderer_requires_cjk_font(monkeypatch) -> None:

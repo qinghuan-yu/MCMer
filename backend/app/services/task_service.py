@@ -24,9 +24,10 @@ def _resolve_revision_allowed_images(stages: dict | None) -> list[str] | None:
     """Resolve revision whitelist with writer-facing semantics first.
 
     Priority:
-    1) writer_available_images_round_N / writer_available_images
-    2) figure_bundle_round_N.available_figures / figure_bundle.available_figures
-    3) legacy paper_ready_images_round_N / paper_ready_images (backward compatibility)
+    1) writer_context_round_N.allowed_image_paths / writer_context.allowed_image_paths
+    2) writer_available_images_round_N / writer_available_images
+    3) figure_bundle_round_N.available_figures / figure_bundle.available_figures
+    4) legacy paper_ready_images_round_N / paper_ready_images (backward compatibility)
     """
     if not isinstance(stages, dict):
         return None
@@ -56,6 +57,18 @@ def _resolve_revision_allowed_images(stages: dict | None) -> list[str] | None:
             if path:
                 paths.append(path)
         return paths
+
+    def _writer_context_paths(value: object) -> list[str]:
+        if not isinstance(value, dict):
+            return []
+        return _to_path_list(value.get("allowed_image_paths"))
+
+    writer_context_latest = _writer_context_paths(_pick_latest_prefix("writer_context_round_"))
+    if writer_context_latest:
+        return writer_context_latest
+    writer_context_base = _writer_context_paths(stages.get("writer_context"))
+    if writer_context_base:
+        return writer_context_base
 
     writer_latest = _to_path_list(_pick_latest_prefix("writer_available_images_round_"))
     if writer_latest:
@@ -94,6 +107,18 @@ def _resolve_revision_required_images(stages: dict | None) -> list[str] | None:
         if not isinstance(value, list):
             return []
         return [str(item).strip() for item in value if str(item).strip()]
+
+    writer_context_latest = _pick_latest_prefix("writer_context_round_")
+    if isinstance(writer_context_latest, dict):
+        latest_required = _to_path_list(writer_context_latest.get("required_images"))
+        if latest_required:
+            return latest_required
+
+    writer_context_base = stages.get("writer_context")
+    if isinstance(writer_context_base, dict):
+        base_required = _to_path_list(writer_context_base.get("required_images"))
+        if base_required:
+            return base_required
 
     bundle_latest = _pick_latest_prefix("figure_bundle_round_")
     if isinstance(bundle_latest, dict):

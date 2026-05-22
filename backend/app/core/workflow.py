@@ -2355,8 +2355,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
         writer_context_path = writer_context.save(work_dir)
         writer_context_payload = writer_context.to_dict()
+        writer_allowed_images = list(writer_context_payload.get("allowed_image_paths") or [])
         stage_outputs["writer_context"] = writer_context_payload
         stage_outputs["writer_context_path"] = str(writer_context_path)
+        stage_outputs["writer_available_images"] = writer_allowed_images
         figure_plan_payload = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs.get("figure_plan"), dict) else {}
         workflow_issues = FigureStage.normalize_workflow_issues(
             figure_plan_payload if isinstance(figure_plan_payload, dict) else None
@@ -2501,7 +2503,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         final_paper = await _run_writer_stage(
             writer=writer,
             prompt=final_prompt,
-            available_images=writer_images,
+            available_images=writer_allowed_images,
             sub_title="论文组织与润色",
             budget=budget,
         )
@@ -2875,9 +2877,12 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             writer_context_path = writer_context.save(work_dir)
             writer_context_payload = writer_context.to_dict()
+            writer_allowed_images = list(writer_context_payload.get("allowed_image_paths") or [])
             stage_outputs[f"writer_context_round_{audit_round}"] = writer_context_payload
             stage_outputs["writer_context"] = writer_context_payload
             stage_outputs["writer_context_path"] = str(writer_context_path)
+            stage_outputs[f"writer_available_images_round_{audit_round}"] = writer_allowed_images
+            stage_outputs["writer_available_images"] = writer_allowed_images
 
             gate_passed, gate_reason = _quality_gate_before_writing(
                 result_registry,
@@ -2923,7 +2928,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             final_paper = await _run_writer_stage(
                 writer=writer,
                 prompt=revision_prompt,
-                available_images=writer_images,
+                available_images=writer_allowed_images,
                 sub_title=f"审查后修订第{audit_round}轮",
                 budget=budget,
             )
@@ -2944,15 +2949,17 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         )
         writer_context_path = writer_context.save(work_dir)
         writer_context_payload = writer_context.to_dict()
+        writer_allowed_images = list(writer_context_payload.get("allowed_image_paths") or [])
         stage_outputs["writer_context"] = writer_context_payload
         stage_outputs["writer_context_path"] = str(writer_context_path)
+        stage_outputs["writer_available_images"] = writer_allowed_images
 
         paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
             work_dir=work_dir,
             task_id=task_id,
             task_type="writing",
             paper_content=final_paper,
-            allowed_images=writer_images,
+            allowed_images=writer_allowed_images,
             required_images=figure_bundle.required_images,
             result_payload={
                 "question": question,
@@ -3191,8 +3198,10 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         )
         writer_context_path = writer_context.save(work_dir)
         writer_context_payload = writer_context.to_dict()
+        writer_allowed_images = list(writer_context_payload.get("allowed_image_paths") or [])
         stage_outputs["writer_context"] = writer_context_payload
         stage_outputs["writer_context_path"] = str(writer_context_path)
+        stage_outputs["writer_available_images"] = writer_allowed_images
         wording_prompt = (
             f"# 原始题目\n{question or '未提供'}\n\n"
             f"# 原论文\n{paper_content}\n\n"
@@ -3213,7 +3222,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
         final_paper = await _run_writer_stage(
             writer=writer,
             prompt=wording_prompt,
-            available_images=writer_images,
+            available_images=writer_allowed_images,
             sub_title="论文措辞修订",
             budget=budget,
         )
@@ -3248,7 +3257,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             task_id=task_id,
             task_type="polish",
             paper_content=final_paper,
-            allowed_images=writer_images,
+            allowed_images=writer_allowed_images,
             required_images=polish_figure_bundle.required_images,
             result_payload={
                 "question": question,
