@@ -2,11 +2,13 @@ import json
 from pathlib import Path
 
 from app.artifacts.figure_plan import FigurePlanBuilder
+from app.artifacts.diagnostics import WorkflowTrace
 from app.artifacts.registry import FigureBundle
 from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
 from app.core.stages.figure_gate_stage import FigureGateStage
+from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.figure_stage import FigureStage
 
@@ -413,6 +415,35 @@ def test_figure_gate_stage_builds_bundle_snapshot(monkeypatch) -> None:
     assert snapshot.artifact_valid_images == ["output/fig.png"]
     assert snapshot.figure_bundle is bundle
     assert snapshot.writer_images == ["output/fig.png"]
+
+
+def test_quality_gate_stage_writes_reports_and_trace(tmp_path: Path) -> None:
+    class FakeRegistry:
+        figure_rejections = []
+
+        def rejection_summary(self):
+            return []
+
+    trace = WorkflowTrace()
+    bundle = FigureBundle(available_figures=[{"path": "output/fig.png"}])
+    snapshot = QualityGateStage.evaluate(
+        work_dir=tmp_path,
+        result_registry={"verified_results": [{"id": "q1"}], "blocked_results": []},
+        figure_bundle=bundle,
+        artifact_registry=FakeRegistry(),
+        artifact_valid_images=["output/fig.png"],
+        writer_images=["output/fig.png"],
+        solve_spec={"requires_figures": False},
+        figure_plan_payload={},
+        workflow_mode="standard",
+        expected_figures=False,
+        trace=trace,
+    )
+
+    assert snapshot.passed is True
+    assert (tmp_path / "figure_artifact_gate_report.json").exists()
+    assert (tmp_path / "quality_gate_report.json").exists()
+    assert trace.stages and trace.stages[-1]["name"] == "figure_gate"
 
 
 def test_visualization_planner_uses_verified_result_contract_views(tmp_path: Path) -> None:

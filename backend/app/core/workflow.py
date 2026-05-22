@@ -11,8 +11,6 @@ from app.artifacts.registry import ArtifactRegistry
 from app.artifacts.exporters import DocumentFinalizer, FinalizationValidationError
 from app.artifacts.figure_plan import FigurePlanBuilder
 from app.artifacts.diagnostics import (
-    FigureGateReport,
-    QualityGateReport,
     BudgetReport,
     WorkflowTrace,
 )
@@ -24,6 +22,7 @@ from app.core.figure_stage import FigureStage
 from app.core.skills.renderer import RendererSkill
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.stages.figure_gate_stage import FigureGateStage
+from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import CoderStageBudget, WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
@@ -2360,64 +2359,27 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["writer_context_path"] = writer_context_snapshot.path
         stage_outputs["writer_available_images"] = writer_allowed_images
         figure_plan_payload = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs.get("figure_plan"), dict) else {}
-        workflow_issues = FigureStage.normalize_workflow_issues(
-            figure_plan_payload if isinstance(figure_plan_payload, dict) else None
+        expected_figures = _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", "")))
+        quality_gate_snapshot = QualityGateStage.evaluate(
+            work_dir=work_dir,
+            result_registry=result_registry,
+            figure_bundle=figure_bundle,
+            artifact_registry=art_registry,
+            artifact_valid_images=artifact_valid_images,
+            writer_images=writer_images,
+            solve_spec=solve_spec if isinstance(solve_spec, dict) else {},
+            figure_plan_payload=figure_plan_payload if isinstance(figure_plan_payload, dict) else {},
+            workflow_mode=workflow_mode,
+            expected_figures=expected_figures,
+            trace=trace,
         )
-        workflow_issue_summary = FigureStage.workflow_issue_summary(workflow_issues)
+        gate_passed = quality_gate_snapshot.passed
+        gate_reason = quality_gate_snapshot.reason
+        workflow_issues = quality_gate_snapshot.workflow_issues
+        workflow_issue_summary = quality_gate_snapshot.workflow_issue_summary
         if workflow_issues:
             stage_outputs["workflow_issues"] = workflow_issues
-        stage_outputs["figure_plan_diagnostics"] = {
-            "requires_figures_by_problem": bool((solve_spec or {}).get("requires_figures_by_problem", False)),
-            "required_feasible_count": int((solve_spec or {}).get("required_feasible_count", 0) or 0),
-            "blocked_request_count": len(figure_bundle.blocked_requests),
-            "blocked_requests": figure_bundle.blocked_requests,
-            "recommended_request_count": len(figure_bundle.recommended_requests),
-            "workflow_issue_count": int(workflow_issue_summary.get("count", 0) or 0),
-            "workflow_issue_summary": workflow_issue_summary,
-        }
-
-        # --- Quality gate using ArtifactRegistry ---
-        expected_figures = _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", "")))
-        requires_result_figures = bool((solve_spec or {}).get("requires_result_figures"))
-        requires_explanatory_figures = bool((solve_spec or {}).get("requires_explanatory_figures"))
-        gate_passed, gate_reason = _quality_gate_before_writing(
-            result_registry,
-            expected_figures,
-            figure_bundle.required_requests,
-            figure_bundle.satisfied_requests,
-            figure_bundle.missing_requests,
-            workflow_mode,
-            requires_result_figures=requires_result_figures,
-            requires_explanatory_figures=requires_explanatory_figures,
-            result_figure_count=len(figure_bundle.result_figures),
-            explanatory_figure_count=len(figure_bundle.explanatory_figures),
-            requires_figures_by_problem=bool((solve_spec or {}).get("requires_figures_by_problem", expected_figures)),
-            blocked_requests=figure_bundle.blocked_requests,
-        )
-
-        # Generate structured gate reports from ArtifactRegistry
-        figure_gate = FigureGateReport.from_rejections(
-            artifact_valid_images,
-            art_registry.rejection_summary(),
-        )
-        figure_gate.save(work_dir)
-        trace.add_stage("figure_gate", "passed" if figure_gate.passed else "failed",
-                        figure_gate.reason, 0,
-                        {"paper_ready_count": len(writer_images),
-                         "rejected_count": len(art_registry.figure_rejections)})
-
-        quality_gate = QualityGateReport.from_check(
-            verified_count=len(result_registry.get("verified_results", []) or []),
-            blocked_count=len(result_registry.get("blocked_results", []) or []),
-            expected_figures=expected_figures,
-            paper_ready_count=len(writer_images),
-            passed=gate_passed,
-            reason=gate_reason,
-            required_request_count=len(figure_bundle.required_requests),
-            satisfied_request_count=len(figure_bundle.satisfied_requests),
-            missing_requests=figure_bundle.missing_requests,
-        )
-        quality_gate.save(work_dir)
+        stage_outputs["figure_plan_diagnostics"] = quality_gate_snapshot.figure_plan_diagnostics
 
         if not gate_passed:
             logger.warning("Quality gate failed: {}", gate_reason)
