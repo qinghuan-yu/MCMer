@@ -8,7 +8,7 @@ from typing import AsyncGenerator
 
 from app.artifacts.contracts import ProblemContract
 from app.artifacts.registry import ArtifactRegistry
-from app.artifacts.exporters import DocumentFinalizer, FinalizationValidationError
+from app.artifacts.exporters import FinalizationValidationError
 from app.artifacts.figure_plan import FigurePlanBuilder
 from app.artifacts.diagnostics import (
     BudgetReport,
@@ -22,6 +22,7 @@ from app.core.figure_stage import FigureStage
 from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.stages.figure_gate_stage import FigureGateStage
 from app.core.stages.figure_recovery_stage import FigureRecoveryStage
+from app.core.stages.finalizer_stage import FinalizerStage
 from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.llm.llm import LLM
@@ -2363,7 +2364,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 
         if not gate_passed:
             logger.warning("Quality gate failed: {}", gate_reason)
-            md_path, docx_fail_path = DocumentFinalizer.export_failure_report(
+            failure_output = FinalizerStage.export_quality_failure(
                 work_dir=work_dir,
                 question=question,
                 result_registry=result_registry,
@@ -2403,8 +2404,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 error_code=failure_code,
                 error_type=failure_type,
                 error_details=failure_details,
-                paper_path=md_path,
-                docx_path=docx_fail_path if docx_fail_path and os.path.exists(docx_fail_path) else "",
+                paper_path=failure_output.paper_path,
+                docx_path=failure_output.docx_path if failure_output.docx_path and os.path.exists(failure_output.docx_path) else "",
                 notebook_path=os.path.join(work_dir, "notebook.ipynb"),
             )
             yield _progress(task_id, "done", 1.0, "质量门禁未通过，已输出失败报告", status="failed")
@@ -2891,7 +2892,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["writer_context_path"] = writer_context_snapshot.path
         stage_outputs["writer_available_images"] = writer_allowed_images
 
-        paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
+        finalized_output = await FinalizerStage.finalize_success(
             work_dir=work_dir,
             task_id=task_id,
             task_type="writing",
@@ -2906,6 +2907,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             },
             code_interpreter=code_interpreter,
         )
+        paper_path = finalized_output.paper_path
+        docx_path = finalized_output.docx_path
+        notebook_path = finalized_output.notebook_path
 
         # Save observability reports
         trace.save(work_dir)
@@ -3186,7 +3190,7 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             )
             yield _message("final_audit", _preview(str(stage_outputs["final_polish_audit"])), section="润色终审")
 
-        paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
+        finalized_output = await FinalizerStage.finalize_success(
             work_dir=work_dir,
             task_id=task_id,
             task_type="polish",
@@ -3202,6 +3206,9 @@ async def _polish_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, Non
             },
             code_interpreter=code_interpreter,
         )
+        paper_path = finalized_output.paper_path
+        docx_path = finalized_output.docx_path
+        notebook_path = finalized_output.notebook_path
 
         task_manager.update_status(task_id, TaskStatus.COMPLETED)
         yield _build_completed_task_result(

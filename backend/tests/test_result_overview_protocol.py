@@ -9,6 +9,7 @@ from app.core.skills.visualization_planner import VisualizationPlannerSkill
 from app.core.skills.writer_context import WriterContextSkill
 from app.core.stages.figure_gate_stage import FigureGateStage
 from app.core.stages.figure_recovery_stage import FigureRecoveryStage
+from app.core.stages.finalizer_stage import FinalizerStage
 from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.figure_stage import FigureStage
@@ -478,6 +479,28 @@ def test_figure_recovery_stage_refreshes_registry_after_render(monkeypatch, tmp_
     assert snapshot.report["created_images"] == ["output/fig_q1.png"]
     assert snapshot.chart_images == ["output/existing.png", "output/fig_q1.png"]
     assert snapshot.artifact_valid_images == ["output/fig_q1.png"]
+
+
+def test_finalizer_stage_exports_quality_failure(monkeypatch, tmp_path: Path) -> None:
+    def fake_export_failure_report(**kwargs):
+        assert kwargs["gate_reason"] == "blocked"
+        return str(tmp_path / "failure.md"), str(tmp_path / "failure.docx")
+
+    monkeypatch.setattr(
+        "app.core.stages.finalizer_stage.DocumentFinalizer.export_failure_report",
+        fake_export_failure_report,
+    )
+
+    output = FinalizerStage.export_quality_failure(
+        work_dir=tmp_path,
+        question="q",
+        result_registry={},
+        gate_reason="blocked",
+        stage_outputs={},
+    )
+
+    assert output.paper_path.endswith("failure.md")
+    assert output.docx_path.endswith("failure.docx")
 
 
 def test_visualization_planner_uses_verified_result_contract_views(tmp_path: Path) -> None:
