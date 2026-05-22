@@ -18,6 +18,7 @@ from app.artifacts.renderers import (
     render_data_overview,
     render_distance_time_curve,
     render_fitting_curve,
+    render_peak_valley_annotation,
     render_geometry_schematic,
     render_residual_plot,
     render_spectrum_curve,
@@ -78,6 +79,7 @@ class RendererSkill:
                 "fitting_curve",
                 "residual_plot",
                 "spectrum_curve",
+                "peak_valley_annotation",
                 "trajectory_shielding",
                 "distance_time_curve",
                 "geometry_schematic",
@@ -121,6 +123,13 @@ class RendererSkill:
                 )
             elif role == "spectrum_curve":
                 rendered = RendererSkill._render_spectrum_curve(
+                    work_dir=work_dir,
+                    result_registry=result_registry,
+                    request=request,
+                    chart_language=chart_language,
+                )
+            elif role == "peak_valley_annotation":
+                rendered = RendererSkill._render_peak_valley_annotation(
                     work_dir=work_dir,
                     result_registry=result_registry,
                     request=request,
@@ -529,28 +538,14 @@ class RendererSkill:
         request: dict[str, Any],
         chart_language: str,
     ) -> RendererResult:
-        from app.core.figure_stage import FigureStage
-
-        req_id, required_data_list, columns, matched_sources = RendererSkill._load_request_columns(work_dir, request)
-        if not req_id:
-            return RendererResult(missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}])
-
-        column_names = [str(name).strip().lower() for name in columns.keys() if str(name).strip()]
-        spectral_tokens = ["wavenumber", "reflectance", "spectrum", "intensity", "frequency", "wave"]
-        if column_names and not any(any(token in name for token in spectral_tokens) for name in column_names):
-            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "semantic_data_mismatch:spectrum_curve"}])
-
-        x_values, y_values, series_sources = FigureStage.deterministic_series_from_data_files(
+        loaded = RendererSkill._load_spectral_series(
             work_dir,
-            required_data_list,
+            result_registry,
+            request,
         )
-        if len(x_values) < 2:
-            x_values, y_values, series_sources = FigureStage.deterministic_series_from_registry(
-                result_registry,
-                required_data_list,
-            )
-        if len(x_values) < 2:
-            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "insufficient_data_series"}])
+        if isinstance(loaded, RendererResult):
+            return loaded
+        req_id, required_data_list, columns, matched_sources, x_values, y_values, series_sources = loaded
 
         linked_ids = RendererSkill._linked_result_ids(request, result_registry)
         if not linked_ids:
@@ -569,6 +564,42 @@ class RendererSkill:
             linked_result_ids=linked_ids[:12],
             source_data=required_data_list or series_sources or matched_sources or ["result_registry.json"],
             source_columns=list(columns.keys()),
+            work_dir=work_dir,
+        )
+        return RendererSkill._artifact_result(req_id, artifact)
+
+    @staticmethod
+    def _render_peak_valley_annotation(
+        work_dir: str,
+        result_registry: dict[str, Any],
+        request: dict[str, Any],
+        chart_language: str,
+    ) -> RendererResult:
+        loaded = RendererSkill._load_spectral_series(
+            work_dir,
+            result_registry,
+            request,
+        )
+        if isinstance(loaded, RendererResult):
+            return loaded
+        req_id, required_data_list, _columns, matched_sources, x_values, y_values, series_sources = loaded
+
+        linked_ids = RendererSkill._linked_result_ids(request, result_registry)
+        if not linked_ids:
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "missing_verified_result_binding"}])
+
+        artifact = render_peak_valley_annotation(
+            x_values=x_values,
+            y_values=y_values,
+            title=RendererSkill._request_title(request, "peak_valley_annotation", chart_language),
+            output_path=str(Path(work_dir) / "output" / f"{req_id}.png"),
+            chart_language=chart_language,
+            figure_request_id=req_id,
+            subproblem_id=RendererSkill._subproblem_id(request),
+            semantic_role="peak_valley_annotation",
+            depicts=request.get("expected_content") if isinstance(request.get("expected_content"), list) else ["peak_valley_annotation"],
+            linked_result_ids=linked_ids[:12],
+            source_data=required_data_list or series_sources or matched_sources or ["result_registry.json"],
             work_dir=work_dir,
         )
         return RendererSkill._artifact_result(req_id, artifact)
@@ -792,6 +823,37 @@ class RendererSkill:
             return [str(item).strip() for item in value if str(item).strip()]
 
         return _clean_list("model_objects"), _clean_list("formulas"), _clean_list("source_problem_refs")
+
+    @staticmethod
+    def _load_spectral_series(
+        work_dir: str,
+        result_registry: dict[str, Any],
+        request: dict[str, Any],
+    ) -> tuple[str, list[str], dict[str, list[float]], list[str], list[float], list[float], list[str]] | RendererResult:
+        from app.core.figure_stage import FigureStage
+
+        req_id, required_data_list, columns, matched_sources = RendererSkill._load_request_columns(work_dir, request)
+        if not req_id:
+            return RendererResult(missing=[{"figure_request_id": "", "required": True, "satisfied": False, "reason": "missing_request_id"}])
+
+        column_names = [str(name).strip().lower() for name in columns.keys() if str(name).strip()]
+        spectral_tokens = ["wavenumber", "reflectance", "spectrum", "intensity", "frequency", "wave"]
+        if column_names and not any(any(token in name for token in spectral_tokens) for name in column_names):
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "semantic_data_mismatch:spectrum_curve"}])
+
+        x_values, y_values, series_sources = FigureStage.deterministic_series_from_data_files(
+            work_dir,
+            required_data_list,
+        )
+        if len(x_values) < 2:
+            x_values, y_values, series_sources = FigureStage.deterministic_series_from_registry(
+                result_registry,
+                required_data_list,
+            )
+        if len(x_values) < 2:
+            return RendererResult(missing=[{"figure_request_id": req_id, "required": True, "satisfied": False, "reason": "insufficient_data_series"}])
+
+        return req_id, required_data_list, columns, matched_sources, x_values, y_values, series_sources
 
     @staticmethod
     def _load_request_columns(work_dir: str, request: dict[str, Any]) -> tuple[str, list[str], dict[str, list[float]], list[str]]:

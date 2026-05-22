@@ -608,6 +608,41 @@ def test_renderer_skill_renders_spectrum_curve(tmp_path: Path) -> None:
     assert result.missing == []
 
 
+def test_renderer_skill_renders_peak_valley_annotation(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "spectrum.csv").write_text(
+        "wavenumber,reflectance\n1000,0.20\n1100,0.30\n1200,0.18\n",
+        encoding="utf-8",
+    )
+
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={
+            "verified_results": [
+                {"id": "q1_peak_valley", "value": 0.30, "source_data": ["data/spectrum.csv"]},
+            ]
+        },
+        required_requests=[
+            {
+                "id": "fig_q1_peak_valley_annotation",
+                "subproblem_id": "q1",
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "peak_valley_annotation",
+                "required_data": ["data/spectrum.csv"],
+                "linked_result_ids": ["q1_peak_valley"],
+                "view_type": "peak_valley_annotation",
+                "expected_content": ["Peak valley annotation"],
+            }
+        ],
+        chart_language="English",
+    )
+
+    assert result.created_images == ["output/fig_q1_peak_valley_annotation.png"]
+    assert result.satisfied == [{"figure_request_id": "fig_q1_peak_valley_annotation", "required": True, "satisfied": True}]
+    assert result.missing == []
+
+
 def test_renderer_skill_renders_registry_series_curves(tmp_path: Path) -> None:
     result = RendererSkill.render_required_requests(
         work_dir=str(tmp_path),
