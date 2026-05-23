@@ -13,6 +13,7 @@ from app.core.stages.finalizer_stage import FinalizerStage
 from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.figure_stage import FigureStage
+from app.artifacts.visualization_schema import supported_views_for_result_type
 
 
 def test_result_overview_fallback_is_required_and_canonical(tmp_path: Path) -> None:
@@ -607,6 +608,44 @@ def test_visualization_planner_uses_verified_result_contract_views(tmp_path: Pat
     overview = [item for item in plan["figure_requests"] if item.get("semantic_role") == "result_overview"][0]
     assert overview["linked_result_ids"] == ["q1_fit"]
     assert plan["planner"] == "VisualizationPlannerSkill"
+    assert plan["source"] == "result_registry"
+
+
+def test_visualization_schema_normalizes_long_term_regression_view_names() -> None:
+    views = supported_views_for_result_type("regression_model")
+
+    assert "fitting_curve" in views
+    assert "residual_plot" in views
+    assert "result_overview" in views
+    assert "scatter_with_fit" not in views
+
+
+def test_visualization_planner_accepts_scatter_with_fit_contract_alias(tmp_path: Path) -> None:
+    registry = {
+        "verified_results": [
+            {
+                "id": "q1_fit",
+                "section": "q1",
+                "result_type": "regression_model",
+                "visualization_contract": {
+                    "result_id": "q1_fit",
+                    "required_views": ["scatter_with_fit"],
+                    "fallback_views": ["result_overview"],
+                },
+            }
+        ],
+        "blocked_results": [],
+    }
+
+    plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=registry,
+        chart_language="English",
+        work_dir=str(tmp_path),
+        solve_spec={"requires_result_figures": True},
+    )
+
+    roles = [item.get("semantic_role") for item in plan["figure_requests"]]
+    assert roles == ["fitting_curve", "result_overview"]
     assert plan["source"] == "result_registry"
 
 

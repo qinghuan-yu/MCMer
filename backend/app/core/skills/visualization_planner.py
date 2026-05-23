@@ -16,32 +16,19 @@ from app.artifacts.visualization_protocol import (
     normalize_verified_results,
     result_overview_request,
 )
+from app.artifacts.visualization_schema import (
+    RESULT_TYPE_VIEW_MAP as SCHEMA_RESULT_TYPE_VIEW_MAP,
+    SUPPORTED_RENDERED_VIEWS as SCHEMA_SUPPORTED_RENDERED_VIEWS,
+    normalize_view_type,
+    supported_views_for_result_type,
+)
 
 
 class VisualizationPlannerSkill:
     """Build fallback-safe figure requests from verified results."""
 
-    RESULT_TYPE_VIEW_MAP: dict[str, list[str]] = {
-        "regression": ["fitting_curve", "residual_plot", RESULT_OVERVIEW_ROLE],
-        "regression_model": ["fitting_curve", "residual_plot", RESULT_OVERVIEW_ROLE],
-        "classification": ["confusion_matrix", "feature_importance", RESULT_OVERVIEW_ROLE],
-        "classification_model": ["confusion_matrix", "feature_importance", RESULT_OVERVIEW_ROLE],
-        "optimization": ["convergence_curve", "sensitivity_curve", RESULT_OVERVIEW_ROLE],
-        "optimization_result": ["convergence_curve", "sensitivity_curve", RESULT_OVERVIEW_ROLE],
-        "grouped_decision_result": ["group_bar", "risk_curve", RESULT_OVERVIEW_ROLE],
-        "descriptive_statistics": ["histogram", "boxplot", RESULT_OVERVIEW_ROLE],
-        "statistical_result": ["histogram", "boxplot", RESULT_OVERVIEW_ROLE],
-        "unknown": [RESULT_OVERVIEW_ROLE],
-    }
-
-    SUPPORTED_RENDERED_VIEWS = {
-        RESULT_OVERVIEW_ROLE,
-        "comparison_bar",
-        "fitting_curve",
-        "peak_valley_annotation",
-        "residual_plot",
-        "spectrum_curve",
-    }
+    RESULT_TYPE_VIEW_MAP = SCHEMA_RESULT_TYPE_VIEW_MAP
+    SUPPORTED_RENDERED_VIEWS = SCHEMA_SUPPORTED_RENDERED_VIEWS
 
     @staticmethod
     def result_overview_requests(
@@ -153,10 +140,7 @@ class VisualizationPlannerSkill:
             candidate_views = list(contract.candidate_views) if contract else []
             fallback_views = list(contract.fallback_views) if contract else [RESULT_OVERVIEW_ROLE]
             if not required_views:
-                required_views = [
-                    view for view in cls.RESULT_TYPE_VIEW_MAP.get(result.result_type, cls.RESULT_TYPE_VIEW_MAP["unknown"])
-                    if view in cls.SUPPORTED_RENDERED_VIEWS
-                ]
+                required_views = supported_views_for_result_type(result.result_type)
             inferred_views = cls._infer_views_for_result(result, source_data)
             if required_views == [RESULT_OVERVIEW_ROLE] and inferred_views:
                 required_views = inferred_views
@@ -167,7 +151,7 @@ class VisualizationPlannerSkill:
             views = [*required_views, *candidate_views, *fallback_views]
             normalized_views = []
             for view in views:
-                role = normalize_figure_role(view)
+                role = normalize_view_type(view)
                 if role not in cls.SUPPORTED_RENDERED_VIEWS:
                     continue
                 if role not in normalized_views:

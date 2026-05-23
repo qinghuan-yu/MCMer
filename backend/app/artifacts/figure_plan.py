@@ -1190,7 +1190,7 @@ class FigurePlanBuilder:
                 text = str(rid).strip()
                 if text:
                     linked_ids.append(text)
-            for src in cls._coerce_text_list(item.get("required_data") or item.get("source_data")):
+            for src in FigurePlanBuilder._coerce_text_list(item.get("required_data") or item.get("source_data")):
                 text = str(src).strip()
                 if text:
                     source_data.append(text)
