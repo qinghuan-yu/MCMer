@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.artifacts.figure_artifact_schema import FigureArtifact
 from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, canonical_caption_for_role, normalize_figure_role
 from app.artifacts.registry import FigureBundle
 
@@ -33,36 +34,29 @@ class WriterFigure:
 
     @classmethod
     def from_bundle_item(cls, item: dict[str, Any], chart_language: str) -> "WriterFigure":
-        semantic_role = normalize_figure_role(item.get("semantic_role") or item.get("figure_role") or "")
+        artifact = FigureArtifact.from_legacy(item)
+        semantic_role = normalize_figure_role(artifact.semantic_role or item.get("figure_role") or "")
         if semantic_role == RESULT_OVERVIEW_ROLE:
             caption = canonical_caption_for_role(semantic_role, chart_language)
         else:
             caption = (
-                str(item.get("canonical_caption") or "").strip()
-                or str(item.get("caption") or "").strip()
+                artifact.canonical_caption
+                or artifact.caption
                 or canonical_caption_for_role(semantic_role, chart_language)
             )
         return cls(
-            path=str(item.get("path") or "").strip(),
+            path=artifact.path,
             caption=caption,
             canonical_caption=caption,
-            figure_request_id=str(item.get("figure_request_id") or "").strip(),
+            figure_request_id=artifact.figure_request_id,
             semantic_role=semantic_role,
-            figure_kind=str(item.get("figure_kind") or "result_figure").strip() or "result_figure",
-            view_type=str(item.get("view_type") or "").strip(),
-            linked_result_ids=[
-                str(value).strip()
-                for value in (item.get("linked_result_ids") or [])
-                if str(value).strip()
-            ],
-            source_data=[
-                str(value).strip()
-                for value in (item.get("source_data") or item.get("data_bindings") or [])
-                if str(value).strip()
-            ],
-            semantic_verified=bool(item.get("semantic_verified", True)),
-            chart_language_verified=bool(item.get("chart_language_verified", True)),
-            paper_ready=bool(item.get("paper_ready", True)),
+            figure_kind=artifact.figure_kind or "result_figure",
+            view_type=artifact.view_type,
+            linked_result_ids=artifact.linked_result_ids,
+            source_data=artifact.source_data,
+            semantic_verified=artifact.semantic_verified,
+            chart_language_verified=artifact.chart_language_verified,
+            paper_ready=artifact.paper_ready,
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from app.artifacts.contracts import ProblemContract
+from app.artifacts.figure_artifact_schema import FigureArtifact
 from app.artifacts.protocols import canonical_caption_for_role, normalize_figure_role
 from app.utils.figure_artifacts import (
     FIGURE_MANIFEST,
@@ -345,28 +346,14 @@ class ArtifactRegistry:
                 or canonical_caption_for_role(semantic_role, self.contract.chart_language if self.contract else "Simplified Chinese")
             )
 
-            item = {
-                "path": path,
-                "caption": canonical_caption or str(artifact.get("caption") or artifact.get("figure_caption") or semantic_role or path),
-                "canonical_caption": canonical_caption,
-                "figure_request_id": figure_request_id,
-                "semantic_role": semantic_role,
-                "semantic_verified": semantic_verified,
-                "figure_kind": effective_kind,
-                "view_type": str(artifact.get("view_type") or req_payload.get("view_type") or "").strip(),
-                "linked_result_ids": [
-                    str(value).strip()
-                    for value in (artifact.get("linked_result_ids") or req_payload.get("linked_result_ids") or [])
-                    if str(value).strip()
-                ],
-                "source_data": [
-                    str(value).strip()
-                    for value in (artifact.get("source_data") or artifact.get("data_bindings") or req_payload.get("required_data") or [])
-                    if str(value).strip()
-                ],
-                "chart_language_verified": bool(artifact.get("chart_language_verified", True)),
-                "paper_ready": bool(artifact.get("paper_ready", True)),
-            }
+            item = FigureArtifact.from_gate_inputs(
+                path=path,
+                artifact=artifact,
+                request=req_payload,
+                semantic_role=semantic_role,
+                figure_kind=effective_kind,
+                canonical_caption=canonical_caption,
+            ).to_dict()
 
             is_diagnostic = (
                 figure_role == "verified_result_summary"

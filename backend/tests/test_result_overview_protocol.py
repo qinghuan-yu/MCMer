@@ -428,6 +428,41 @@ def test_writer_context_skill_serializes_canonical_result_overview(tmp_path: Pat
     assert "comparison_bar" in payload["rules"]["do_not_relabel_result_overview"]
 
 
+def test_writer_context_normalizes_legacy_figure_artifact_bindings(tmp_path: Path) -> None:
+    bundle = FigureBundle(
+        available_figures=[
+            {
+                "path": "output/fig_q1_fit.png",
+                "caption": "Fit",
+                "canonical_caption": "Model fitting curve",
+                "figure_request_id": "fig_q1_fit",
+                "semantic_role": "fitting_curve",
+                "figure_kind": "result_figure",
+                "view_type": "fitting_curve",
+                "linked_result_ids": ["q1_fit"],
+                "data_bindings": ["data/fit.csv"],
+                "semantic_verified": True,
+                "chart_language_verified": True,
+                "paper_ready": True,
+            }
+        ],
+        result_figures=[],
+        diagnostic_figures=[],
+    )
+
+    context = WriterContextSkill.build_context(
+        result_registry={"verified_results": [{"id": "q1_fit"}], "blocked_results": []},
+        figure_bundle=bundle,
+        chart_language="English",
+    )
+    payload = context.to_dict()
+
+    figure = payload["available_figures"][0]
+    assert figure["caption"] == "Model fitting curve"
+    assert figure["source_data"] == ["data/fit.csv"]
+    assert figure["linked_result_ids"] == ["q1_fit"]
+
+
 def test_writer_stage_prepares_context_as_only_image_whitelist(tmp_path: Path) -> None:
     bundle = FigureBundle(
         available_figures=[
