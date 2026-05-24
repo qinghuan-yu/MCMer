@@ -14,6 +14,12 @@ from app.artifacts.diagnostics import (
     BudgetReport,
     WorkflowTrace,
 )
+from app.artifacts.artifact_evidence import (
+    generated_file_path,
+    generated_image_evidence_paths,
+    has_generated_image_evidence,
+    language_verified_generated_images,
+)
 from app.config.setting import settings
 from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
@@ -50,10 +56,7 @@ from app.utils.common_utils import (
     validate_paper_audit_report,
 )
 from app.utils.figure_artifacts import (
-    FIGURE_MANIFEST,
-    figure_artifact_path,
     is_image_path,
-    is_verified_paper_figure,
     load_figure_manifest,
     normalize_artifact_path,
     save_figure_manifest,
@@ -148,7 +151,7 @@ def _unique_structured_result_files(*file_groups: list[str]) -> list[str]:
 
 
 def _generated_file_path(item: object) -> str:
-    return figure_artifact_path(item)
+    return generated_file_path(item)
 
 
 def _is_image_path(path: str) -> bool:
@@ -211,8 +214,39 @@ def _ensure_figure_requests_in_solve_spec(
     return FigureStage.ensure_figure_requests_in_solve_spec(solve_spec, chart_language)
 
 
+def _compat_figure_requests_from_solve_spec(
+    solve_spec: dict[str, object],
+    chart_language: str,
+) -> list[dict[str, object]]:
+    """Build legacy figure requests on a copy so solve_spec remains artifact-light."""
+    if not isinstance(solve_spec, dict):
+        return []
+    compat_spec = dict(solve_spec)
+    return FigureStage.ensure_figure_requests_in_solve_spec(compat_spec, chart_language)
+
+
 def _required_figure_requests(solve_spec: dict[str, object]) -> list[dict[str, object]]:
     return FigureStage.required_figure_requests(solve_spec)
+
+
+def _required_figure_requests_from_plan(
+    figure_plan: dict[str, object] | None,
+    solve_spec: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """Return required requests from figure_plan, falling back to legacy solve_spec."""
+    requests = figure_plan.get("figure_requests", []) if isinstance(figure_plan, dict) else []
+    if isinstance(requests, list):
+        planned = [
+            req
+            for req in requests
+            if isinstance(req, dict)
+            and bool(req.get("required", True))
+            and str(req.get("status") or "").strip().lower() != "blocked"
+            and req.get("feasible", True) is not False
+        ]
+        if planned:
+            return planned
+    return FigureStage.required_figure_requests(solve_spec or {})
 
 
 def _figure_requests_for_subproblem(
@@ -220,6 +254,44 @@ def _figure_requests_for_subproblem(
     subproblem_id: str,
 ) -> list[dict[str, object]]:
     return FigureStage.figure_requests_for_subproblem(solve_spec, subproblem_id)
+
+
+def _figure_requests_for_subproblem_from_plan(
+    figure_plan: dict[str, object] | None,
+    subproblem_id: str,
+    solve_spec: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """Return scoped requests from figure_plan, falling back to legacy solve_spec."""
+    requests = figure_plan.get("figure_requests", []) if isinstance(figure_plan, dict) else []
+    sid = str(subproblem_id or "").strip()
+    scoped: list[dict[str, object]] = []
+    if sid and isinstance(requests, list):
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("subproblem_id") or item.get("problem_section") or "").strip() == sid:
+                scoped.append(item)
+        if scoped:
+            return scoped
+    return FigureStage.figure_requests_for_subproblem(solve_spec or {}, sid)
+
+
+def _figure_plan_expects_figures(
+    figure_plan: dict[str, object] | None,
+    fallback: bool = False,
+) -> bool:
+    if not isinstance(figure_plan, dict):
+        return fallback
+    for key in (
+        "requires_figures",
+        "requires_result_figures",
+        "requires_explanatory_figures",
+        "requires_figures_by_problem",
+    ):
+        if bool(figure_plan.get(key)):
+            return True
+    requests = figure_plan.get("figure_requests", [])
+    return bool(isinstance(requests, list) and any(isinstance(item, dict) for item in requests))
 
 
 def _figure_data_protocol_contract(requests: list[dict[str, object]]) -> str:
@@ -403,42 +475,12 @@ def _language_verified_generated_images(
         may pass ``None`` to skip semantic binding — those guards run before
         the registry exists and are not the final export gate.
     """
-    allowed: list[str] = []
-    seen: set[str] = set()
-
-    # Build the set of verified result IDs for semantic binding validation.
-    verified_ids: set[str] | None = None
-    if result_registry is not None:
-        verified_ids = set()
-        for entry in result_registry.get("verified_results", []) or []:
-            if isinstance(entry, dict) and entry.get("id"):
-                verified_ids.add(str(entry["id"]))
-
-    def maybe_add(item: object, source: str) -> None:
-        path = _generated_file_path(item)
-        if not path or path in seen:
-            return
-        if not is_verified_paper_figure(item, document_language, work_dir, verified_ids):
-            if path and _is_image_path(path):
-                logger.warning("Excluded image from paper FigureArtifact gate ({}): {}", source, item)
-            return
-        allowed.append(path)
-        seen.add(path)
-
-    for manifest_item in load_figure_manifest(work_dir):
-        maybe_add(manifest_item, FIGURE_MANIFEST)
-
-    root = Path(work_dir)
-    for filename in structured_result_files:
-        payload = load_json(str(root / filename))
-        if not isinstance(payload, dict):
-            continue
-        generated_files = payload.get("generated_files", [])
-        if not isinstance(generated_files, list):
-            continue
-        for item in generated_files:
-            maybe_add(item, filename)
-    return allowed
+    return language_verified_generated_images(
+        work_dir,
+        structured_result_files,
+        document_language,
+        result_registry,
+    )
 
 
 def _coerce_numeric_value(value: object) -> float | None:
@@ -617,7 +659,7 @@ def _has_generated_image_evidence(
     structured_result_files: list[str],
     created_images: list[str] | None = None,
 ) -> bool:
-    return bool(_generated_image_evidence_paths(work_dir, structured_result_files, created_images))
+    return has_generated_image_evidence(work_dir, structured_result_files, created_images)
 
 
 def _generated_image_evidence_paths(
@@ -625,42 +667,7 @@ def _generated_image_evidence_paths(
     structured_result_files: list[str],
     created_images: list[str] | None = None,
 ) -> list[str]:
-    evidence: list[str] = []
-    seen: set[str] = set()
-
-    def add(path: str) -> None:
-        normalized = normalize_artifact_path(path)
-        if not normalized or normalized in seen or not _is_image_path(normalized):
-            return
-        evidence.append(normalized)
-        seen.add(normalized)
-
-    for path in created_images or []:
-        add(path)
-    if load_figure_manifest(work_dir):
-        for item in load_figure_manifest(work_dir):
-            add(_generated_file_path(item))
-    root = Path(work_dir)
-    for filename in structured_result_files:
-        payload = load_json(str(root / filename))
-        if not isinstance(payload, dict):
-            continue
-        generated_files = payload.get("generated_files", [])
-        if isinstance(generated_files, list):
-            for item in generated_files:
-                add(_generated_file_path(item))
-        artifact_evidence = payload.get("artifact_evidence", [])
-        if isinstance(artifact_evidence, list):
-            for item in artifact_evidence:
-                add(_generated_file_path(item))
-
-    debug_dir = root / "debug_artifacts"
-    if debug_dir.exists():
-        for path in sorted(debug_dir.rglob("*")):
-            if path.is_file() and _is_image_path(path.name):
-                add(path.relative_to(root).as_posix())
-
-    return evidence
+    return generated_image_evidence_paths(work_dir, structured_result_files, created_images)
 
 
 def _normalize_paper_image_references(
@@ -1175,7 +1182,7 @@ def _refresh_result_driven_figure_plan(
     chart_language: str,
     solve_spec_path: str,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
-    """Regenerate figure_plan from verified results and mirror requests to solve_spec."""
+    """Regenerate figure_plan from verified results without mutating solve_spec."""
     if not isinstance(solve_spec, dict) or not isinstance(result_registry, dict):
         return {}, []
     if not result_registry.get("verified_results"):
@@ -1192,9 +1199,6 @@ def _refresh_result_driven_figure_plan(
         item for item in figure_plan.get("figure_requests", [])
         if isinstance(item, dict)
     ]
-    solve_spec["figure_requests"] = figure_requests
-    _apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
-    save_json(solve_spec, solve_spec_path)
     return figure_plan, figure_requests
 
 
@@ -1690,6 +1694,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs["solve_spec_raw"] = solve_spec_raw
             yield _message("solve_spec", _preview(str(solve_spec_raw)), section="求解规格")
 
+        figure_plan: dict[str, object] = {}
         if isinstance(solve_spec, dict):
             solve_spec["document_language"] = chart_language
             solve_spec["chart_language"] = chart_language
@@ -1701,7 +1706,6 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             solve_spec["requires_result_figures"] = requires_result_figures
             solve_spec["requires_explanatory_figures"] = requires_explanatory_figures
             solve_spec["requires_figures"] = expected_figures
-            solve_spec["expected_figures"] = expected_figures
 
             # Build independent FigurePlan and freeze it as the planning source of truth.
             figure_plan = FigurePlanBuilder.build(
@@ -1715,22 +1719,18 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs["figure_plan"] = figure_plan
             stage_outputs["figure_plan_file"] = os.path.basename(figure_plan_path)
 
-            _apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
-            expected_figures = bool(solve_spec.get("requires_figures"))
+            expected_figures = _figure_plan_expects_figures(figure_plan, expected_figures)
 
             figure_requests = figure_plan.get("figure_requests", []) if isinstance(figure_plan, dict) else []
             if not isinstance(figure_requests, list) or not any(isinstance(item, dict) for item in figure_requests):
-                figure_requests = _ensure_figure_requests_in_solve_spec(solve_spec, chart_language)
+                figure_requests = _compat_figure_requests_from_solve_spec(solve_spec, chart_language)
             else:
                 figure_requests = [item for item in figure_requests if isinstance(item, dict)]
 
-            # Keep solve_spec compatibility while FigurePlan is the primary source.
-            solve_spec["figure_requests"] = figure_requests
             stage_outputs["figure_requests"] = figure_requests
             stage_outputs["figure_request_count"] = len(figure_requests)
 
-            # Upgrade ProblemContract with definitive figure requirement
-            # from solve_spec (more accurate than initial heuristic)
+            # Upgrade ProblemContract with definitive figure requirement from figure_plan.
             if expected_figures != contract.paper_requires_figures:
                 contract = ProblemContract(
                     document_language=contract.document_language,
@@ -1765,7 +1765,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "题设锁定参数不得擅自修改。所有可写入论文的关键结果必须登记到结构化结果文件，供后续生成 result_registry.json。"
         )
 
-        expected_figures = bool(solve_spec.get("expected_figures")) if isinstance(solve_spec, dict) else False
+        expected_figures = _figure_plan_expects_figures(
+            figure_plan if isinstance(figure_plan, dict) else None,
+            bool(solve_spec.get("expected_figures")) if isinstance(solve_spec, dict) else False,
+        )
 
         # Figure protocol is NOT injected into common_solver_rules here.
         # It is injected per-subproblem based on _subproblem_figure_mode()
@@ -1833,7 +1836,11 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 sub_figure_rules = ""
                 if sub_figure_mode == "paper_required":
                     subproblem_id = str(subproblem.get("id") or f"problem_{index}").strip() or f"problem_{index}"
-                    sub_requests = _figure_requests_for_subproblem(solve_spec, subproblem_id)
+                    sub_requests = _figure_requests_for_subproblem_from_plan(
+                        figure_plan,
+                        subproblem_id,
+                        solve_spec,
+                    )
                     data_contract = _figure_data_protocol_contract(sub_requests)
                     sub_figure_rules = (
                         "生成 matplotlib 图表时，不要手动把 rcParams['font.sans-serif'] 设为 SimHei、Microsoft YaHei 或 DejaVu Sans 的单一/简化列表；优先使用环境预置字体配置。"
@@ -1887,7 +1894,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             non_split_figure_rules = ""
             if expected_figures:
-                all_requests = [item for item in (solve_spec.get("figure_requests", []) if isinstance(solve_spec, dict) else []) if isinstance(item, dict)]
+                all_requests = _required_figure_requests_from_plan(figure_plan, solve_spec)
                 data_contract = _figure_data_protocol_contract(all_requests)
                 non_split_figure_rules = (
                     f"\n{data_contract if data_contract else ''}"
@@ -2045,7 +2052,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             chart_prompt = (
                 f"## 结果分析报告\n{stage_outputs['analysis']}\n\n"
                 f"## result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 8000)}\n\n"
-                f"## figure_requests（逐项满足 required request）\n{_json_for_prompt((solve_spec or {}).get('figure_requests', []), 8000)}\n\n"
+                f"## figure_plan.figure_requests（逐项满足 required request）\n{_json_for_prompt((figure_plan or {}).get('figure_requests', []), 8000)}\n\n"
                 f"## 求解结果\n{solver_result.coder_response}\n\n"
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                 f"## 模型符号与假设\n{stage_outputs.get('modeling', '')}\n\n"
@@ -2152,7 +2159,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 if reevaluation.figure_plan_payload:
                     stage_outputs["figure_plan"] = reevaluation.figure_plan_payload
 
-        required_requests = _required_figure_requests(solve_spec)
+        required_requests = _required_figure_requests_from_plan(figure_plan, solve_spec)
 
         # Phase-2: deterministic-first recovery per required request.
         if required_requests:

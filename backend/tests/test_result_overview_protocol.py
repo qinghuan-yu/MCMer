@@ -519,6 +519,33 @@ def test_figure_gate_stage_builds_bundle_snapshot(monkeypatch) -> None:
     assert snapshot.writer_images == ["output/fig.png"]
 
 
+def test_artifact_registry_marks_solve_spec_figure_requests_fallback(tmp_path: Path) -> None:
+    from app.artifacts.registry import ArtifactRegistry
+
+    (tmp_path / "solve_spec.json").write_text(
+        json.dumps(
+            {
+                "figure_requests": [
+                    {
+                        "id": "fig_legacy",
+                        "required": True,
+                        "semantic_role": "result_overview",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    registry = ArtifactRegistry.load(str(tmp_path), structured_result_files=[])
+    requests = registry._load_figure_requests()
+
+    assert requests[0]["id"] == "fig_legacy"
+    assert registry.protocol_warnings
+    assert registry.protocol_warnings[0]["code"] == "DEPRECATED_SOLVE_SPEC_FIGURE_REQUESTS_FALLBACK"
+
+
 def test_quality_gate_stage_writes_reports_and_trace(tmp_path: Path) -> None:
     class FakeRegistry:
         figure_rejections = []
@@ -546,6 +573,90 @@ def test_quality_gate_stage_writes_reports_and_trace(tmp_path: Path) -> None:
     assert (tmp_path / "figure_artifact_gate_report.json").exists()
     assert (tmp_path / "quality_gate_report.json").exists()
     assert trace.stages and trace.stages[-1]["name"] == "figure_gate"
+
+
+def test_quality_gate_prefers_figure_plan_requirements_over_solve_spec(tmp_path: Path) -> None:
+    class FakeRegistry:
+        figure_rejections = []
+
+        def rejection_summary(self):
+            return []
+
+    trace = WorkflowTrace()
+    bundle = FigureBundle(
+        required_requests=[{"id": "fig_q1_fit", "required": True}],
+        missing_requests=[
+            {
+                "figure_request_id": "fig_q1_fit",
+                "required": True,
+                "satisfied": False,
+                "reason": "missing_source_data",
+            }
+        ],
+    )
+
+    snapshot = QualityGateStage.evaluate(
+        work_dir=tmp_path,
+        result_registry={"verified_results": [{"id": "q1"}], "blocked_results": []},
+        figure_bundle=bundle,
+        artifact_registry=FakeRegistry(),
+        artifact_valid_images=[],
+        writer_images=[],
+        solve_spec={"requires_figures": False, "expected_figures": False},
+        figure_plan_payload={
+            "source": "result_registry",
+            "requires_figures": True,
+            "requires_result_figures": True,
+            "required_feasible_count": 1,
+            "figure_requests": [{"id": "fig_q1_fit", "required": True}],
+        },
+        workflow_mode="standard",
+        expected_figures=False,
+        trace=trace,
+    )
+
+    assert snapshot.passed is False
+    assert snapshot.expected_figures is True
+    assert snapshot.figure_plan_diagnostics["requirement_source"] == "figure_plan"
+    assert snapshot.figure_plan_diagnostics["required_feasible_count"] == 1
+    assert "未满足全部 required figure_requests" in snapshot.reason
+
+
+def test_quality_gate_ignores_legacy_expected_figures_when_plan_says_no_figures(tmp_path: Path) -> None:
+    class FakeRegistry:
+        figure_rejections = []
+
+        def rejection_summary(self):
+            return []
+
+    trace = WorkflowTrace()
+    bundle = FigureBundle()
+
+    snapshot = QualityGateStage.evaluate(
+        work_dir=tmp_path,
+        result_registry={"verified_results": [{"id": "q1"}], "blocked_results": []},
+        figure_bundle=bundle,
+        artifact_registry=FakeRegistry(),
+        artifact_valid_images=[],
+        writer_images=[],
+        solve_spec={"requires_figures": True, "expected_figures": True},
+        figure_plan_payload={
+            "source": "result_registry",
+            "requires_figures": False,
+            "requires_result_figures": False,
+            "requires_explanatory_figures": False,
+            "requires_figures_by_problem": False,
+            "required_feasible_count": 0,
+            "figure_requests": [],
+        },
+        workflow_mode="standard",
+        expected_figures=True,
+        trace=trace,
+    )
+
+    assert snapshot.passed is True
+    assert snapshot.expected_figures is False
+    assert snapshot.figure_plan_diagnostics["requirement_source"] == "figure_plan"
 
 
 def test_figure_recovery_stage_refreshes_registry_after_render(monkeypatch, tmp_path: Path) -> None:

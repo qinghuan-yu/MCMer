@@ -6,7 +6,11 @@ from pathlib import Path
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import _contains_tool_protocol_text
 from app.core.figure_stage import FigureStage
-from app.core.workflow import _generated_image_evidence_paths, _has_generated_image_evidence, _language_verified_generated_images
+from app.artifacts.artifact_evidence import (
+    generated_image_evidence_paths,
+    has_generated_image_evidence,
+    language_verified_generated_images,
+)
 from app.utils.common_utils import finalize_markdown_export
 from app.utils.figure_artifacts import is_verified_paper_figure, is_placeholder_filename, contains_placeholder_text
 
@@ -59,7 +63,7 @@ def test_chinese_task_rejects_english_figure_artifact(tmp_path: Path) -> None:
     }
     (tmp_path / "solve_structured_results.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    assert _language_verified_generated_images(
+    assert language_verified_generated_images(
         str(tmp_path),
         ["solve_structured_results.json"],
         "Simplified Chinese",
@@ -138,9 +142,9 @@ def test_markdown_image_whitelist_controls_docx_media(tmp_path: Path) -> None:
 def test_debug_images_count_as_repair_evidence_not_paper_ready(tmp_path: Path) -> None:
     _write_png(tmp_path / "debug_artifacts" / "diagnostic.png")
 
-    assert _language_verified_generated_images(str(tmp_path), [], "Simplified Chinese") == []
-    assert _has_generated_image_evidence(str(tmp_path), [], []) is True
-    assert _generated_image_evidence_paths(str(tmp_path), [], []) == ["debug_artifacts/diagnostic.png"]
+    assert language_verified_generated_images(str(tmp_path), [], "Simplified Chinese") == []
+    assert has_generated_image_evidence(str(tmp_path), [], []) is True
+    assert generated_image_evidence_paths(str(tmp_path), [], []) == ["debug_artifacts/diagnostic.png"]
 
 
 def test_artifact_evidence_field_counts_as_image_evidence(tmp_path: Path) -> None:
@@ -155,7 +159,7 @@ def test_artifact_evidence_field_counts_as_image_evidence(tmp_path: Path) -> Non
     }
     (tmp_path / "solve_structured_results.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    assert _generated_image_evidence_paths(
+    assert generated_image_evidence_paths(
         str(tmp_path),
         ["solve_structured_results.json"],
         [],
@@ -653,10 +657,7 @@ def test_subproblem_figure_mode_none_when_task_has_no_figures():
 
 def test_deterministic_summary_figure_passes_gate(tmp_path: Path) -> None:
     """Workflow fallback should create a gate-valid figure from verified results."""
-    from app.core.workflow import (
-        _create_verified_result_summary_figure,
-        _language_verified_generated_images,
-    )
+    from app.core.workflow import _create_verified_result_summary_figure
 
     registry = {
         "verified_results": [
@@ -678,7 +679,7 @@ def test_deterministic_summary_figure_passes_gate(tmp_path: Path) -> None:
     )
 
     assert created == ["output/verified_result_summary.png"]
-    assert _language_verified_generated_images(
+    assert language_verified_generated_images(
         str(tmp_path),
         [],
         "Simplified Chinese",

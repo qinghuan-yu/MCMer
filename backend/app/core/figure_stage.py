@@ -489,8 +489,8 @@ class FigureStage:
                     "请补齐 renderer 或数据绑定后再将相关请求升级为 required。"
                 )
             return False, (
-                "任务预期有图表（expected_figures=true），但 solve_spec 未提供 figure_requests。"
-                "请在求解规格阶段生成 required figure_requests。"
+                "任务预期有图表（expected_figures=true），但 figure_plan 未提供 figure_requests。"
+                "请通过 VisualizationPlannerSkill 从 result_registry 生成 required figure_requests。"
             )
 
         if expected_figures and required_requests and not satisfied_requests:

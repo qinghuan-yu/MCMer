@@ -35,6 +35,9 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "VerifiedResult": ("app.artifacts.result_schema", "VerifiedResult"),
     "VisualizationContract": ("app.artifacts.visualization_schema", "VisualizationContract"),
     "FigureArtifact": ("app.artifacts.figure_artifact_schema", "FigureArtifact"),
+    "generated_image_evidence_paths": ("app.artifacts.artifact_evidence", "generated_image_evidence_paths"),
+    "has_generated_image_evidence": ("app.artifacts.artifact_evidence", "has_generated_image_evidence"),
+    "language_verified_generated_images": ("app.artifacts.artifact_evidence", "language_verified_generated_images"),
 }
 
 __all__ = list(_EXPORTS)

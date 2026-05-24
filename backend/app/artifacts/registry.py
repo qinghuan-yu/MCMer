@@ -115,6 +115,7 @@ class ArtifactRegistry:
     # Backward compatibility: historical name used by older code paths.
     paper_ready_images: list[str] = field(default_factory=list)
     figure_rejections: list[FigureRejection] = field(default_factory=list)
+    protocol_warnings: list[dict[str, Any]] = field(default_factory=list)
     verified_result_ids: set[str] = field(default_factory=set)
     figure_bundle: FigureBundle = field(default_factory=FigureBundle)
 
@@ -217,6 +218,10 @@ class ArtifactRegistry:
 
     def _load_figure_requests(self) -> list[dict[str, Any]]:
         """Load figure_requests from figure_plan.json first, then solve_spec.json."""
+        self.protocol_warnings = [
+            item for item in self.protocol_warnings
+            if item.get("code") != "DEPRECATED_SOLVE_SPEC_FIGURE_REQUESTS_FALLBACK"
+        ]
         figure_plan_path = Path(self.work_dir) / "figure_plan.json"
         if figure_plan_path.exists():
             try:
@@ -242,7 +247,18 @@ class ArtifactRegistry:
         requests = payload.get("figure_requests", [])
         if not isinstance(requests, list):
             return []
-        return [item for item in requests if isinstance(item, dict)]
+        planned = [item for item in requests if isinstance(item, dict)]
+        if planned:
+            self.protocol_warnings.append(
+                {
+                    "code": "DEPRECATED_SOLVE_SPEC_FIGURE_REQUESTS_FALLBACK",
+                    "severity": "warning",
+                    "stage": "artifact_registry",
+                    "reason": "figure_requests were loaded from solve_spec.json because figure_plan.json had no usable requests.",
+                    "action": "Write figure_requests to figure_plan.json and keep solve_spec free of global visualization state.",
+                }
+            )
+        return planned
 
     def _artifact_by_path(self) -> dict[str, dict[str, Any]]:
         """Build a path->artifact index from manifest and structured outputs."""
@@ -430,6 +446,9 @@ class ArtifactRegistry:
 
     def rejection_summary(self) -> list[dict[str, Any]]:
         return [r.to_dict() for r in self.figure_rejections]
+
+    def protocol_warning_summary(self) -> list[dict[str, Any]]:
+        return list(self.protocol_warnings)
 
     # ── Quarantine ─────────────────────────────────────────────────────
 
