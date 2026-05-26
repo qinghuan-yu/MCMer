@@ -1655,12 +1655,14 @@ def test_figure_plan_emits_workflow_issues_for_blocked_requests(tmp_path: Path) 
     assert any(item.get("code") == "FIGURE_REQUEST_BLOCKED" for item in issues if isinstance(item, dict))
 
 
-def test_apply_figure_plan_overrides_solve_spec_flags() -> None:
+def test_apply_figure_plan_keeps_plan_owned_counts_out_of_solve_spec() -> None:
     solve_spec = {
         "requires_figures": False,
         "requires_result_figures": False,
         "requires_explanatory_figures": False,
         "expected_figures": False,
+        "required_feasible_count": 99,
+        "blocked_count": 99,
     }
     figure_plan = {
         "requires_figures": True,
@@ -1675,10 +1677,10 @@ def test_apply_figure_plan_overrides_solve_spec_flags() -> None:
     assert solve_spec["requires_figures"] is True
     assert solve_spec["requires_result_figures"] is True
     assert solve_spec["requires_explanatory_figures"] is True
-    assert solve_spec["expected_figures"] is True
     assert solve_spec["requires_figures_by_problem"] is True
-    assert solve_spec["required_feasible_count"] == 0
-    assert solve_spec["blocked_count"] == 3
+    assert "expected_figures" not in solve_spec
+    assert "required_feasible_count" not in solve_spec
+    assert "blocked_count" not in solve_spec
 
 
 def test_render_spectrum_request_from_csv_data_file(tmp_path: Path) -> None:

@@ -310,6 +310,13 @@ class FigureStage:
         solve_spec: dict[str, object],
         figure_plan: dict[str, object],
     ) -> None:
+        """Synchronize only minimal compatibility flags from figure_plan.
+
+        ``figure_plan.json`` owns request counts, blocked diagnostics, and the
+        effective expected-figures decision.  Keeping those fields out of
+        ``solve_spec.json`` prevents the solver contract from becoming another
+        global visualization state container.
+        """
         if not isinstance(solve_spec, dict) or not isinstance(figure_plan, dict):
             return
         requires_figures_by_problem = bool(
@@ -328,9 +335,8 @@ class FigureStage:
         solve_spec["requires_figures_by_problem"] = requires_figures_by_problem
         solve_spec["requires_result_figures_by_problem"] = requires_result_by_problem
         solve_spec["requires_explanatory_figures_by_problem"] = requires_explanatory_by_problem
-        solve_spec["required_feasible_count"] = int(figure_plan.get("required_feasible_count", figure_plan.get("required_count", 0)) or 0)
-        solve_spec["blocked_count"] = int(figure_plan.get("blocked_count", 0) or 0)
-        solve_spec["expected_figures"] = requires_figures_by_problem
+        for plan_owned_key in ("required_feasible_count", "blocked_count", "expected_figures"):
+            solve_spec.pop(plan_owned_key, None)
 
     @staticmethod
     def subproblem_figure_mode(

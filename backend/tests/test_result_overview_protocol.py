@@ -659,6 +659,30 @@ def test_quality_gate_ignores_legacy_expected_figures_when_plan_says_no_figures(
     assert snapshot.figure_plan_diagnostics["requirement_source"] == "figure_plan"
 
 
+def test_workflow_expected_figures_prefers_figure_plan_over_legacy_solve_spec() -> None:
+    from app.core.workflow import _expected_figures_from_plan_or_legacy
+
+    solve_spec = {
+        "requires_figures": True,
+        "requires_result_figures": True,
+        "requires_explanatory_figures": False,
+    }
+    figure_plan = {
+        "source": "VisualizationPlannerSkill",
+        "requires_figures": False,
+        "requires_result_figures": False,
+        "requires_explanatory_figures": False,
+        "figure_requests": [],
+    }
+
+    assert _expected_figures_from_plan_or_legacy(
+        figure_plan,
+        solve_spec,
+        "需要绘图的旧题面提示",
+        "legacy breakdown asks for charts",
+    ) is False
+
+
 def test_figure_recovery_stage_refreshes_registry_after_render(monkeypatch, tmp_path: Path) -> None:
     class FakeRenderReport:
         def to_dict(self):

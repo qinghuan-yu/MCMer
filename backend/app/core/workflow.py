@@ -294,6 +294,27 @@ def _figure_plan_expects_figures(
     return bool(isinstance(requests, list) and any(isinstance(item, dict) for item in requests))
 
 
+def _figure_plan_bool(
+    figure_plan: dict[str, object] | None,
+    key: str,
+    fallback: bool = False,
+) -> bool:
+    if isinstance(figure_plan, dict) and key in figure_plan:
+        return bool(figure_plan.get(key))
+    return fallback
+
+
+def _expected_figures_from_plan_or_legacy(
+    figure_plan: dict[str, object] | None,
+    solve_spec: dict[str, object],
+    question: str,
+    breakdown: str,
+) -> bool:
+    """Prefer figure_plan as the visualization requirement source of truth."""
+    legacy_expected = _solve_spec_expects_figures(solve_spec, question, breakdown)
+    return _figure_plan_expects_figures(figure_plan, legacy_expected)
+
+
 def _figure_data_protocol_contract(requests: list[dict[str, object]]) -> str:
     return FigureStage.figure_data_protocol_contract(requests)
 
@@ -2319,7 +2340,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 "Generated figures exist, but none passed the strict FigureArtifact language gate. "
                 "The workflow stopped instead of silently producing a paper with missing or unverified figures."
             )
-        if not artifact_valid_images and _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))):
+        figure_plan_payload = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs.get("figure_plan"), dict) else {}
+        if not artifact_valid_images and _expected_figures_from_plan_or_legacy(
+            figure_plan_payload,
+            solve_spec,
+            question,
+            str(stage_outputs.get("breakdown", "")),
+        ):
             raise ValueError(
                 "The task context indicates figures/charts are expected, but no verified paper figures were produced. "
                 "The workflow stopped instead of silently producing a paper with missing figures. "
@@ -2344,8 +2371,12 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["writer_context"] = writer_context_payload
         stage_outputs["writer_context_path"] = writer_context_snapshot.path
         stage_outputs["writer_available_images"] = writer_allowed_images
-        figure_plan_payload = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs.get("figure_plan"), dict) else {}
-        expected_figures = _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", "")))
+        expected_figures = _expected_figures_from_plan_or_legacy(
+            figure_plan_payload,
+            solve_spec,
+            question,
+            str(stage_outputs.get("breakdown", "")),
+        )
         quality_gate_snapshot = QualityGateStage.evaluate(
             work_dir=work_dir,
             result_registry=result_registry,
@@ -2801,7 +2832,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 raise ValueError(
                     "Audit repair produced figures, but none passed the strict FigureArtifact language gate."
                 )
-            if not artifact_valid_images and _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))):
+            figure_plan_payload = stage_outputs.get("figure_plan", {}) if isinstance(stage_outputs.get("figure_plan"), dict) else {}
+            expected_figures = _expected_figures_from_plan_or_legacy(
+                figure_plan_payload,
+                solve_spec,
+                question,
+                str(stage_outputs.get("breakdown", "")),
+            )
+            if not artifact_valid_images and expected_figures:
                 raise ValueError(
                     "Audit round {}: task expects figures but no verified paper figures were produced.".format(audit_round)
                 )
@@ -2829,18 +2867,33 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs[f"writer_available_images_round_{audit_round}"] = writer_allowed_images
             stage_outputs["writer_available_images"] = writer_allowed_images
 
+            requires_result_figures = _figure_plan_bool(
+                figure_plan_payload,
+                "requires_result_figures",
+                bool((solve_spec or {}).get("requires_result_figures")),
+            )
+            requires_explanatory_figures = _figure_plan_bool(
+                figure_plan_payload,
+                "requires_explanatory_figures",
+                bool((solve_spec or {}).get("requires_explanatory_figures")),
+            )
+            requires_figures_by_problem = _figure_plan_bool(
+                figure_plan_payload,
+                "requires_figures_by_problem",
+                bool((solve_spec or {}).get("requires_figures_by_problem", False)),
+            )
             gate_passed, gate_reason = _quality_gate_before_writing(
                 result_registry,
-                _solve_spec_expects_figures(solve_spec, question, str(stage_outputs.get("breakdown", ""))),
+                expected_figures,
                 figure_bundle.required_requests,
                 figure_bundle.satisfied_requests,
                 figure_bundle.missing_requests,
                 workflow_mode,
-                requires_result_figures=bool((solve_spec or {}).get("requires_result_figures")),
-                requires_explanatory_figures=bool((solve_spec or {}).get("requires_explanatory_figures")),
+                requires_result_figures=requires_result_figures,
+                requires_explanatory_figures=requires_explanatory_figures,
                 result_figure_count=len(figure_bundle.result_figures),
                 explanatory_figure_count=len(figure_bundle.explanatory_figures),
-                requires_figures_by_problem=bool((solve_spec or {}).get("requires_figures_by_problem", False)),
+                requires_figures_by_problem=requires_figures_by_problem,
                 blocked_requests=figure_bundle.blocked_requests,
             )
             if not gate_passed:
