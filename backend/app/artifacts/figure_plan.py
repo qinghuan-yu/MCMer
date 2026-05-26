@@ -468,7 +468,8 @@ class FigurePlanBuilder:
             if not isinstance(raw, dict):
                 continue
             req = dict(raw)
-            role = normalize_figure_role(req.get("semantic_role") or req.get("role"))
+            raw_role = _norm_text(req.get("semantic_role") or req.get("role")).lower()
+            role = "data_overview" if raw_role == "data_overview" else normalize_figure_role(raw_role)
             kind = _norm_text(req.get("figure_kind") or "result_figure").lower()
             required = bool(req.get("required", True))
             req.setdefault("figure_kind", kind or "result_figure")
@@ -625,9 +626,9 @@ class FigurePlanBuilder:
                     ]
                     if required_columns and not any(col in header_tokens for col in required_columns):
                         blocked_reason = f"required_columns_missing:{role}"
-                elif role == RESULT_OVERVIEW_ROLE:
+                elif role in {RESULT_OVERVIEW_ROLE, "data_overview"}:
                     if _count_numeric_columns(candidates) < 2:
-                        blocked_reason = f"insufficient_numeric_columns:{RESULT_OVERVIEW_ROLE}"
+                        blocked_reason = f"insufficient_numeric_columns:{role}"
             if not blocked_reason and bool(capability and capability.requires_verified_result) and kind == "result_figure":
                 if placeholder_ids:
                     blocked_reason = "placeholder_linked_result_ids"
@@ -1134,8 +1135,8 @@ class FigurePlanBuilder:
                     "problem_section": sid,
                     "subproblem_id": sid,
                     "figure_kind": "result_figure",
-                    "semantic_role": RESULT_OVERVIEW_ROLE,
-                    "role": RESULT_OVERVIEW_ROLE,
+                    "semantic_role": "data_overview",
+                    "role": "data_overview",
                     "canonical_caption": caption,
                     "purpose": f"{objective}: {caption}",
                     "chart_intent": "numeric_overview",

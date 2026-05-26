@@ -460,6 +460,17 @@ class FigureStage:
         summary = result_registry.get("summary", {}) if isinstance(result_registry, dict) else {}
         verified_count = summary.get("verified_count", 0) if isinstance(summary, dict) else 0
         blocked_count = summary.get("blocked_count", 0) if isinstance(summary, dict) else 0
+        if verified_count == 0 and isinstance(result_registry, dict):
+            verified = result_registry.get("verified_results", [])
+            if isinstance(verified, list):
+                verified_count = sum(
+                    1
+                    for item in verified
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "").strip()
+                    and str(item.get("status") or "verified").strip().lower() != "blocked"
+                    and item.get("verified", True) is not False
+                )
 
         if verified_count == 0:
             return False, (
@@ -821,7 +832,8 @@ class FigureStage:
         for req in required_requests:
             req_id = str(req.get("id") or "").strip()
             subproblem_id = str(req.get("subproblem_id") or "").strip()
-            role = normalize_figure_role(req.get("semantic_role") or req.get("role"))
+            raw_role = str(req.get("semantic_role") or req.get("role") or "").strip().lower()
+            role = "data_overview" if raw_role == "data_overview" else normalize_figure_role(raw_role)
             figure_kind = str(req.get("figure_kind") or "result_figure").strip().lower()
             expected_content = req.get("expected_content", [])
             required_data = req.get("required_data", [])
@@ -1015,7 +1027,7 @@ class FigureStage:
                     categories = [f"C{i + 1}" for i in range(len(comparison_values))]
 
             overview_columns: dict[str, list[float]] = {}
-            if role == RESULT_OVERVIEW_ROLE:
+            if role in {RESULT_OVERVIEW_ROLE, "data_overview"}:
                 columns, matched_sources = FigureStage.deterministic_named_columns_from_data_files(
                     work_dir,
                     required_data_list,
@@ -1026,16 +1038,17 @@ class FigureStage:
                     clean = [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
                     if len(clean) >= 2:
                         overview_columns[str(name)] = clean
-                if len(overview_columns) < 2:
+                min_overview_columns = 1 if role == RESULT_OVERVIEW_ROLE else 2
+                if len(overview_columns) < min_overview_columns:
                     overview_columns, registry_linked_ids, registry_sources = FigureStage.deterministic_overview_columns_from_registry(result_registry)
                     if registry_linked_ids:
                         matched_sources = registry_sources
-                    if len(overview_columns) < 2:
+                    if len(overview_columns) < min_overview_columns:
                         missing.append({
                             "figure_request_id": req_id,
                             "required": True,
                             "satisfied": False,
-                            "reason": f"insufficient_numeric_columns:{RESULT_OVERVIEW_ROLE}",
+                            "reason": f"insufficient_numeric_columns:{role}",
                         })
                         continue
 
@@ -1195,7 +1208,7 @@ class FigureStage:
                     source_data=required_data_list or (matched_sources or ["result_registry.json"]),
                     work_dir=work_dir,
                 )
-            elif role == RESULT_OVERVIEW_ROLE:
+            elif role in {RESULT_OVERVIEW_ROLE, "data_overview"}:
                 request_linked_ids = [
                     str(item).strip()
                     for item in (req.get("linked_result_ids", []) if isinstance(req.get("linked_result_ids"), list) else [])
@@ -1209,7 +1222,7 @@ class FigureStage:
                         for item in (result_registry.get("verified_results", []) if isinstance(result_registry, dict) else [])
                         if isinstance(item, dict) and str(item.get("id") or "").strip()
                     ][:12]
-                if not request_linked_ids:
+                if not request_linked_ids and role == RESULT_OVERVIEW_ROLE:
                     missing.append({
                         "figure_request_id": req_id,
                         "required": True,
@@ -1224,8 +1237,8 @@ class FigureStage:
                     chart_language=chart_language,
                     figure_request_id=req_id,
                     subproblem_id=subproblem_id,
-                    semantic_role=RESULT_OVERVIEW_ROLE,
-                    depicts=[RESULT_OVERVIEW_ROLE, "numeric_overview"],
+                    semantic_role=role,
+                    depicts=[role, "numeric_overview"],
                     linked_result_ids=request_linked_ids[:12],
                     source_data=matched_sources or required_data_list or ["result_registry.json"],
                     view_type=str(req.get("view_type") or "numeric_overview"),

@@ -215,10 +215,10 @@ DEFAULT_FIGURE_CAPABILITIES: dict[str, FigureCapability] = {
         supports_languages=("Simplified Chinese", "English"),
     ),
     "data_overview": FigureCapability(
-        role="result_overview",
+        role="data_overview",
         renderer="render_data_overview",
-        requires_data=False,
-        requires_verified_result=True,
+        requires_data=True,
+        requires_verified_result=False,
         supports_languages=("Simplified Chinese", "English"),
     ),
 }
