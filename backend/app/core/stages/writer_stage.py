@@ -36,7 +36,10 @@ class WriterStage:
             "writer_context.forbidden_image_paths. For semantic_role result_overview "
             "or data_overview, use writer_context.rules.result_overview_caption as "
             "the figure caption and never relabel it as fitting_curve, residual_plot, "
-            "comparison_bar, mechanism, or workflow.\n\n"
+            "comparison_bar, mechanism, or workflow. If "
+            "writer_context.coverage_diagnostics.must_disclose_partial is true, "
+            "the paper must explicitly disclose partial coverage, blocked sections, "
+            "and salvaged/provisional results instead of presenting them as complete.\n\n"
         )
 
     @staticmethod

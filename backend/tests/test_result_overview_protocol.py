@@ -463,6 +463,44 @@ def test_writer_context_normalizes_legacy_figure_artifact_bindings(tmp_path: Pat
     assert figure["linked_result_ids"] == ["q1_fit"]
 
 
+def test_writer_context_frontloads_coverage_diagnostics_for_partial_results() -> None:
+    payload = WriterContextSkill.build(
+        result_registry={
+            "verified_results": [
+                {
+                    "id": "r_salvaged",
+                    "confidence_level": "salvaged_pending_review",
+                    "warnings": ["artifact_scalar_salvage_requires_formula_and_unit_verification"],
+                }
+            ],
+            "blocked_results": [
+                {
+                    "id": "p3_blocked",
+                    "section": "Problem 3",
+                    "status": "blocked",
+                    "warnings": ["tool budget exceeded"],
+                }
+            ],
+            "summary": {
+                "verified_count": 1,
+                "blocked_count": 1,
+                "coverage_status": "partial",
+                "top_blocked_reasons": ["tool budget exceeded"],
+            },
+        },
+        figure_bundle=FigureBundle(),
+        chart_language="English",
+    )
+
+    assert list(payload.keys())[:2] == ["coverage_diagnostics", "rules"]
+    diagnostics = payload["coverage_diagnostics"]
+    assert diagnostics["coverage_status"] == "partial"
+    assert diagnostics["must_disclose_partial"] is True
+    assert diagnostics["provisional_verified_count"] == 1
+    assert diagnostics["top_blocked_sections"] == [{"section": "Problem 3", "count": 1}]
+    assert payload["rules"]["writer_must_disclose_partial_coverage"] is True
+
+
 def test_writer_stage_prepares_context_as_only_image_whitelist(tmp_path: Path) -> None:
     bundle = FigureBundle(
         available_figures=[
@@ -494,6 +532,7 @@ def test_writer_stage_prepares_context_as_only_image_whitelist(tmp_path: Path) -
     assert snapshot.payload["forbidden_image_paths"] == ["output/workflow_debug.png"]
     assert "writer_context.allowed_image_paths" in WriterStage.context_contract_text()
     assert "forbidden_image_paths" in WriterStage.context_contract_text()
+    assert "coverage_diagnostics.must_disclose_partial" in WriterStage.context_contract_text()
 
 
 def test_figure_gate_stage_builds_bundle_snapshot(monkeypatch) -> None:
