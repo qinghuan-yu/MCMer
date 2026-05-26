@@ -2179,6 +2179,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 stage_outputs["figure_request_count"] = len(reevaluation.requests)
                 if reevaluation.figure_plan_payload:
                     stage_outputs["figure_plan"] = reevaluation.figure_plan_payload
+                    figure_plan = reevaluation.figure_plan_payload
 
         required_requests = _required_figure_requests_from_plan(figure_plan, solve_spec)
 

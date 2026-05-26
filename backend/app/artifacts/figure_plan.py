@@ -478,7 +478,13 @@ class FigurePlanBuilder:
 
             depends_on = req.get("depends_on", {}) if isinstance(req.get("depends_on"), dict) else {}
             data_files = depends_on.get("data_files", []) if isinstance(depends_on.get("data_files"), list) else []
-            data_files_list = [str(item).strip().replace("\\", "/") for item in data_files if str(item).strip()]
+            required_data = req.get("required_data", []) if isinstance(req.get("required_data"), list) else []
+            data_files_list = [
+                str(item).strip().replace("\\", "/")
+                for item in [*data_files, *required_data]
+                if str(item).strip()
+            ]
+            data_files_list = list(dict.fromkeys(data_files_list))
 
             linked_ids = req.get("linked_result_ids", [])
             if not isinstance(linked_ids, list):
@@ -1052,6 +1058,7 @@ class FigurePlanBuilder:
             (
                 item for item in requests
                 if isinstance(item, dict)
+                and _norm_text(item.get("semantic_role") or item.get("role")).lower() != "data_overview"
                 and normalize_figure_role(item.get("semantic_role") or item.get("role")) == RESULT_OVERVIEW_ROLE
             ),
             None,
@@ -1181,7 +1188,8 @@ class FigurePlanBuilder:
         for item in requests:
             if not isinstance(item, dict):
                 continue
-            role = normalize_figure_role(item.get("semantic_role") or item.get("role"))
+            raw_role = _norm_text(item.get("semantic_role") or item.get("role")).lower()
+            role = "data_overview" if raw_role == "data_overview" else normalize_figure_role(raw_role)
             if role != RESULT_OVERVIEW_ROLE:
                 output.append(item)
                 continue

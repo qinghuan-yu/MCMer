@@ -9,9 +9,7 @@ from typing import Any
 from app.artifacts.contracts import ProblemContract
 from app.artifacts.figure_plan import FigurePlanBuilder
 from app.artifacts.registry import ArtifactRegistry
-from app.core.figure_stage import FigureStage
 from app.core.skills.renderer import RendererSkill
-from app.utils.common_utils import save_json
 
 
 def _unique_strings(*items: object) -> list[str]:
@@ -51,6 +49,37 @@ class FigureRecoveryStage:
     """Deterministic figure recovery helpers used before LLM repair."""
 
     @staticmethod
+    def _plan_counts(requests: list[dict[str, Any]]) -> dict[str, int]:
+        required = [
+            item for item in requests
+            if isinstance(item, dict) and bool(item.get("required", True))
+        ]
+        required_result = [
+            item for item in required
+            if str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+        ]
+        required_explanatory = [
+            item for item in required
+            if str(item.get("figure_kind") or "").strip().lower() == "explanatory_figure"
+        ]
+        blocked = [
+            item for item in requests
+            if isinstance(item, dict) and str(item.get("status") or "") == "blocked"
+        ]
+        recommended = [
+            item for item in requests
+            if isinstance(item, dict) and str(item.get("status") or "") == "recommended"
+        ]
+        return {
+            "required_feasible_count": len(required),
+            "required_feasible_result_count": len(required_result),
+            "required_feasible_explanatory_count": len(required_explanatory),
+            "required_count": len(required),
+            "recommended_count": len(recommended),
+            "blocked_count": len(blocked),
+        }
+
+    @staticmethod
     def reevaluate_solve_spec_requests(
         *,
         work_dir: str | Path,
@@ -59,21 +88,46 @@ class FigureRecoveryStage:
         solve_spec_path: str | Path,
         figure_plan_payload: dict[str, Any] | None = None,
     ) -> FigureRequestReevaluation:
-        reevaluated = FigureStage.reevaluate_solve_spec_requests(
-            solve_spec=solve_spec,
+        plan_payload = dict(figure_plan_payload or {})
+        source_requests = plan_payload.get("figure_requests", []) if plan_payload else []
+        source = "figure_plan"
+        if not isinstance(source_requests, list) or not any(isinstance(item, dict) for item in source_requests):
+            source_requests = solve_spec.get("figure_requests", []) if isinstance(solve_spec, dict) else []
+            source = "solve_spec_compat"
+        if not isinstance(source_requests, list) or not source_requests:
+            return FigureRequestReevaluation()
+
+        reevaluated = FigurePlanBuilder.reevaluate_requests(
+            requests=[item for item in source_requests if isinstance(item, dict)],
             chart_language=chart_language,
             work_dir=str(work_dir),
         )
         if not reevaluated:
             return FigureRequestReevaluation()
 
-        save_json(solve_spec, str(solve_spec_path))
-        updated_plan = dict(figure_plan_payload or {})
-        if updated_plan:
-            updated_plan["figure_requests"] = reevaluated
-            updated_plan["required_feasible_count"] = solve_spec.get("required_feasible_count", 0)
-            updated_plan["blocked_count"] = solve_spec.get("blocked_count", 0)
-            FigurePlanBuilder.save(str(work_dir), updated_plan)
+        updated_plan = plan_payload or {
+            "planner": "FigureRecoveryStage",
+            "source": source,
+        }
+        updated_plan["figure_requests"] = reevaluated
+        updated_plan.update(FigureRecoveryStage._plan_counts(reevaluated))
+        updated_plan["requires_figures"] = any(
+            isinstance(item, dict) and bool(item.get("required", True))
+            for item in reevaluated
+        )
+        updated_plan["requires_result_figures"] = any(
+            isinstance(item, dict)
+            and bool(item.get("required", True))
+            and str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
+            for item in reevaluated
+        )
+        updated_plan["requires_explanatory_figures"] = any(
+            isinstance(item, dict)
+            and bool(item.get("required", True))
+            and str(item.get("figure_kind") or "").strip().lower() == "explanatory_figure"
+            for item in reevaluated
+        )
+        FigurePlanBuilder.save(str(work_dir), updated_plan)
 
         return FigureRequestReevaluation(
             requests=reevaluated,

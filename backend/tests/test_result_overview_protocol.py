@@ -716,6 +716,56 @@ def test_figure_recovery_stage_refreshes_registry_after_render(monkeypatch, tmp_
     assert snapshot.artifact_valid_images == ["output/fig_q1.png"]
 
 
+def test_figure_recovery_reevaluates_plan_without_mutating_solve_spec(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "fit.csv").write_text(
+        "x,observed,fitted\n1,2.0,2.1\n2,4.0,3.9\n",
+        encoding="utf-8",
+    )
+    solve_spec = {
+        "figure_requests": [
+            {
+                "id": "legacy_request",
+                "required": True,
+                "semantic_role": "comparison_bar",
+                "figure_kind": "result_figure",
+                "required_data": ["missing.csv"],
+                "linked_result_ids": ["legacy_result"],
+            }
+        ],
+        "required_feasible_count": 99,
+        "blocked_count": 99,
+    }
+    figure_plan_payload = {
+        "source": "figure_plan",
+        "figure_requests": [
+            {
+                "id": "fig_q1_data_overview",
+                "required": True,
+                "semantic_role": "data_overview",
+                "figure_kind": "result_figure",
+                "required_data": ["data/fit.csv"],
+                "required_columns": ["x", "observed", "fitted"],
+            }
+        ],
+    }
+
+    snapshot = FigureRecoveryStage.reevaluate_solve_spec_requests(
+        work_dir=tmp_path,
+        solve_spec=solve_spec,
+        chart_language="English",
+        solve_spec_path=tmp_path / "solve_spec.json",
+        figure_plan_payload=figure_plan_payload,
+    )
+
+    assert [item["id"] for item in snapshot.requests] == ["fig_q1_data_overview"]
+    assert snapshot.figure_plan_payload["required_feasible_count"] == 1
+    assert snapshot.figure_plan_payload["blocked_count"] == 0
+    assert solve_spec["figure_requests"][0]["id"] == "legacy_request"
+    assert solve_spec["required_feasible_count"] == 99
+    assert solve_spec["blocked_count"] == 99
+
+
 def test_finalizer_stage_exports_quality_failure(monkeypatch, tmp_path: Path) -> None:
     def fake_export_failure_report(**kwargs):
         assert kwargs["gate_reason"] == "blocked"
