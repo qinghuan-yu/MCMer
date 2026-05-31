@@ -835,6 +835,72 @@ def test_document_finalizer_exports(tmp_path: Path) -> None:
     assert "Hello world" in content
 
 
+def test_document_finalizer_requires_partial_coverage_disclosure(tmp_path: Path) -> None:
+    """Partial coverage diagnostics must be disclosed in the exported paper."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    result_payload = {
+        "stages": {
+            "writer_context": {
+                "coverage_diagnostics": {
+                    "must_disclose_partial": True,
+                    "coverage_status": "partial",
+                    "verified_count": 2,
+                    "blocked_count": 3,
+                    "provisional_verified_count": 1,
+                }
+            }
+        }
+    }
+
+    try:
+        DocumentFinalizer.finalize(
+            work_dir=str(tmp_path),
+            task_id="test",
+            task_type="writing",
+            paper_content="# Paper\n\nAll requested problems are solved.\n",
+            allowed_images=None,
+            required_images=None,
+            result_payload=result_payload,
+        )
+        assert False, "Expected coverage disclosure validation failure"
+    except ValueError as exc:
+        assert getattr(exc, "error_code", "") == "FINALIZER_MISSING_COVERAGE_DISCLOSURE"
+        assert getattr(exc, "details", {}).get("blocked_count") == 3
+
+
+def test_document_finalizer_accepts_partial_coverage_disclosure(tmp_path: Path) -> None:
+    """Finalizer allows partial coverage papers when the limitation is explicit."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    result_payload = {
+        "stages": {
+            "writer_context": {
+                "coverage_diagnostics": {
+                    "must_disclose_partial": True,
+                    "coverage_status": "partial",
+                    "verified_count": 2,
+                    "blocked_count": 3,
+                    "provisional_verified_count": 1,
+                }
+            }
+        }
+    }
+
+    md_path, _, _ = DocumentFinalizer.finalize(
+        work_dir=str(tmp_path),
+        task_id="test",
+        task_type="writing",
+        paper_content="# Paper\n\nThis result has partial coverage; blocked branches remain for review.\n",
+        allowed_images=None,
+        required_images=None,
+        result_payload=result_payload,
+    )
+
+    content = Path(md_path).read_text(encoding="utf-8")
+    assert "partial coverage" in content
+
+
 def test_document_finalizer_rejects_unwhitelisted_markdown_image(tmp_path: Path) -> None:
     """Finalizer must fail when markdown references images outside whitelist."""
     from app.artifacts.exporters import DocumentFinalizer
