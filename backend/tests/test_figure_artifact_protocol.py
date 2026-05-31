@@ -901,6 +901,79 @@ def test_document_finalizer_accepts_partial_coverage_disclosure(tmp_path: Path) 
     assert "partial coverage" in content
 
 
+def test_document_finalizer_rejects_result_overview_curve_relabel(tmp_path: Path) -> None:
+    """A numeric result overview cannot be described as a fitted curve figure."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    _write_png(tmp_path / "output" / "fig_result_overview.png")
+    result_payload = {
+        "stages": {
+            "writer_context": {
+                "available_figures": [
+                    {
+                        "path": "output/fig_result_overview.png",
+                        "semantic_role": "result_overview",
+                    }
+                ]
+            }
+        }
+    }
+
+    try:
+        DocumentFinalizer.finalize(
+            work_dir=str(tmp_path),
+            task_id="test",
+            task_type="writing",
+            paper_content=(
+                "# Paper\n\n"
+                "![核心结果概览图](output/fig_result_overview.png)\n\n"
+                "图1展示了拟合函数的整体形态和正弦周期波动。\n"
+            ),
+            allowed_images=["output/fig_result_overview.png"],
+            required_images=["output/fig_result_overview.png"],
+            result_payload=result_payload,
+        )
+        assert False, "Expected result overview relabel validation failure"
+    except ValueError as exc:
+        assert getattr(exc, "error_code", "") == "FINALIZER_RESULT_OVERVIEW_RELABEL"
+        assert getattr(exc, "details", {}).get("path") == "output/fig_result_overview.png"
+
+
+def test_document_finalizer_accepts_result_overview_numeric_summary(tmp_path: Path) -> None:
+    """A result overview is valid when described as labeled numeric data."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    _write_png(tmp_path / "output" / "fig_result_overview.png")
+    result_payload = {
+        "stages": {
+            "writer_context": {
+                "available_figures": [
+                    {
+                        "path": "output/fig_result_overview.png",
+                        "semantic_role": "result_overview",
+                    }
+                ]
+            }
+        }
+    }
+
+    md_path, _, _ = DocumentFinalizer.finalize(
+        work_dir=str(tmp_path),
+        task_id="test",
+        task_type="writing",
+        paper_content=(
+            "# Paper\n\n"
+            "![核心结果概览图](output/fig_result_overview.png)\n\n"
+            "图1汇总了各项已验证数值结果，柱高对应图中标签所示的数据值。\n"
+        ),
+        allowed_images=["output/fig_result_overview.png"],
+        required_images=["output/fig_result_overview.png"],
+        result_payload=result_payload,
+    )
+
+    assert Path(md_path).exists()
+
+
 def test_document_finalizer_rejects_unwhitelisted_markdown_image(tmp_path: Path) -> None:
     """Finalizer must fail when markdown references images outside whitelist."""
     from app.artifacts.exporters import DocumentFinalizer

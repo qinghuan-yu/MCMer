@@ -65,6 +65,33 @@ _COVERAGE_DISCLOSURE_TERMS = (
     "降级",
 )
 
+_RESULT_OVERVIEW_FORBIDDEN_TERMS = (
+    "fitting_curve",
+    "residual_plot",
+    "comparison_bar",
+    "mechanism",
+    "workflow",
+    "fitted curve",
+    "residual plot",
+    "model shape",
+    "curve shape",
+    "function shape",
+    "拟合曲线",
+    "拟合函数",
+    "函数曲线",
+    "函数整体形态",
+    "整体形态",
+    "残差图",
+    "对比柱状图",
+    "机理图",
+    "流程图",
+    "平直线",
+    "正弦波动",
+    "正弦周期",
+    "波峰",
+    "波谷",
+)
+
 
 def _contains_tool_protocol_text(content: str) -> bool:
     if not content:
@@ -126,6 +153,7 @@ class DocumentFinalizer:
         DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
         DocumentFinalizer._validate_coverage_disclosure(normalized, result_payload)
+        DocumentFinalizer._validate_result_overview_semantics(normalized, result_payload)
 
         # ── Determine output paths ─────────────────────────────────────
         if version is not None and version > 0:
@@ -213,6 +241,7 @@ class DocumentFinalizer:
                     "use DocumentFinalizer.finalize_async()."
                 )
         DocumentFinalizer._validate_coverage_disclosure(paper_content, result_payload)
+        DocumentFinalizer._validate_result_overview_semantics(paper_content, result_payload)
 
         # ── Normalise markdown ─────────────────────────────────────────
         if _contains_tool_protocol_text(paper_content):
@@ -380,6 +409,46 @@ class DocumentFinalizer:
             error_code="FINALIZER_MISSING_COVERAGE_DISCLOSURE",
             details=details,
         )
+
+    @staticmethod
+    def _validate_result_overview_semantics(markdown: str, result_payload: dict[str, Any] | None) -> None:
+        """Reject text that relabels a numeric result overview as another figure type."""
+        writer_context = DocumentFinalizer._writer_context_from_payload(result_payload)
+        available = writer_context.get("available_figures")
+        if not isinstance(available, list):
+            return
+
+        overview_paths = {
+            normalize_artifact_path(item.get("path"))
+            for item in available
+            if isinstance(item, dict)
+            and str(item.get("semantic_role") or item.get("figure_role") or "").strip().lower()
+            in {"result_overview", "data_overview"}
+            and str(item.get("path") or "").strip()
+        }
+        if not overview_paths:
+            return
+
+        content = markdown or ""
+        for match in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", content):
+            raw_target = match.group(1).strip().strip("<>")
+            target = normalize_artifact_path(raw_target.split(" ", 1)[0].strip("'\""))
+            if target not in overview_paths:
+                continue
+
+            start = max(0, match.start() - 500)
+            end = min(len(content), match.end() + 900)
+            context = content[start:end].lower()
+            matched_terms = [
+                term for term in _RESULT_OVERVIEW_FORBIDDEN_TERMS
+                if term.lower() in context
+            ]
+            if matched_terms:
+                raise FinalizationValidationError(
+                    "Result overview figures may only be described as labeled numeric summaries.",
+                    error_code="FINALIZER_RESULT_OVERVIEW_RELABEL",
+                    details={"path": target, "matched_terms": matched_terms[:5]},
+                )
 
     # ── Internal helpers ───────────────────────────────────────────────
 

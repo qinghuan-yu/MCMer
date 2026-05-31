@@ -65,6 +65,29 @@ def test_result_overview_fallback_is_required_and_canonical(tmp_path: Path) -> N
 
 
 def test_result_overview_renders_from_verified_results_without_csv(tmp_path: Path) -> None:
+    assert FigureStage.coerce_numeric_value("f1(t) = 8.0000") == 8.0
+    assert FigureStage.coerce_numeric_value("Flow=66.35") == 66.35
+
+    columns, linked_ids, sources = FigureStage.deterministic_overview_columns_from_registry(
+        {
+            "verified_results": [
+                {"id": "r1", "name": "First metric", "value": 1.2, "source_data": ["result_registry.json"]},
+                {"id": "r2", "name": "Second metric", "value": 2.4, "source_data": ["result_registry.json"]},
+                {"id": "r3", "name": "Third metric", "value": 3.6, "source_data": ["result_registry.json"]},
+                {"id": "summary_result_table", "name": "Table summary", "value": "A | B\n1 | 2"},
+            ]
+        }
+    )
+
+    assert columns == {
+        "First metric": [1.2],
+        "Second metric": [2.4],
+        "Third metric": [3.6],
+    }
+    assert "result_index" not in columns
+    assert linked_ids == ["r1", "r2", "r3"]
+    assert sources == ["result_registry.json"]
+
     report = FigureStage.render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={

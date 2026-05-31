@@ -550,6 +550,12 @@ class FigureStage:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
         text = str(value or "")
+        assigned = re.search(r"[=:：]\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)", text)
+        if assigned:
+            try:
+                return float(assigned.group(1))
+            except ValueError:
+                pass
         match = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", text)
         if not match:
             return None
@@ -784,32 +790,35 @@ class FigureStage:
         if not isinstance(verified, list):
             return {}, [], []
 
-        values: list[float] = []
         linked_ids: list[str] = []
         sources: set[str] = set()
+        columns: dict[str, list[float]] = {}
         for entry in verified:
             if not isinstance(entry, dict):
                 continue
             result_id = str(entry.get("id") or "").strip()
-            value = FigureStage.coerce_numeric_value(entry.get("value"))
+            raw_value = entry.get("value")
+            value_text = str(raw_value or "")
+            if "\n" in value_text or "|" in value_text or result_id.endswith("_result_table"):
+                continue
+            value = FigureStage.coerce_numeric_value(raw_value)
             if not result_id or value is None:
                 continue
-            values.append(value)
+            raw_label = str(entry.get("name") or result_id).strip() or result_id
+            label = raw_label[:48]
+            if label in columns:
+                label = result_id[:48]
+            columns[label] = [value]
             linked_ids.append(result_id)
             for src in entry.get("source_data", []) or []:
                 text = str(src or "").strip()
                 if text:
                     sources.add(text)
-            if len(values) >= 24:
+            if len(columns) >= 24:
                 break
 
-        if len(values) < 1:
+        if not columns:
             return {}, [], []
-        columns = {
-            "result_value": values,
-        }
-        if len(values) >= 2:
-            columns["result_index"] = [float(i + 1) for i in range(len(values))]
         return columns, linked_ids, sorted(sources) or ["result_registry.json"]
 
     @staticmethod

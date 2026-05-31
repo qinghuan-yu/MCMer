@@ -205,6 +205,14 @@ class WriterContext:
                 "writer_must_disclose_partial_coverage": bool(
                     coverage_diagnostics.get("must_disclose_partial")
                 ),
+                "result_overview_description_scope": (
+                    "Describe only the labeled numeric values visible in the overview; "
+                    "do not interpret it as a fitted curve, residual plot, mechanism diagram, or workflow."
+                ),
+                "result_overview_placement": (
+                    "Place result overview figures next to the result table, result analysis, "
+                    "or limitations paragraph they support."
+                ),
                 "do_not_relabel_result_overview": [
                     "fitting_curve",
                     "residual_plot",
