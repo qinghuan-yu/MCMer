@@ -20,7 +20,6 @@ from app.artifacts.visualization_schema import (
     RESULT_TYPE_VIEW_MAP as SCHEMA_RESULT_TYPE_VIEW_MAP,
     SUPPORTED_RENDERED_VIEWS as SCHEMA_SUPPORTED_RENDERED_VIEWS,
     normalize_view_type,
-    supported_views_for_result_type,
 )
 
 
@@ -68,12 +67,17 @@ class VisualizationPlannerSkill:
         heuristic planner can still be used before verified results exist.
         """
         default_sources = cls.discover_tabular_sources(work_dir) or ["result_registry.json"]
+        verified_results = normalize_verified_results(result_registry)
         requests = cls.figure_requests_from_results(
             result_registry=result_registry,
             chart_language=chart_language,
             default_source_data=default_sources,
         )
-        if not requests and bool((solve_spec or {}).get("requires_result_figures", True)):
+        if (
+            not requests
+            and not verified_results
+            and bool((solve_spec or {}).get("requires_result_figures", True))
+        ):
             requests = cls.result_overview_requests(
                 result_registry=result_registry,
                 chart_language=chart_language,
@@ -131,23 +135,22 @@ class VisualizationPlannerSkill:
         default_source_data: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         requests: list[dict[str, Any]] = []
-        source_data = default_source_data or ["result_registry.json"]
         for result in normalize_verified_results(result_registry):
             contract = result.visualization_contract
-            if contract and contract.visualization_exemption:
+            if not contract:
+                requests.append(cls._blocked_contract_request(result, "missing_visualization_contract"))
                 continue
-            required_views = list(contract.required_views) if contract else []
-            candidate_views = list(contract.candidate_views) if contract else []
-            fallback_views = list(contract.fallback_views) if contract else [RESULT_OVERVIEW_ROLE]
-            if not required_views:
-                required_views = supported_views_for_result_type(result.result_type)
-            inferred_views = cls._infer_views_for_result(result, source_data)
-            if required_views == [RESULT_OVERVIEW_ROLE] and inferred_views:
-                required_views = inferred_views
-            else:
-                for view in inferred_views:
-                    if view not in required_views and view not in candidate_views:
-                        candidate_views.append(view)
+            if contract.visualization_exemption:
+                continue
+
+            contract_source_data = cls._coerce_text_list(contract.source_data) or result.data_artifacts
+            if not contract_source_data:
+                requests.append(cls._blocked_contract_request(result, "missing_visualization_source_data"))
+                continue
+
+            required_views = list(contract.required_views)
+            candidate_views = list(contract.candidate_views)
+            fallback_views = list(contract.fallback_views)
             views = [*required_views, *candidate_views, *fallback_views]
             normalized_views = []
             for view in views:
@@ -156,28 +159,58 @@ class VisualizationPlannerSkill:
                     continue
                 if role not in normalized_views:
                     normalized_views.append(role)
-            if RESULT_OVERVIEW_ROLE not in normalized_views:
-                normalized_views.append(RESULT_OVERVIEW_ROLE)
+            if not normalized_views:
+                requests.append(cls._blocked_contract_request(result, "missing_supported_visualization_view"))
+                continue
 
             for index, view in enumerate(normalized_views):
                 data_files = cls._data_files_for_view(
                     view=view,
-                    result_data_files=result.data_artifacts,
-                    default_source_data=source_data,
+                    result_data_files=contract_source_data,
+                    default_source_data=[],
                 )
                 request = cls._request_for_view(
                     result=result,
                     view_type=view,
                     chart_language=chart_language,
                     data_files=data_files,
-                    required=view != RESULT_OVERVIEW_ROLE or not any(item != RESULT_OVERVIEW_ROLE for item in normalized_views),
+                    required=(
+                        view in required_views
+                        or (not required_views and (view != RESULT_OVERVIEW_ROLE or not any(item != RESULT_OVERVIEW_ROLE for item in normalized_views)))
+                    ),
                 )
-                if view in inferred_views:
-                    request["inferred_from_result_context"] = True
+                request["contract_driven"] = True
                 requests.append(request)
         return cls._limit_result_overview_requests(
             cls._collapse_inferred_domain_requests(cls._dedupe_requests(requests))
         )
+
+    @staticmethod
+    def _blocked_contract_request(result: Any, reason: str) -> dict[str, Any]:
+        section = getattr(result, "section", "") or "problem_1"
+        result_id = str(getattr(result, "id", "") or "").strip()
+        return {
+            "id": f"fig_{section}_{result_id or 'result'}_contract_blocked",
+            "problem_section": section,
+            "subproblem_id": section,
+            "figure_kind": "result_figure",
+            "semantic_role": RESULT_OVERVIEW_ROLE,
+            "role": RESULT_OVERVIEW_ROLE,
+            "view_type": RESULT_OVERVIEW_ROLE,
+            "required": True,
+            "must_include_in_paper": False,
+            "status": "blocked",
+            "blocked_reason": reason,
+            "protocol_blocked_reason": reason,
+            "linked_result_ids": [result_id] if result_id else [],
+            "required_data": [],
+            "depends_on": {
+                "model_objects": [],
+                "formulas": [],
+                "data_files": [],
+                "result_ids": [result_id] if result_id else [],
+            },
+        }
 
     @staticmethod
     def _infer_views_for_result(result: Any, source_data: list[str]) -> list[str]:
@@ -403,7 +436,11 @@ class VisualizationPlannerSkill:
                     "code": "FIGURE_REQUEST_BLOCKED",
                     "severity": "warning",
                     "stage": "visualization_planner",
-                    "reason": str(item.get("blocked_reason") or "blocked").strip(),
+                    "reason": str(
+                        item.get("protocol_blocked_reason")
+                        or item.get("blocked_reason")
+                        or "blocked"
+                    ).strip(),
                     "request_id": str(item.get("id") or "").strip(),
                     "action": "Use fallback overview or provide renderer/source data.",
                 }

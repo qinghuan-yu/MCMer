@@ -359,7 +359,13 @@ def test_visualization_planner_infers_spectrum_view_from_verified_results(tmp_pa
                 "section": "q1",
                 "name": "Calculated thickness",
                 "value": "121.69",
-                "source_data": ["final_results.csv"],
+                "source_data": ["data/spectrum.csv"],
+                "visualization_contract": {
+                    "result_id": "q1_calculated_thickness",
+                    "required_views": ["spectrum_curve"],
+                    "fallback_views": ["result_overview"],
+                    "source_data": ["data/spectrum.csv"],
+                },
             }
         ],
         "blocked_results": [],
@@ -909,6 +915,7 @@ def test_visualization_planner_accepts_scatter_with_fit_contract_alias(tmp_path:
                 "id": "q1_fit",
                 "section": "q1",
                 "result_type": "regression_model",
+                "source_data": ["result_registry.json"],
                 "visualization_contract": {
                     "result_id": "q1_fit",
                     "required_views": ["scatter_with_fit"],
@@ -929,6 +936,59 @@ def test_visualization_planner_accepts_scatter_with_fit_contract_alias(tmp_path:
     roles = [item.get("semantic_role") for item in plan["figure_requests"]]
     assert roles == ["fitting_curve", "result_overview"]
     assert plan["source"] == "result_registry"
+
+
+def test_visualization_planner_reports_missing_contract(tmp_path: Path) -> None:
+    registry = {
+        "verified_results": [
+            {
+                "id": "q1_metric",
+                "section": "q1",
+                "value": 2.8,
+                "source_data": ["result_registry.json"],
+            }
+        ],
+        "blocked_results": [],
+    }
+
+    plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=registry,
+        chart_language="English",
+        work_dir=str(tmp_path),
+        solve_spec={"requires_result_figures": True},
+    )
+
+    assert plan["blocked_count"] == 1
+    assert plan["figure_requests"][0]["protocol_blocked_reason"] == "missing_visualization_contract"
+    assert plan["workflow_issues"][0]["reason"] == "missing_visualization_contract"
+
+
+def test_visualization_planner_reports_missing_contract_source_data(tmp_path: Path) -> None:
+    registry = {
+        "verified_results": [
+            {
+                "id": "q1_metric",
+                "section": "q1",
+                "value": 2.8,
+                "visualization_contract": {
+                    "result_id": "q1_metric",
+                    "required_views": ["result_overview"],
+                },
+            }
+        ],
+        "blocked_results": [],
+    }
+
+    plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=registry,
+        chart_language="English",
+        work_dir=str(tmp_path),
+        solve_spec={"requires_result_figures": True},
+    )
+
+    assert plan["blocked_count"] == 1
+    assert plan["figure_requests"][0]["protocol_blocked_reason"] == "missing_visualization_source_data"
+    assert plan["workflow_issues"][0]["reason"] == "missing_visualization_source_data"
 
 
 def test_visualization_planner_downgrades_missing_columns_but_keeps_overview(tmp_path: Path) -> None:
