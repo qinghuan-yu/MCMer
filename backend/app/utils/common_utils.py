@@ -9,6 +9,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+from app.artifacts.protocols import RESULT_OVERVIEW_ROLE
+from app.artifacts.visualization_schema import VisualizationContract, supported_views_for_result_type
+
 
 PLACEHOLDER_PATTERNS = [
     "张三", "李四", "王五", "赵六", "陈七", "刘八",
@@ -632,7 +635,11 @@ def normalize_result_registry_entry(entry: Any, section: str, source_file: str) 
     if warnings:
         verified = verified and all("无法确认" not in warning and "不可靠" not in warning for warning in warnings)
     source = str(entry.get("source", "")).strip()
-    has_artifact_evidence = bool(entry.get("source_data") or entry.get("generated_files"))
+    source_data = _coerce_text_list(entry.get("source_data"))
+    generated_files = _coerce_text_list(entry.get("generated_files"))
+    data_artifacts = list(dict.fromkeys([*source_data, *generated_files]))
+    result_type = _infer_result_type(entry)
+    has_artifact_evidence = bool(source_data or generated_files)
     if (
         status == "unverified"
         and source in {"artifact_salvage", "artifact_salvage_summary"}
@@ -654,16 +661,26 @@ def normalize_result_registry_entry(entry: Any, section: str, source_file: str) 
         "formula_id": entry.get("formula_id", ""),
         "inputs": entry.get("inputs", entry.get("input_values", {})) if isinstance(entry.get("inputs", entry.get("input_values", {})), dict) else {},
         "unit_conversion": entry.get("unit_conversion", ""),
-        "source_data": entry.get("source_data", []),
+        "source_data": source_data,
         "code_cell": entry.get("code_cell", ""),
         "evidence": entry.get("evidence", ""),
         "source": source,
         "source_file": source_file,
-        "generated_files": entry.get("generated_files", []),
+        "generated_files": generated_files,
         "status": status,
         "verified": verified,
         "confidence_level": _determine_confidence_level(entry, status, verified, source, warnings),
         "warnings": warnings,
+        "result_type": result_type,
+        "claim_text": str(entry.get("claim_text") or entry.get("evidence") or name).strip(),
+        "data_artifacts": data_artifacts or source_data or [source_file],
+        "columns": entry.get("columns") if isinstance(entry.get("columns"), dict) else {},
+        "visualization_contract": _default_visualization_contract(
+            entry=entry,
+            entry_id=entry_id,
+            result_type=result_type,
+            source_data=data_artifacts or source_data or [source_file],
+        ),
     }
 
 
@@ -706,6 +723,106 @@ def _determine_confidence_level(
 
     # Default: from source data
     return "verified_source"
+
+
+def _coerce_text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    return []
+
+
+def _infer_result_type(entry: dict[str, Any]) -> str:
+    raw = str(entry.get("result_type") or entry.get("type") or "").strip().lower()
+    if raw:
+        return raw
+
+    merged = " ".join(
+        str(entry.get(key) or "")
+        for key in ("id", "name", "formula", "evidence", "source")
+    ).lower()
+    if any(token in merged for token in ("r²", "r^2", "rmse", "mae", "mape", "fit", "拟合")):
+        return "regression_model"
+    if any(token in merged for token in ("optimization", "optimal", "最优", "优化")):
+        return "optimization_result"
+    if any(token in merged for token in ("classification", "confusion", "auc", "roc", "分类")):
+        return "classification_model"
+    if any(token in merged for token in ("mean", "std", "median", "statistics", "统计")):
+        return "descriptive_statistics"
+    return "unknown"
+
+
+def _default_visualization_contract(
+    *,
+    entry: dict[str, Any],
+    entry_id: str,
+    result_type: str,
+    source_data: list[str],
+) -> dict[str, Any]:
+    raw_contract = entry.get("visualization_contract")
+    if isinstance(raw_contract, dict):
+        contract = VisualizationContract.from_legacy(raw_contract, result_id=entry_id)
+        candidate_views = contract.candidate_views or supported_views_for_result_type(result_type)
+        source = contract.source_data or source_data or ["result_registry.json"]
+        return VisualizationContract(
+            result_id=entry_id,
+            candidate_views=candidate_views,
+            required_views=contract.required_views,
+            fallback_views=contract.fallback_views or [RESULT_OVERVIEW_ROLE],
+            source_data=source,
+            language=contract.language,
+            visualization_exemption=contract.visualization_exemption,
+        ).to_dict()
+
+    candidate_views = supported_views_for_result_type(result_type)
+    if not candidate_views:
+        candidate_views = [RESULT_OVERVIEW_ROLE]
+    return VisualizationContract(
+        result_id=entry_id,
+        candidate_views=candidate_views,
+        required_views=[],
+        fallback_views=[RESULT_OVERVIEW_ROLE],
+        source_data=source_data or ["result_registry.json"],
+        visualization_exemption="",
+    ).to_dict()
+
+
+def _ensure_visualization_metadata(entry: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return entry
+    enriched = dict(entry)
+    entry_id = str(enriched.get("id") or "").strip()
+    if not entry_id:
+        return enriched
+
+    source_data = _coerce_text_list(enriched.get("source_data"))
+    generated_files = _coerce_text_list(enriched.get("generated_files"))
+    data_artifacts = _coerce_text_list(enriched.get("data_artifacts")) or list(
+        dict.fromkeys([*source_data, *generated_files])
+    )
+    result_type = str(enriched.get("result_type") or "").strip() or _infer_result_type(enriched)
+
+    enriched["source_data"] = source_data
+    enriched["generated_files"] = generated_files
+    enriched["data_artifacts"] = data_artifacts or source_data or [str(enriched.get("source_file") or "result_registry.json")]
+    enriched["result_type"] = result_type
+    enriched["claim_text"] = str(
+        enriched.get("claim_text")
+        or enriched.get("evidence")
+        or enriched.get("name")
+        or entry_id
+    ).strip()
+    enriched["columns"] = enriched.get("columns") if isinstance(enriched.get("columns"), dict) else {}
+    enriched["visualization_contract"] = _default_visualization_contract(
+        entry=enriched,
+        entry_id=entry_id,
+        result_type=result_type,
+        source_data=enriched["data_artifacts"],
+    )
+    return enriched
 
 
 def _parse_float_cell(value: Any) -> float | None:
@@ -856,6 +973,7 @@ def build_result_registry(work_dir: str, structured_result_files: list[str]) -> 
 
     blocked_results.extend(_audit_torque_coefficient_artifacts(work_dir))
 
+    verified_results = [_ensure_visualization_metadata(entry) for entry in verified_results]
     verified_results = _deduplicate_dict_rows(verified_results, ["id", "source_file"])
     blocked_results = _deduplicate_dict_rows(blocked_results, ["id", "source_file"])
     warning_results = _deduplicate_dict_rows(warning_results, ["id", "source_file"])

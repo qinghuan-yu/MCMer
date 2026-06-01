@@ -816,6 +816,73 @@ def test_confidence_level_classification() -> None:
     ) == "unverified"
 
 
+def test_result_registry_adds_visualization_contracts(tmp_path: Path) -> None:
+    """Verified results should carry visualization contracts for plan generation."""
+    from app.utils.common_utils import build_result_registry
+
+    payload = {
+        "section": "Problem 1",
+        "key_results": [
+            {
+                "id": "fit_quality",
+                "name": "拟合优度",
+                "value": "R² = 0.893",
+                "verified": True,
+                "status": "verified",
+                "source_data": ["fit.csv"],
+                "result_type": "regression_model",
+            }
+        ],
+    }
+    (tmp_path / "fit_results.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    registry = build_result_registry(str(tmp_path), ["fit_results.json"])
+    result = registry["verified_results"][0]
+    contract = result["visualization_contract"]
+
+    assert result["result_type"] == "regression_model"
+    assert result["claim_text"]
+    assert result["data_artifacts"] == ["fit.csv"]
+    assert contract["result_id"] == "fit_quality"
+    assert "fitting_curve" in contract["candidate_views"]
+    assert "result_overview" in contract["fallback_views"]
+    assert contract["source_data"] == ["fit.csv"]
+
+
+def test_result_registry_preserves_legacy_visualization_contract(tmp_path: Path) -> None:
+    """Legacy contract aliases are normalized without losing source binding."""
+    from app.utils.common_utils import build_result_registry
+
+    payload = {
+        "section": "Problem 1",
+        "key_results": [
+            {
+                "id": "risk_metric",
+                "name": "风险指标",
+                "value": 1.25,
+                "verified": True,
+                "status": "verified",
+                "source_data": ["risk.csv"],
+                "visualization_contract": {
+                    "eligible_views": ["scatter_with_fit"],
+                    "fallback_views": ["result_overview"],
+                    "source_data": ["contract_source.csv"],
+                    "language": "zh-CN",
+                },
+            }
+        ],
+    }
+    (tmp_path / "risk_results.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    registry = build_result_registry(str(tmp_path), ["risk_results.json"])
+    contract = registry["verified_results"][0]["visualization_contract"]
+
+    assert contract["candidate_views"] == ["fitting_curve"]
+    assert contract["fallback_views"] == ["result_overview"]
+    assert contract["source_data"] == ["contract_source.csv"]
+    assert contract["language"] == "zh-CN"
+
+
 def test_document_finalizer_exports(tmp_path: Path) -> None:
     """DocumentFinalizer should export markdown and optionally DOCX."""
     from app.artifacts.exporters import DocumentFinalizer

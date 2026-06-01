@@ -35,6 +35,16 @@ SUPPORTED_RENDERED_VIEWS: set[str] = {
 }
 
 
+def _coerce_text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    return []
+
+
 def normalize_view_type(view_type: object) -> str:
     role = normalize_figure_role(view_type)
     return VIEW_TYPE_ALIASES.get(role, role)
@@ -58,15 +68,23 @@ class VisualizationContract:
     candidate_views: list[str] = field(default_factory=list)
     required_views: list[str] = field(default_factory=list)
     fallback_views: list[str] = field(default_factory=lambda: [RESULT_OVERVIEW_ROLE])
+    source_data: list[str] = field(default_factory=list)
+    language: str = ""
     visualization_exemption: str = ""
 
     @classmethod
     def from_legacy(cls, payload: dict[str, Any], result_id: str = "") -> "VisualizationContract":
+        raw_candidate_views = (
+            payload.get("candidate_views")
+            or payload.get("eligible_views")
+            or payload.get("views")
+            or []
+        )
         return cls(
             result_id=str(payload.get("result_id") or result_id).strip(),
             candidate_views=[
                 normalize_view_type(item)
-                for item in payload.get("candidate_views", []) or []
+                for item in raw_candidate_views
                 if str(item).strip()
             ],
             required_views=[
@@ -79,6 +97,8 @@ class VisualizationContract:
                 for item in payload.get("fallback_views", []) or []
                 if str(item).strip()
             ] or [RESULT_OVERVIEW_ROLE],
+            source_data=_coerce_text_list(payload.get("source_data") or payload.get("data_artifacts")),
+            language=str(payload.get("language") or payload.get("chart_language") or "").strip(),
             visualization_exemption=str(payload.get("visualization_exemption") or "").strip(),
         )
 
