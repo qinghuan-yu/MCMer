@@ -961,6 +961,65 @@ def test_visualization_schema_normalizes_long_term_regression_view_names() -> No
     assert "scatter_with_fit" not in views
 
 
+def test_visualization_planner_adds_explanatory_flowchart_from_complex_solve_spec(tmp_path: Path) -> None:
+    (tmp_path / "fit_results.csv").write_text(
+        "x,observed,fitted,residual\n1,10,9.5,0.5\n2,12,12.2,-0.2\n",
+        encoding="utf-8",
+    )
+    registry = {
+        "verified_results": [
+            {
+                "id": "fit_result",
+                "section": "problem2",
+                "result_type": "regression_model",
+                "data_artifacts": ["fit_results.csv"],
+                "visualization_contract": {
+                    "result_id": "fit_result",
+                    "candidate_views": ["residual_plot"],
+                    "source_data": ["fit_results.csv"],
+                },
+            }
+        ],
+        "blocked_results": [],
+        "summary": {"verified_count": 1, "blocked_count": 0},
+    }
+    solve_spec = {
+        "requires_result_figures": False,
+        "requires_explanatory_figures": False,
+        "subproblems": [
+            {
+                "id": "problem2",
+                "method": "nonlinear least squares with flow conservation and signal delay C(t)",
+                "steps": [
+                    "define f1(t), f2(t), f3(t)",
+                    "build conservation equation",
+                    "fit parameters",
+                    "check RMSE and residuals",
+                ],
+                "complexity_hint": "complex",
+            }
+        ],
+    }
+
+    plan = VisualizationPlannerSkill.build_figure_plan(
+        result_registry=registry,
+        chart_language="English",
+        work_dir=str(tmp_path),
+        solve_spec=solve_spec,
+    )
+
+    explanatory = [
+        item for item in plan["figure_requests"]
+        if item.get("figure_kind") == "explanatory_figure"
+    ]
+    assert plan["requires_explanatory_figures"] is True
+    assert plan["required_feasible_explanatory_count"] == 1
+    assert explanatory
+    assert explanatory[0]["semantic_role"] == "algorithm_flowchart"
+    assert explanatory[0]["required"] is True
+    assert explanatory[0]["must_include_in_paper"] is True
+
+
 def test_visualization_planner_accepts_scatter_with_fit_contract_alias(tmp_path: Path) -> None:
     registry = {
         "verified_results": [

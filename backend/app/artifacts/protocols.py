@@ -36,6 +36,10 @@ def canonical_caption_for_role(role: object, chart_language: str = "Simplified C
         "fitting_curve": ("模型拟合曲线图", "Model fitting curve"),
         "residual_plot": ("残差诊断图", "Residual diagnostic plot"),
     }
+    captions.update({
+        "algorithm_flowchart": ("解题流程示意图", "Solution workflow schematic"),
+        "timeline_schematic": ("模型时间关系示意图", "Model timeline schematic"),
+    })
     if normalized in captions:
         return captions[normalized][0 if zh else 1]
     return str(role or "").strip()

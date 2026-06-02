@@ -7,6 +7,8 @@ and emits protocol-shaped figure requests.
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,12 @@ class VisualizationPlannerSkill:
 
     RESULT_TYPE_VIEW_MAP = SCHEMA_RESULT_TYPE_VIEW_MAP
     SUPPORTED_RENDERED_VIEWS = SCHEMA_SUPPORTED_RENDERED_VIEWS
+    EXPLANATORY_SOLVE_SPEC_RE = re.compile(
+        r"model|parameter|constraint|equation|optimization|least|nonlinear|piecewise|"
+        r"fit|residual|rmse|mae|sin|c\s*\(|f\d\s*\(|min\s+|argmin|"
+        r"delay|phase|signal|flow|conservation",
+        re.IGNORECASE,
+    )
 
     @staticmethod
     def result_overview_requests(
@@ -73,6 +81,13 @@ class VisualizationPlannerSkill:
             chart_language=chart_language,
             default_source_data=default_sources,
         )
+        explanatory_requests = cls.explanatory_requests_from_solve_spec(
+            solve_spec=solve_spec or {},
+            chart_language=chart_language,
+            default_source_data=default_sources,
+        )
+        if explanatory_requests:
+            requests = cls._dedupe_requests([*explanatory_requests, *requests])
         if (
             not requests
             and not verified_results
@@ -100,6 +115,10 @@ class VisualizationPlannerSkill:
             item for item in required_requests
             if str(item.get("figure_kind") or "result_figure").strip().lower() == "result_figure"
         ]
+        required_explanatory_requests = [
+            item for item in required_requests
+            if str(item.get("figure_kind") or "").strip().lower() == "explanatory_figure"
+        ]
         blocked_requests = [
             item for item in reevaluated
             if isinstance(item, dict) and str(item.get("status") or "") == "blocked"
@@ -113,13 +132,13 @@ class VisualizationPlannerSkill:
             "source": "result_registry",
             "requires_figures": bool(required_requests),
             "requires_result_figures": bool(required_result_requests),
-            "requires_explanatory_figures": False,
+            "requires_explanatory_figures": bool(required_explanatory_requests),
             "requires_figures_by_problem": bool(required_requests),
             "requires_result_figures_by_problem": bool(required_result_requests),
-            "requires_explanatory_figures_by_problem": False,
+            "requires_explanatory_figures_by_problem": bool(required_explanatory_requests),
             "required_feasible_count": len(required_requests),
             "required_feasible_result_count": len(required_result_requests),
-            "required_feasible_explanatory_count": 0,
+            "required_feasible_explanatory_count": len(required_explanatory_requests),
             "required_count": len(required_requests),
             "recommended_count": len(recommended_requests),
             "blocked_count": len(blocked_requests),
@@ -184,6 +203,124 @@ class VisualizationPlannerSkill:
         return cls._limit_result_overview_requests(
             cls._collapse_inferred_domain_requests(cls._dedupe_requests(requests))
         )
+
+    @classmethod
+    def explanatory_requests_from_solve_spec(
+        cls,
+        solve_spec: dict[str, Any],
+        chart_language: str,
+        default_source_data: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if not cls._solve_spec_needs_explanatory_figure(solve_spec):
+            return []
+        subproblem = cls._anchor_subproblem_for_explanatory(solve_spec)
+        subproblem_id = str(subproblem.get("id") or "paper").strip() or "paper"
+        caption = canonical_caption_for_role("algorithm_flowchart", chart_language)
+        source_data = ["solve_spec.json"]
+        if default_source_data:
+            source_data.extend(default_source_data[:3])
+        source_data = list(dict.fromkeys(source_data))
+        return [
+            {
+                "id": f"fig_{subproblem_id}_algorithm_flowchart",
+                "problem_section": subproblem_id,
+                "subproblem_id": subproblem_id,
+                "figure_kind": "explanatory_figure",
+                "semantic_role": "algorithm_flowchart",
+                "role": "algorithm_flowchart",
+                "canonical_caption": caption,
+                "purpose": caption,
+                "chart_intent": "algorithm_flowchart",
+                "view_type": "algorithm_flowchart",
+                "required": True,
+                "must_include_in_paper": True,
+                "chart_language": chart_language,
+                "language": chart_language,
+                "required_columns": [],
+                "required_data": source_data,
+                "depends_on": {
+                    "model_objects": [
+                        "input_data",
+                        "model_constraints",
+                        "parameter_solution",
+                        "verification",
+                    ],
+                    "formulas": cls._formula_refs_from_subproblem(subproblem),
+                    "data_files": source_data,
+                    "result_ids": [],
+                },
+                "linked_result_ids": [],
+                "expected_content": [caption],
+                "contract_driven": True,
+            }
+        ]
+
+    @classmethod
+    def _solve_spec_needs_explanatory_figure(cls, solve_spec: dict[str, Any]) -> bool:
+        if not isinstance(solve_spec, dict):
+            return False
+        if bool(solve_spec.get("requires_explanatory_figures")):
+            return True
+        subproblems = [
+            item for item in solve_spec.get("subproblems", [])
+            if isinstance(item, dict)
+        ] if isinstance(solve_spec.get("subproblems"), list) else []
+        if not subproblems:
+            return False
+        total_steps = sum(
+            len(item.get("steps", []))
+            for item in subproblems
+            if isinstance(item.get("steps", []), list)
+        )
+        combined = json.dumps(
+            {
+                "subproblems": subproblems,
+                "method": solve_spec.get("method", ""),
+                "steps": solve_spec.get("steps", []),
+            },
+            ensure_ascii=False,
+        )
+        has_structural_signal = bool(cls.EXPLANATORY_SOLVE_SPEC_RE.search(combined))
+        has_complex_hint = any(
+            str(item.get("complexity_hint") or "").strip().lower() in {"complex", "high"}
+            or str(item.get("priority") or "").strip().lower() == "high"
+            for item in subproblems
+        )
+        return bool(
+            has_structural_signal
+            and (
+                total_steps >= 4
+                or len(subproblems) >= 2
+                or has_complex_hint
+            )
+        )
+
+    @classmethod
+    def _anchor_subproblem_for_explanatory(cls, solve_spec: dict[str, Any]) -> dict[str, Any]:
+        subproblems = [
+            item for item in solve_spec.get("subproblems", [])
+            if isinstance(item, dict)
+        ] if isinstance(solve_spec.get("subproblems"), list) else []
+        for item in subproblems:
+            text = json.dumps(item, ensure_ascii=False)
+            if cls.EXPLANATORY_SOLVE_SPEC_RE.search(text):
+                return item
+        return subproblems[0] if subproblems else {"id": "paper"}
+
+    @staticmethod
+    def _formula_refs_from_subproblem(subproblem: dict[str, Any]) -> list[str]:
+        refs: list[str] = []
+        for key in ("method", "objective", "validation"):
+            text = str(subproblem.get(key) or "").strip()
+            if text:
+                refs.append(text[:120])
+        steps = subproblem.get("steps", [])
+        if isinstance(steps, list):
+            for step in steps[:3]:
+                text = str(step or "").strip()
+                if text:
+                    refs.append(text[:120])
+        return refs[:5]
 
     @staticmethod
     def _blocked_contract_request(result: Any, reason: str) -> dict[str, Any]:
