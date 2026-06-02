@@ -2390,6 +2390,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             workflow_mode=workflow_mode,
             expected_figures=expected_figures,
             trace=trace,
+            question=question,
         )
         gate_passed = quality_gate_snapshot.passed
         gate_reason = quality_gate_snapshot.reason
@@ -2397,6 +2398,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         workflow_issue_summary = quality_gate_snapshot.workflow_issue_summary
         if workflow_issues:
             stage_outputs["workflow_issues"] = workflow_issues
+        stage_outputs["answer_plan"] = quality_gate_snapshot.answer_plan_diagnostics
+        stage_outputs["answer_plan_file"] = "answer_table_plan.json"
         stage_outputs["figure_plan_diagnostics"] = quality_gate_snapshot.figure_plan_diagnostics
 
         if not gate_passed:
@@ -2453,6 +2456,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# Workflow mode writing policy\n{_writer_mode_policy(workflow_mode)}\n\n"
             f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
             f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 12000)}\n\n"
+            f"# answer_table_plan.json\n{_json_for_prompt(stage_outputs.get('answer_plan', {}), 8000)}\n\n"
             f"# 题目拆解\n{stage_outputs['breakdown']}\n\n"
             f"# 假设与建模\n{stage_outputs['modeling']}\n\n"
             f"# 模型审查报告\n{stage_outputs['review']}\n\n"
@@ -2906,6 +2910,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 已生成论文\n{final_paper}\n\n"
                 f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
                 f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
+                f"# answer_table_plan.json\n{_json_for_prompt(stage_outputs.get('answer_plan', {}), 8000)}\n\n"
                 f"# writer_context.json（Writer 唯一图表上下文）\n{_json_for_prompt(writer_context_payload, 12000)}\n\n"
                 f"{WriterStage.context_contract_text()}"
                 f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 12000)}\n\n"

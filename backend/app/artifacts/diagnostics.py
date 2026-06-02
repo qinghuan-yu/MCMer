@@ -200,6 +200,9 @@ def build_verified_output_bundle(
     counts = _result_counts(payload, registry)
 
     figure_bundle = stages.get("figure_bundle") if isinstance(stages.get("figure_bundle"), dict) else {}
+    answer_plan = stages.get("answer_plan") if isinstance(stages.get("answer_plan"), dict) else {}
+    if not answer_plan:
+        answer_plan = stages.get("answer_plan_diagnostics") if isinstance(stages.get("answer_plan_diagnostics"), dict) else {}
     figure_diagnostics = (
         stages.get("figure_plan_diagnostics")
         if isinstance(stages.get("figure_plan_diagnostics"), dict)
@@ -232,7 +235,9 @@ def build_verified_output_bundle(
         not docx_path or bool(Path(docx_path).exists())
     ) and not missing_required
     quality_passed = output_status == "passed" and counts["verified_count"] > 0
-    ready_for_actual_test = bool(quality_passed and document_passed)
+    answer_status = str(answer_plan.get("coverage_status") or "not_required")
+    answer_passed = answer_status in {"ready", "not_required"}
+    ready_for_actual_test = bool(quality_passed and document_passed and answer_passed)
 
     return {
         "status": output_status,
@@ -251,6 +256,15 @@ def build_verified_output_bundle(
             "notebook_exists": bool(notebook_path and Path(notebook_path).exists()),
         },
         "result_gate": counts,
+        "answer_gate": {
+            "coverage_status": answer_status,
+            "slot_count": int(answer_plan.get("slot_count", 0) or 0),
+            "covered_count": int(answer_plan.get("covered_count", 0) or 0),
+            "blocked_count": int(answer_plan.get("blocked_count", 0) or 0),
+            "missing_count": int(answer_plan.get("missing_count", 0) or 0),
+            "passed": answer_passed,
+            "slots": _as_list(answer_plan.get("slots")),
+        },
         "visualization_gate": {
             "expected_figures": bool(figure_diagnostics.get("effective_expected_figures", False)),
             "available_figure_count": len(_as_list(figure_bundle.get("available_figures"))),
@@ -348,6 +362,7 @@ class QualityGateReport(GateReport):
         workflow_issues: list[dict[str, Any]] | None = None,
         blocked_requests: list[dict[str, Any]] | None = None,
         diagnostic_summary: dict[str, Any] | None = None,
+        answer_completeness: dict[str, Any] | None = None,
     ) -> QualityGateReport:
         issue_items = [
             *(workflow_issues or []),
@@ -369,6 +384,7 @@ class QualityGateReport(GateReport):
                 "workflow_issues": workflow_issues or [],
                 "blocked_requests": blocked_requests or [],
                 "diagnostic_summary": diagnostic_summary or summarize_visualization_issues(issue_items),
+                "answer_completeness": answer_completeness or {},
             },
         )
 

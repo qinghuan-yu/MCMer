@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.artifacts.answer_plan import AnswerPlanBuilder
 from app.artifacts.diagnostics import (
     FigureGateReport,
     QualityGateReport,
@@ -26,6 +27,7 @@ class QualityGateSnapshot:
     expected_figures: bool
     workflow_issues: list[dict[str, Any]]
     workflow_issue_summary: dict[str, Any]
+    answer_plan_diagnostics: dict[str, Any]
     figure_plan_diagnostics: dict[str, Any]
     figure_gate_report: FigureGateReport
     quality_gate_report: QualityGateReport
@@ -120,7 +122,14 @@ class QualityGateStage:
         workflow_mode: str,
         expected_figures: bool,
         trace: WorkflowTrace,
+        question: str = "",
     ) -> QualityGateSnapshot:
+        answer_plan = AnswerPlanBuilder.evaluate(
+            solve_spec=solve_spec,
+            result_registry=result_registry,
+            question=question,
+        )
+        AnswerPlanBuilder.save(work_dir, answer_plan)
         workflow_issues = FigureStage.normalize_workflow_issues(figure_plan_payload)
         workflow_issue_summary = FigureStage.workflow_issue_summary(workflow_issues)
         diagnostic_summary = summarize_visualization_issues([
@@ -208,6 +217,7 @@ class QualityGateStage:
             workflow_issues=workflow_issues,
             blocked_requests=figure_bundle.blocked_requests,
             diagnostic_summary=diagnostic_summary,
+            answer_completeness=answer_plan,
         )
         quality_gate.save(work_dir)
 
@@ -217,6 +227,7 @@ class QualityGateStage:
             expected_figures=effective_expected_figures,
             workflow_issues=workflow_issues,
             workflow_issue_summary=workflow_issue_summary,
+            answer_plan_diagnostics=answer_plan,
             figure_plan_diagnostics=figure_plan_diagnostics,
             figure_gate_report=figure_gate,
             quality_gate_report=quality_gate,
