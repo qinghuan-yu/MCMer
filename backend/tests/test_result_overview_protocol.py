@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -837,6 +838,7 @@ def test_figure_recovery_reevaluates_plan_without_mutating_solve_spec(tmp_path: 
 def test_finalizer_stage_exports_quality_failure(monkeypatch, tmp_path: Path) -> None:
     def fake_export_failure_report(**kwargs):
         assert kwargs["gate_reason"] == "blocked"
+        (tmp_path / "failure.md").write_text("# failed\n", encoding="utf-8")
         return str(tmp_path / "failure.md"), str(tmp_path / "failure.docx")
 
     monkeypatch.setattr(
@@ -854,6 +856,57 @@ def test_finalizer_stage_exports_quality_failure(monkeypatch, tmp_path: Path) ->
 
     assert output.paper_path.endswith("failure.md")
     assert output.docx_path.endswith("failure.docx")
+    bundle = json.loads((tmp_path / "verified_output_bundle.json").read_text(encoding="utf-8"))
+    assert bundle["status"] == "failed"
+    assert bundle["ready_for_actual_test"] is False
+    assert bundle["failure"]["gate_reason"] == "blocked"
+
+
+def test_finalizer_stage_writes_verified_output_bundle_on_success(monkeypatch, tmp_path: Path) -> None:
+    async def fake_finalize_async(**kwargs):
+        paper_path = tmp_path / "res.md"
+        paper_path.write_text("# done\n\n![figure](output/fig.png)\n", encoding="utf-8")
+        return str(paper_path), "", str(tmp_path / "notebook.ipynb")
+
+    monkeypatch.setattr(
+        "app.core.stages.finalizer_stage.DocumentFinalizer.finalize_async",
+        fake_finalize_async,
+    )
+
+    output = asyncio.run(
+        FinalizerStage.finalize_success(
+            work_dir=tmp_path,
+            task_id="task_1",
+            task_type="writing",
+            paper_content="# done",
+            allowed_images=["output/fig.png"],
+            required_images=["output/fig.png"],
+            result_payload={
+                "result_coverage": {"verified_count": 1, "blocked_count": 0},
+                "stages": {
+                    "figure_bundle": {
+                        "available_figures": [{"path": "output/fig.png"}],
+                        "missing_requests": [],
+                        "blocked_requests": [],
+                    },
+                    "figure_plan_diagnostics": {
+                        "effective_expected_figures": True,
+                        "blocked_request_count": 0,
+                        "diagnostic_summary": {"count": 0, "by_category": {}, "top_reasons": []},
+                    },
+                },
+            },
+        )
+    )
+
+    assert output.paper_path.endswith("res.md")
+    bundle = json.loads((tmp_path / "verified_output_bundle.json").read_text(encoding="utf-8"))
+    assert bundle["status"] == "passed"
+    assert bundle["ready_for_actual_test"] is True
+    assert bundle["task"]["task_id"] == "task_1"
+    assert bundle["result_gate"]["verified_count"] == 1
+    assert bundle["visualization_gate"]["available_figure_count"] == 1
+    assert bundle["document_gate"]["missing_required_images"] == []
 
 
 def test_visualization_planner_uses_verified_result_contract_views(tmp_path: Path) -> None:
