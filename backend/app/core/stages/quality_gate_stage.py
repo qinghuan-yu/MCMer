@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.artifacts.diagnostics import FigureGateReport, QualityGateReport, WorkflowTrace
+from app.artifacts.diagnostics import (
+    FigureGateReport,
+    QualityGateReport,
+    WorkflowTrace,
+    summarize_visualization_issues,
+)
 from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, normalize_figure_role
 from app.artifacts.registry import ArtifactRegistry, FigureBundle
 from app.core.figure_stage import FigureStage
@@ -118,6 +123,11 @@ class QualityGateStage:
     ) -> QualityGateSnapshot:
         workflow_issues = FigureStage.normalize_workflow_issues(figure_plan_payload)
         workflow_issue_summary = FigureStage.workflow_issue_summary(workflow_issues)
+        diagnostic_summary = summarize_visualization_issues([
+            *workflow_issues,
+            *figure_bundle.blocked_requests,
+            *figure_bundle.missing_requests,
+        ])
         effective_requirements = QualityGateStage._effective_figure_requirements(
             figure_plan_payload=figure_plan_payload,
             figure_bundle=figure_bundle,
@@ -144,6 +154,7 @@ class QualityGateStage:
             "overview_only_result_figures": overview_only,
             "workflow_issue_count": int(workflow_issue_summary.get("count", 0) or 0),
             "workflow_issue_summary": workflow_issue_summary,
+            "diagnostic_summary": diagnostic_summary,
         }
         protocol_warnings = (
             artifact_registry.protocol_warning_summary()
@@ -194,6 +205,9 @@ class QualityGateStage:
             required_request_count=len(figure_bundle.required_requests),
             satisfied_request_count=len(figure_bundle.satisfied_requests),
             missing_requests=figure_bundle.missing_requests,
+            workflow_issues=workflow_issues,
+            blocked_requests=figure_bundle.blocked_requests,
+            diagnostic_summary=diagnostic_summary,
         )
         quality_gate.save(work_dir)
 

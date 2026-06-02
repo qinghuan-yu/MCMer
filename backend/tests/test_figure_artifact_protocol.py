@@ -1147,10 +1147,34 @@ def test_diagnostics_gate_reports(tmp_path: Path) -> None:
     quality_gate = QualityGateReport.from_check(
         verified_count=1, blocked_count=0, expected_figures=True,
         paper_ready_count=1, passed=True, reason="",
+        workflow_issues=[
+            {
+                "request_id": "fig_contract",
+                "reason": "missing_visualization_contract",
+            }
+        ],
+        blocked_requests=[
+            {
+                "id": "fig_fit",
+                "blocked_reason": "unsupported_renderer:fitting_curve",
+            }
+        ],
+        missing_requests=[
+            {
+                "figure_request_id": "fig_data",
+                "reason": "missing_source_data",
+            }
+        ],
     )
     assert quality_gate.passed
     quality_gate.save(str(tmp_path))
     assert Path(tmp_path / "quality_gate_report.json").exists()
+    quality_payload = json.loads((tmp_path / "quality_gate_report.json").read_text(encoding="utf-8"))
+    diagnostic_summary = quality_payload["metadata"]["diagnostic_summary"]
+    assert diagnostic_summary["count"] == 3
+    assert diagnostic_summary["by_category"]["visualization_contract"] == 1
+    assert diagnostic_summary["by_category"]["renderer"] == 1
+    assert diagnostic_summary["by_category"]["source_data"] == 1
 
     budget = BudgetReport()
     budget.add("solver", "p1", 15, 22, guard_blocked=3)
@@ -1161,6 +1185,34 @@ def test_diagnostics_gate_reports(tmp_path: Path) -> None:
     trace.add_stage("solve", "completed", "ok", 12.5)
     trace.save(str(tmp_path))
     assert Path(tmp_path / "workflow_trace.json").exists()
+
+
+def test_diagnostics_categorizes_visualization_issues() -> None:
+    from app.artifacts.diagnostics import classify_visualization_issue, summarize_visualization_issues
+
+    assert classify_visualization_issue("missing_visualization_contract") == "visualization_contract"
+    assert classify_visualization_issue("required_columns_missing:comparison_bar") == "source_data"
+    assert classify_visualization_issue("unsupported_renderer:fitting_curve") == "renderer"
+    assert classify_visualization_issue("semantic_data_mismatch:fitting_curve") == "semantic"
+    assert classify_visualization_issue("pending_result_binding") == "result_binding"
+    assert classify_visualization_issue("FINALIZER_MISSING_IMAGE_REF") == "document_export"
+
+    summary = summarize_visualization_issues(
+        [
+            {"reason": "missing_visualization_source_data"},
+            {"blocked_reason": "required_columns_missing:comparison_bar"},
+            {"protocol_blocked_reason": "unsupported_renderer:fitting_curve"},
+            {"error_code": "FINALIZER_REQUIRED_IMAGE_NOT_REFERENCED"},
+            {"reason": "pending_result_binding"},
+        ]
+    )
+
+    assert summary["count"] == 5
+    assert summary["by_category"]["visualization_contract"] == 1
+    assert summary["by_category"]["source_data"] == 1
+    assert summary["by_category"]["renderer"] == 1
+    assert summary["by_category"]["document_export"] == 1
+    assert summary["by_category"]["result_binding"] == 1
 
 
 def test_figure_request_planner(tmp_path: Path) -> None:

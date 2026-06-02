@@ -7,11 +7,101 @@ DOCX export, budget usage, and agent actions.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
 from app.utils.common_utils import save_json
+
+
+def classify_visualization_issue(reason: str) -> str:
+    """Map visualization failure reasons into stable diagnostic buckets."""
+
+    value = str(reason or "").strip()
+    if not value:
+        return "other"
+    normalized = value.lower()
+
+    if normalized in {
+        "missing_visualization_contract",
+        "missing_visualization_source_data",
+        "missing_supported_visualization_view",
+    }:
+        return "visualization_contract"
+    if normalized == "missing_source_data" or normalized.startswith((
+        "required_columns_missing:",
+        "insufficient_numeric_columns:",
+    )):
+        return "source_data"
+    if normalized.startswith(("unsupported_renderer:", "unsupported_chart_language:")):
+        return "renderer"
+    if (
+        normalized.startswith("semantic_data_mismatch:")
+        or "finalizer_result_overview_relabel" in normalized
+        or "caption" in normalized
+        or "relabel" in normalized
+    ):
+        return "semantic"
+    if normalized in {
+        "placeholder_linked_result_ids",
+        "missing_verified_result_binding",
+        "pending_result_binding",
+        "linked_result_not_verified",
+    }:
+        return "result_binding"
+    if (
+        normalized.startswith("finalizer_missing_image_ref")
+        or normalized.startswith("finalizer_unwhitelisted_image_ref")
+        or normalized.startswith("finalizer_required_image_not_referenced")
+        or "docx" in normalized
+    ):
+        return "document_export"
+    return "other"
+
+
+def _issue_reason(item: dict[str, Any]) -> str:
+    for key in (
+        "protocol_blocked_reason",
+        "blocked_reason",
+        "reason",
+        "error_code",
+        "code",
+    ):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    rejected_by = item.get("rejected_by")
+    if isinstance(rejected_by, list) and rejected_by:
+        return str(rejected_by[0] or "").strip()
+    return "unspecified"
+
+
+def summarize_visualization_issues(items: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Return categorized diagnostics for blocked figure workflow items."""
+
+    reasons: list[str] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            reasons.append(_issue_reason(item))
+    reason_counts = Counter(reasons)
+    category_counts = Counter(
+        classify_visualization_issue(reason)
+        for reason in reasons
+    )
+    top_reasons = [
+        {
+            "reason": reason,
+            "count": count,
+            "category": classify_visualization_issue(reason),
+        }
+        for reason, count in reason_counts.most_common(8)
+    ]
+    return {
+        "count": len(reasons),
+        "by_category": dict(sorted(category_counts.items())),
+        "top_reasons": top_reasons,
+    }
 
 
 @dataclass
@@ -77,7 +167,15 @@ class QualityGateReport(GateReport):
         required_request_count: int = 0,
         satisfied_request_count: int = 0,
         missing_requests: list[dict[str, Any]] | None = None,
+        workflow_issues: list[dict[str, Any]] | None = None,
+        blocked_requests: list[dict[str, Any]] | None = None,
+        diagnostic_summary: dict[str, Any] | None = None,
     ) -> QualityGateReport:
+        issue_items = [
+            *(workflow_issues or []),
+            *(blocked_requests or []),
+            *(missing_requests or []),
+        ]
         return cls(
             gate_name="quality",
             passed=passed,
@@ -90,6 +188,9 @@ class QualityGateReport(GateReport):
                 "required_request_count": required_request_count,
                 "satisfied_request_count": satisfied_request_count,
                 "missing_requests": missing_requests or [],
+                "workflow_issues": workflow_issues or [],
+                "blocked_requests": blocked_requests or [],
+                "diagnostic_summary": diagnostic_summary or summarize_visualization_issues(issue_items),
             },
         )
 
