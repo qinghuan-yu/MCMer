@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from app.artifacts.contracts import ProblemContract
+from app.artifacts.answer_plan import AnswerPlanBuilder
 from app.artifacts.registry import ArtifactRegistry
 from app.artifacts.exporters import FinalizationValidationError
 from app.artifacts.figure_plan import FigurePlanBuilder
@@ -1767,6 +1768,15 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 contract.save(work_dir)
                 logger.info("ProblemContract upgraded: paper_requires_figures={}", expected_figures)
 
+        answer_plan = AnswerPlanBuilder.evaluate(
+            solve_spec=solve_spec if isinstance(solve_spec, dict) else {},
+            result_registry=result_registry,
+            question=question,
+        )
+        answer_plan_path = AnswerPlanBuilder.save(work_dir, answer_plan)
+        stage_outputs["answer_plan"] = answer_plan
+        stage_outputs["answer_plan_file"] = os.path.basename(answer_plan_path)
+
         save_json(solve_spec, solve_spec_path)
         stage_outputs["solve_spec"] = solve_spec
         stage_outputs["solve_spec_file"] = os.path.basename(solve_spec_path)
@@ -1820,6 +1830,11 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "- P / T is only a slope or conversion rate, not the torque coefficient K in T = K * P * d. "
             "If both are useful, save them with different names and formulas.\n"
             "- Every key_result for a coefficient must include formula, unit, inputs, source_data, and a warning if the unit convention is ambiguous.\n\n"
+            "## Answer completeness rules\n"
+            "- Treat answer_table_plan.json as the required answer contract.\n"
+            "- Every covered answer slot must have at least one matching verified key_result in the structured result file.\n"
+            "- If a slot cannot be solved, write a blocked key_result for that slot with evidence and warnings instead of omitting it.\n"
+            "- Prefer result ids that include the subproblem id, such as q1_parameters or q2_answer_table, so downstream gates can match coverage.\n\n"
         )
 
         if _should_split_solver(workflow_mode, solve_spec):
@@ -1878,6 +1893,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     f"## 当前只要求解的子问题 {index}/{total_subproblems}\n{_json_for_prompt(subproblem, 9000)}\n\n"
                     f"## 完整 solve_spec 摘要\n{_json_for_prompt({'subproblem_count': total_subproblems, 'current_id': label, 'complexity_level': complexity_level, 'complexity_score': complexity_score, 'tool_budget': subproblem_budget.max_total_tool_calls}, 2000)}\n\n"
                     f"## problem_facts.json\n{_json_for_prompt(problem_facts, 8000)}\n\n"
+                    f"## answer_table_plan.json\n{_json_for_prompt(stage_outputs.get('answer_plan', {}), 8000)}\n\n"
                     f"## 数据文件\n{data_context}\n\n"
                     f"{completed_context}"
                     f"{common_solver_rules}"
@@ -1894,6 +1910,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 _quarantine_unregistered_output_images(work_dir, solver_structured_files)
                 partial_registry = build_result_registry(work_dir, solver_structured_files)
                 save_json(partial_registry, result_registry_path)
+                partial_answer_plan = AnswerPlanBuilder.evaluate(
+                    solve_spec=solve_spec if isinstance(solve_spec, dict) else {},
+                    result_registry=partial_registry,
+                    question=question,
+                )
+                AnswerPlanBuilder.save(work_dir, partial_answer_plan)
+                stage_outputs["answer_plan"] = partial_answer_plan
                 yield _message("solve", _preview(sub_result.coder_response), section=subtask_title)
 
             solver_result = CoderToWriter(
@@ -1927,6 +1950,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"## 数学建模题目\n{question}\n\n"
                 f"## solve_spec.json\n{_json_for_prompt(solve_spec, 12000)}\n\n"
                 f"## problem_facts.json\n{_json_for_prompt(problem_facts, 9000)}\n\n"
+                f"## answer_table_plan.json\n{_json_for_prompt(stage_outputs.get('answer_plan', {}), 8000)}\n\n"
                 f"## 数据文件\n{data_context}\n\n"
                 f"{common_solver_rules}"
                 f"{non_split_figure_rules}"
@@ -1942,6 +1966,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         save_json(result_registry, result_registry_path)
         stage_outputs["result_registry"] = result_registry
         stage_outputs["result_registry_file"] = os.path.basename(result_registry_path)
+        answer_plan = AnswerPlanBuilder.evaluate(
+            solve_spec=solve_spec if isinstance(solve_spec, dict) else {},
+            result_registry=result_registry,
+            question=question,
+        )
+        AnswerPlanBuilder.save(work_dir, answer_plan)
+        stage_outputs["answer_plan"] = answer_plan
         result_driven_plan, result_driven_requests = _refresh_result_driven_figure_plan(
             work_dir=work_dir,
             solve_spec=solve_spec,
@@ -1984,6 +2015,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             verification_agent.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["verification"]
             verification_prompt = (
                 f"## verify_plan.json\n{_json_for_prompt(verify_plan, 12000)}\n\n"
+                f"## answer_table_plan.json\n{_json_for_prompt(stage_outputs.get('answer_plan', {}), 8000)}\n\n"
                 f"## problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
                 f"## 数据文件\n{data_context}\n\n"
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
@@ -2007,6 +2039,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             save_json(result_registry, result_registry_path)
             stage_outputs["result_registry"] = result_registry
+            answer_plan = AnswerPlanBuilder.evaluate(
+                solve_spec=solve_spec if isinstance(solve_spec, dict) else {},
+                result_registry=result_registry,
+                question=question,
+            )
+            AnswerPlanBuilder.save(work_dir, answer_plan)
+            stage_outputs["answer_plan"] = answer_plan
             result_driven_plan, result_driven_requests = _refresh_result_driven_figure_plan(
                 work_dir=work_dir,
                 solve_spec=solve_spec,
@@ -2036,6 +2075,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# 审查报告\n{stage_outputs.get('review', '')}\n\n"
             f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
             f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
+            f"# answer_table_plan.json\n{_json_for_prompt(stage_outputs.get('answer_plan', {}), 8000)}\n\n"
             f"# 求解输出\n{solver_result.coder_response}\n\n"
             f"# 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
             f"# verify_plan.json\n{_json_for_prompt(verify_plan, 6000)}\n\n"
@@ -2110,6 +2150,13 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             save_json(result_registry, result_registry_path)
             stage_outputs["result_registry"] = result_registry
+            answer_plan = AnswerPlanBuilder.evaluate(
+                solve_spec=solve_spec if isinstance(solve_spec, dict) else {},
+                result_registry=result_registry,
+                question=question,
+            )
+            AnswerPlanBuilder.save(work_dir, answer_plan)
+            stage_outputs["answer_plan"] = answer_plan
             result_driven_plan, result_driven_requests = _refresh_result_driven_figure_plan(
                 work_dir=work_dir,
                 solve_spec=solve_spec,
