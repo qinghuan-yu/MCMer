@@ -1065,6 +1065,28 @@ def test_document_finalizer_rejects_unwhitelisted_markdown_image(tmp_path: Path)
         assert getattr(exc, "error_code", "") == "FINALIZER_UNWHITELISTED_IMAGE_REF"
 
 
+def test_document_finalizer_accepts_url_encoded_whitelisted_image(tmp_path: Path) -> None:
+    """Writer may URL-encode spaces in a whitelisted figure path."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    image = tmp_path / "output" / "fig_Problem 2 - Traffic Flow Analysis_fitting_curve.png"
+    _write_png(image)
+
+    md_path, _, _ = DocumentFinalizer.finalize(
+        work_dir=str(tmp_path),
+        task_id="test",
+        task_type="writing",
+        paper_content=(
+            "![fit](output/fig_Problem%202%20-%20Traffic%20Flow%20Analysis_fitting_curve.png)\n"
+        ),
+        allowed_images=["output/fig_Problem 2 - Traffic Flow Analysis_fitting_curve.png"],
+        required_images=["output/fig_Problem 2 - Traffic Flow Analysis_fitting_curve.png"],
+        result_payload={"test": True},
+    )
+
+    assert Path(md_path).exists()
+
+
 def test_document_finalizer_rejects_missing_markdown_image(tmp_path: Path) -> None:
     """Finalizer must fail when markdown references missing image files."""
     from app.artifacts.exporters import DocumentFinalizer

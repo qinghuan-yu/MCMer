@@ -502,7 +502,7 @@ class DocumentFinalizer:
             return target
 
         def _replace(m: re.Match[str]) -> str:
-            raw = _strip_title(m.group(2)).replace("\\", "/").lstrip("./")
+            raw = normalize_artifact_path(_strip_title(m.group(2)))
             return m.group(0) if raw in allowed else ""
 
         return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", _replace, markdown or "")

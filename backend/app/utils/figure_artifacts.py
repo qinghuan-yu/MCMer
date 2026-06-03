@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 
 FIGURE_MANIFEST = "figure_artifacts.json"
@@ -36,7 +37,7 @@ PLACEHOLDER_TEXT_SUBSTRINGS: list[str] = [
 
 
 def normalize_artifact_path(value: object) -> str:
-    return str(value or "").strip().replace("\\", "/").lstrip("./")
+    return unquote(str(value or "").strip()).replace("\\", "/").lstrip("./")
 
 
 def is_image_path(path: str) -> bool:
