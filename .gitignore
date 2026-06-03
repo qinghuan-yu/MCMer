@@ -42,6 +42,12 @@ backend/logs/
 backend/project/
 work_dir/
 
+# Local knowledge graph (Understand Anything)
+.understand-anything/
+.understand-anything-tool/
+.understand-anything-tool.zip
+.understandignore
+
 # OS
 .DS_Store
 Thumbs.db
