@@ -165,8 +165,8 @@ const canSubmit = computed(() => {
   return Boolean(paperContent.value.trim()) || uploadedFiles.value.some(isPolishSourceFile)
 })
 
-const submitLabel = computed(() => props.mode === 'writing' ? '开始写作' : '开始润色')
-const loadingLabel = computed(() => props.mode === 'writing' ? '正在创建写作任务...' : '正在创建润色任务...')
+const submitLabel = computed(() => props.mode === 'writing' ? '生成方案' : '开始润色')
+const loadingLabel = computed(() => props.mode === 'writing' ? '正在创建方案任务...' : '正在创建润色任务...')
 
 function resizePolishingRequirements() {
   const el = polishingRequirementsInput.value
@@ -521,4 +521,122 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 1024px) {
+  .task-form {
+    height: auto;
+  }
+
+  .form-body {
+    overflow: visible;
+  }
+
+  .field-grow {
+    flex: 0 0 auto;
+  }
+
+  .mode-writing .field-grow textarea {
+    height: 220px;
+    flex: 0 0 auto;
+    min-height: 220px;
+  }
+}
+
+@media (max-width: 720px) {
+  .field + .field,
+  .field-slim + .field,
+  .compact-field {
+    margin-top: 14px;
+  }
+
+  label {
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+
+  textarea {
+    padding: 14px;
+    border-radius: 8px;
+    line-height: 1.55;
+  }
+
+  .mode-writing .field-grow textarea {
+    height: 210px;
+    min-height: 210px;
+  }
+
+  .mode-polish .short-area {
+    min-height: 90px;
+  }
+
+  .adaptive-area {
+    max-height: 190px;
+  }
+
+  .upload {
+    min-height: 112px;
+    padding: 14px;
+  }
+
+  .upload.has-files {
+    min-height: 74px;
+    padding: 0;
+  }
+
+  .upload p {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .upload span {
+    display: block;
+    max-width: 28ch;
+    margin: 0 auto;
+    line-height: 1.45;
+  }
+
+  .file-list {
+    padding: 10px 12px;
+  }
+
+  .file-item {
+    align-items: flex-start;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .file-name {
+    flex-basis: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .file-remove {
+    margin-left: auto;
+  }
+
+  .start-btn {
+    height: 52px;
+    margin-top: 16px;
+    border-radius: 10px;
+    font-size: 16px;
+    letter-spacing: 0;
+  }
+}
+
+@media (max-width: 430px) {
+  .mode-writing .field-grow textarea {
+    height: 190px;
+    min-height: 190px;
+  }
+
+  .panel-switch + .task-form,
+  .task-form {
+    min-width: 0;
+  }
+
+  .upload {
+    min-height: 104px;
+  }
+}
 </style>

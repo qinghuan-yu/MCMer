@@ -18,6 +18,7 @@ import json
 import os
 import re
 import asyncio
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -130,6 +131,7 @@ class DocumentFinalizer:
         result_payload: dict[str, Any],
         code_interpreter=None,
         version: int | None = None,
+        artifact_basename: str = "res",
     ) -> tuple[str, str, str]:
         """Async version of finalize — saves notebook properly in async context."""
         root = Path(work_dir)
@@ -156,12 +158,13 @@ class DocumentFinalizer:
         DocumentFinalizer._validate_result_overview_semantics(normalized, result_payload)
 
         # ── Determine output paths ─────────────────────────────────────
+        safe_basename = DocumentFinalizer._safe_artifact_basename(artifact_basename)
         if version is not None and version > 0:
             paper_path = str(root / f"res_v{version}.md")
             docx_path = str(root / f"res_v{version}.docx")
         else:
-            paper_path = str(root / "res.md")
-            docx_path = str(root / "res.docx")
+            paper_path = str(root / f"{safe_basename}.md")
+            docx_path = str(root / f"{safe_basename}.docx")
 
         # ── Write res.json ─────────────────────────────────────────────
         result_payload["task_id"] = task_id
@@ -174,6 +177,7 @@ class DocumentFinalizer:
         if not docx_ok:
             logger.warning("DOCX export failed for %s", paper_path)
             docx_path = ""
+        DocumentFinalizer._write_compat_aliases(root, safe_basename, paper_path, docx_path)
 
         return paper_path, docx_path, notebook_path
 
@@ -188,6 +192,7 @@ class DocumentFinalizer:
         result_payload: dict[str, Any],
         code_interpreter=None,
         version: int | None = None,
+        artifact_basename: str = "res",
     ) -> tuple[str, str, str]:
         """Export the final paper and supporting files.
 
@@ -255,12 +260,13 @@ class DocumentFinalizer:
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
 
         # ── Determine output paths ─────────────────────────────────────
+        safe_basename = DocumentFinalizer._safe_artifact_basename(artifact_basename)
         if version is not None and version > 0:
             paper_path = str(root / f"res_v{version}.md")
             docx_path = str(root / f"res_v{version}.docx")
         else:
-            paper_path = str(root / "res.md")
-            docx_path = str(root / "res.docx")
+            paper_path = str(root / f"{safe_basename}.md")
+            docx_path = str(root / f"{safe_basename}.docx")
 
         # ── Write res.json ─────────────────────────────────────────────
         result_payload["task_id"] = task_id
@@ -273,8 +279,32 @@ class DocumentFinalizer:
         if not docx_ok:
             logger.warning("DOCX export failed for %s", paper_path)
             docx_path = ""
+        DocumentFinalizer._write_compat_aliases(root, safe_basename, paper_path, docx_path)
 
         return paper_path, docx_path, notebook_path
+
+    @staticmethod
+    def _safe_artifact_basename(value: str) -> str:
+        """Limit custom primary document names to simple local basenames."""
+        name = str(value or "res").strip().lower()
+        if not re.fullmatch(r"[a-z0-9_-]+", name):
+            return "res"
+        return name
+
+    @staticmethod
+    def _write_compat_aliases(root: Path, artifact_basename: str, paper_path: str, docx_path: str) -> None:
+        """Keep legacy res.* consumers working while newer tasks use guidance.*."""
+        if artifact_basename == "res":
+            return
+
+        compat_md = root / "res.md"
+        compat_docx = root / "res.docx"
+        try:
+            shutil.copyfile(paper_path, compat_md)
+            if docx_path and Path(docx_path).exists():
+                shutil.copyfile(docx_path, compat_docx)
+        except Exception as exc:
+            logger.warning("Failed to write legacy res.* aliases for %s: %s", paper_path, exc)
 
     @staticmethod
     def export_failure_report(

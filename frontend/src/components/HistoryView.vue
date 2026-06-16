@@ -54,7 +54,7 @@
           <span v-if="task.created_at" class="meta-item">
             🕐 {{ formatDate(task.created_at) }}
           </span>
-          <span v-if="task.has_paper" class="meta-item success">📄 有论文</span>
+          <span v-if="task.has_paper" class="meta-item success">📄 有方案</span>
           <span v-if="task.has_notebook" class="meta-item info">📓 有代码</span>
           <span v-if="task.revision_count > 0" class="meta-item warning">
             🔄 {{ task.revision_count }} 次修订
@@ -81,14 +81,14 @@
             class="btn-view"
             @click.stop="$emit('viewPaper', task.task_id)"
           >
-            查看论文
+            查看方案
           </button>
           <button
             v-if="task.has_paper"
             class="btn-revise"
             @click.stop="startRevise(task)"
           >
-            修订论文
+            修订方案
           </button>
           <button
             v-if="task.can_delete !== false"
@@ -99,7 +99,7 @@
             {{ deletingTaskId === task.task_id ? '删除中...' : '删除项目' }}
           </button>
           <span v-if="!task.has_paper && task.status === 'failed'" class="hint-text">
-            任务未完成，无可用论文
+            任务未完成，无可用方案
           </span>
         </div>
       </div>
@@ -108,13 +108,13 @@
     <!-- 修订对话框 -->
     <div v-if="showReviseDialog" class="dialog-overlay" @click.self="closeReviseDialog">
       <div class="dialog-card">
-        <h3>修订论文</h3>
+        <h3>修订方案</h3>
         <p class="dialog-subtitle">
-          对当前项目的论文提出修改建议
+          对当前项目的指导方案提出修改建议
         </p>
         <textarea
           v-model="reviseFeedback"
-          placeholder="请描述你希望如何修改论文，例如：
+          placeholder="请描述你希望如何修改方案，例如：
 - 在模型假设部分增加正态分布假设
 - 修改第三章的算法，使用遗传算法替代贪心算法
 - 增加灵敏度分析章节
@@ -159,6 +159,7 @@ interface HistoryTask {
   workflow_mode?: WorkflowMode
   created_at: string
   has_paper: boolean
+  has_guidance?: boolean
   has_notebook: boolean
   revision_count: number
   is_revision: boolean
@@ -221,7 +222,7 @@ function getProjectTitle(task: HistoryTask) {
   if (task.task_type === 'polish') {
     return task.is_revision ? '润色修订项目' : '论文润色项目'
   }
-  return task.is_revision ? '写作修订项目' : '数学建模项目'
+  return task.is_revision ? '方案修订项目' : '建模方案项目'
 }
 
 function openTask(task: HistoryTask) {
@@ -258,7 +259,7 @@ async function loadHistory() {
 }
 
 async function deleteTask(task: HistoryTask) {
-  const confirmed = window.confirm('删除后将移除该项目的工作目录、论文和消息记录，是否继续？')
+  const confirmed = window.confirm('删除后将移除该项目的工作目录、方案和消息记录，是否继续？')
   if (!confirmed) return
 
   deletingTaskId.value = task.task_id
@@ -695,5 +696,117 @@ onMounted(async () => {
 .action-btn.primary:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+}
+
+@media (max-width: 720px) {
+  .history-container {
+    padding: 4px 0 20px;
+  }
+
+  .history-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+
+  .history-header h2 {
+    font-size: 1.15rem;
+  }
+
+  .loading-state,
+  .empty-state {
+    padding: 42px 16px;
+  }
+
+  .task-card {
+    padding: 14px;
+    border-radius: 10px;
+  }
+
+  .task-title-block {
+    min-width: 0;
+    align-items: flex-start;
+  }
+
+  .task-title {
+    line-height: 1.35;
+  }
+
+  .task-question {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  .task-meta {
+    gap: 8px;
+  }
+
+  .meta-item {
+    display: inline-flex;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .task-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .btn-open,
+  .btn-stop,
+  .btn-view,
+  .btn-revise,
+  .btn-delete {
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 10px;
+    font-size: 0.84rem;
+  }
+
+  .hint-text {
+    grid-column: 1 / -1;
+  }
+
+  .dialog-overlay {
+    align-items: flex-end;
+    padding: 12px;
+  }
+
+  .dialog-card {
+    width: 100%;
+    max-width: none;
+    max-height: min(86dvh, 720px);
+    overflow-y: auto;
+    padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
+    border-radius: 16px;
+  }
+
+  .revise-input {
+    min-height: 190px;
+  }
+
+  .dialog-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .btn-cancel,
+  .btn-submit {
+    width: 100%;
+    padding-inline: 12px;
+  }
+}
+
+@media (max-width: 430px) {
+  .task-actions,
+  .dialog-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .revision-badge {
+    flex: 0 0 auto;
+  }
 }
 </style>

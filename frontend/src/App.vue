@@ -72,7 +72,7 @@
               <div class="divider"></div>
               <div class="step" :class="{ 'active-step': currentStage === 'solve' || currentStage === 'analysis' || currentStage === 'charts' || currentStage === 'writing' || currentStage === 'final_audit' || currentStage === 'recalculation' || currentStage === 'chart_consistency' || currentStage === 'wording' }">
                 <span>03</span>
-                <strong>写作</strong>
+                <strong>方案</strong>
               </div>
             </section>
           </template>
@@ -161,6 +161,7 @@ interface HistoryTask {
   workflow_mode?: WorkflowMode
   created_at: string
   has_paper: boolean
+  has_guidance?: boolean
   has_notebook: boolean
   revision_count: number
   is_revision: boolean
@@ -234,13 +235,13 @@ const entryOptions = [
   {
     id: 'writing' as TaskType,
     kicker: '8 AGENTS',
-    title: '写作功能',
-    description: '题目拆解、建模、审查、求解、验证、图表、成文与最终审查。',
+    title: '方案生成',
+    description: '题目拆解、建模、审查、求解、验证、图表、指导方案与最终审查。',
   },
   {
     id: 'polish' as TaskType,
     kicker: '5 AGENTS',
-    title: '论文润色',
+    title: '文档润色',
     description: '一致性审查、数据复核、图文核对与竞赛化措辞修订。',
   },
 ]
@@ -435,7 +436,7 @@ function buildFallbackResult(task: HistoryTask, detail: TaskDetail | null) {
     task_id: task.task_id,
     status: detail.status || task.status,
     task_type: detail.task_type || task.task_type,
-    paper_path: task.has_paper ? `${detail.work_dir}\\res.md` : '',
+    paper_path: task.has_paper ? `${detail.work_dir}\\${task.has_guidance ? 'guidance.md' : 'res.md'}` : '',
     notebook_path: task.has_notebook ? `${detail.work_dir}\\notebook.ipynb` : '',
     work_dir: detail.work_dir,
     error_message: task.status === 'failed' ? '任务执行失败，请查看过程日志。' : '',
@@ -1111,5 +1112,307 @@ onBeforeUnmount(() => {
   top: -28px; left: -8px;
   width: 96px; height: 3px;
   background: var(--blue);
+}
+
+@media (max-width: 1280px) {
+  .header {
+    padding: 0 42px;
+  }
+
+  .hero {
+    gap: 48px;
+    padding: 16px 56px 40px 72px;
+  }
+
+  .hero-left {
+    padding-left: 28px;
+  }
+
+  .title {
+    font-size: clamp(52px, 6vw, 76px);
+  }
+
+  .panel {
+    width: min(100%, 590px);
+    min-height: 620px;
+    padding: 26px 28px 28px;
+  }
+
+  .steps {
+    width: min(720px, calc(100% - 84px));
+    margin-left: 42px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .page {
+    min-height: 100dvh;
+  }
+
+  .circle-left,
+  .dot-grid-left,
+  .dot-grid-bottom,
+  .line-diagonal,
+  .arc-right {
+    opacity: 0.28;
+  }
+
+  .left-block {
+    width: 170px;
+    height: 150px;
+  }
+
+  .right-block {
+    width: 300px;
+    height: 270px;
+  }
+
+  .header {
+    height: 88px;
+    padding: 0 28px;
+  }
+
+  .brand-title {
+    font-size: 24px;
+    letter-spacing: -0.03em;
+  }
+
+  .nav {
+    top: 32px;
+    gap: 34px;
+  }
+
+  .view-shell,
+  .view-stage {
+    min-height: calc(100dvh - 88px);
+  }
+
+  .hero {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 28px;
+    min-height: auto;
+    padding: 24px 28px 34px;
+  }
+
+  .hero-left {
+    padding-left: 0;
+  }
+
+  .title {
+    max-width: 740px;
+    font-size: clamp(46px, 8vw, 68px);
+    line-height: 1;
+  }
+
+  .hero-geometry {
+    display: none;
+  }
+
+  .panel {
+    justify-self: stretch;
+    width: 100%;
+    min-height: auto;
+  }
+
+  .content-area {
+    height: auto;
+    min-height: calc(100dvh - 88px);
+    padding: 20px 28px 36px;
+    overflow: visible;
+  }
+
+  .steps {
+    width: auto;
+    margin: 0 28px;
+    gap: 24px;
+    padding-bottom: 36px;
+  }
+
+  .divider {
+    flex: 1;
+    width: auto;
+    min-width: 24px;
+    height: 1px;
+  }
+}
+
+@media (max-width: 720px) {
+  .page-decor {
+    opacity: 0.55;
+  }
+
+  .bg-line,
+  .circle-left,
+  .dot-grid,
+  .arc-right {
+    display: none;
+  }
+
+  .left-block {
+    left: -80px;
+    top: 74%;
+    opacity: 0.58;
+  }
+
+  .right-block {
+    right: -155px;
+    bottom: -105px;
+    opacity: 0.6;
+  }
+
+  .header {
+    height: auto;
+    min-height: 76px;
+    padding: 18px 18px 12px;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .nav {
+    position: static;
+    width: 100%;
+    transform: none;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .nav-item {
+    display: flex;
+    min-width: 0;
+    min-height: 40px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(20, 28, 45, 0.1);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.72);
+    font-size: 14px;
+  }
+
+  .nav-item.active {
+    border-color: rgba(36, 78, 168, 0.32);
+    background: rgba(36, 78, 168, 0.08);
+    color: var(--blue);
+  }
+
+  .nav-item.active::after {
+    display: none;
+  }
+
+  .view-shell,
+  .view-stage {
+    min-height: calc(100dvh - 126px);
+  }
+
+  .hero {
+    padding: 12px 16px 28px;
+    gap: 18px;
+  }
+
+  .title {
+    font-size: clamp(38px, 13vw, 54px);
+    letter-spacing: -0.055em;
+  }
+
+  .panel {
+    padding: 18px;
+    border-radius: 12px;
+    box-shadow: 0 16px 42px rgba(18, 31, 58, 0.07);
+  }
+
+  .panel-switcher {
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .panel-switch {
+    height: 42px;
+    font-size: 14px;
+  }
+
+  .content-area {
+    min-height: calc(100dvh - 126px);
+    padding: 12px 16px 28px;
+  }
+
+  .steps {
+    margin: 0 16px;
+    gap: 10px;
+    padding-bottom: 26px;
+  }
+
+  .step {
+    min-width: 64px;
+  }
+
+  .step span {
+    margin-bottom: 8px;
+    font-size: 16px;
+  }
+
+  .step strong {
+    font-size: 16px;
+  }
+
+  .divider {
+    height: 1px;
+    min-width: 12px;
+  }
+
+  .active-step::before {
+    top: -12px;
+    left: 0;
+    width: 48px;
+  }
+}
+
+@media (max-width: 430px) {
+  .header {
+    padding-inline: 14px;
+  }
+
+  .hero,
+  .content-area {
+    padding-inline: 12px;
+  }
+
+  .panel {
+    padding: 14px;
+  }
+
+  .title {
+    font-size: clamp(34px, 13vw, 46px);
+  }
+
+  .steps {
+    margin-inline: 12px;
+  }
+}
+
+@media (max-height: 720px) and (min-width: 900px) {
+  .header {
+    height: 82px;
+  }
+
+  .view-shell,
+  .view-stage {
+    min-height: calc(100dvh - 82px);
+  }
+
+  .hero {
+    min-height: auto;
+    padding-top: 8px;
+    padding-bottom: 24px;
+  }
+
+  .panel {
+    min-height: 560px;
+  }
+
+  .steps {
+    padding-bottom: 28px;
+  }
 }
 </style>

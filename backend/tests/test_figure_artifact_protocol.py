@@ -902,6 +902,32 @@ def test_document_finalizer_exports(tmp_path: Path) -> None:
     assert "Hello world" in content
 
 
+def test_document_finalizer_exports_guidance_aliases(tmp_path: Path) -> None:
+    """Guidance exports should keep legacy res.* aliases for existing readers."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    md_path, docx_path, _ = DocumentFinalizer.finalize(
+        work_dir=str(tmp_path),
+        task_id="test",
+        task_type="writing",
+        paper_content="# Guidance\n\n可信度摘要\n",
+        allowed_images=None,
+        required_images=None,
+        result_payload={"primary_artifact_type": "guidance"},
+        artifact_basename="guidance",
+    )
+
+    guidance_md = Path(md_path)
+    legacy_md = tmp_path / "res.md"
+
+    assert guidance_md.name == "guidance.md"
+    assert guidance_md.exists()
+    assert legacy_md.exists()
+    assert legacy_md.read_text(encoding="utf-8") == guidance_md.read_text(encoding="utf-8")
+    if docx_path:
+        assert (tmp_path / "res.docx").exists()
+
+
 def test_document_finalizer_requires_partial_coverage_disclosure(tmp_path: Path) -> None:
     """Partial coverage diagnostics must be disclosed in the exported paper."""
     from app.artifacts.exporters import DocumentFinalizer

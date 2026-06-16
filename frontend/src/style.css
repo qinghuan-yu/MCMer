@@ -9,6 +9,8 @@
   --blue: #244ea8;
   --blue-dark: #1f4393;
   --blue-light: rgba(36, 78, 168, 0.08);
+  --primary: var(--blue);
+  --primary-hover: var(--blue-dark);
   --text: #101010;
   --text-secondary: #6f7480;
   --muted: #6f7480;
@@ -36,6 +38,8 @@ html {
   min-height: 100%;
   overflow-y: scroll;
   scrollbar-gutter: stable;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -46,6 +50,43 @@ body {
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+img,
+svg,
+canvas,
+video {
+  max-width: 100%;
+}
+
+pre,
+code {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  body {
+    min-height: 100dvh;
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font-size: 16px;
+  }
 }
 
 #app {

@@ -459,6 +459,129 @@ def _generate_failure_report(
     return "\n".join(lines)
 
 
+def _build_guidance_context(
+    *,
+    result_registry: dict[str, object],
+    answer_plan: dict[str, object],
+    writer_context: dict[str, object],
+    figure_bundle: dict[str, object],
+    problem_facts: dict[str, object],
+    workflow_mode: str,
+) -> dict[str, object]:
+    """Build the first-class context for high-trust guidance generation."""
+    summary = result_registry.get("summary", {}) if isinstance(result_registry, dict) else {}
+    blocked = result_registry.get("blocked_results", []) if isinstance(result_registry, dict) else []
+    verified = result_registry.get("verified_results", []) if isinstance(result_registry, dict) else []
+    return {
+        "artifact_type": "guidance",
+        "workflow_mode": workflow_mode,
+        "trust_summary": {
+            "verified_count": len(verified),
+            "blocked_count": len(blocked),
+            "coverage_status": summary.get("coverage_status") if isinstance(summary, dict) else None,
+            "coverage_ratio": summary.get("coverage_ratio") if isinstance(summary, dict) else None,
+            "must_disclose_blocked": bool(blocked),
+            "high_trust_ready": bool(verified) and not bool(blocked),
+        },
+        "problem_facts": problem_facts if isinstance(problem_facts, dict) else {},
+        "result_registry": result_registry if isinstance(result_registry, dict) else {},
+        "answer_table_plan": answer_plan if isinstance(answer_plan, dict) else {},
+        "writer_context": writer_context if isinstance(writer_context, dict) else {},
+        "figure_bundle": figure_bundle if isinstance(figure_bundle, dict) else {},
+        "rules": {
+            "primary_output": "guidance.md",
+            "legacy_alias": "res.md",
+            "no_unregistered_numbers": True,
+            "must_disclose_blocked_items": True,
+            "must_label_assumptions": True,
+            "must_include_parameter_table": True,
+            "writer_must_not_claim_paper_submission_ready": True,
+            "allowed_images_source": "writer_context.allowed_image_paths",
+        },
+        "required_sections": [
+            "可信度摘要",
+            "问题理解",
+            "数据与来源",
+            "参数与来源表",
+            "模型选择理由",
+            "分问题建模步骤",
+            "必要计算结果",
+            "图表说明",
+            "复核与稳健性",
+            "阻断项与待确认项",
+            "论文转化建议",
+            "可复现附件说明",
+        ],
+    }
+
+
+def _write_guidance_context(work_dir: str, context: dict[str, object]) -> str:
+    path = os.path.join(work_dir, "guidance_context.json")
+    save_json(context, path)
+    return path
+
+
+def _build_guidance_audit_report(
+    *,
+    guidance_markdown: str,
+    guidance_context: dict[str, object],
+    result_registry: dict[str, object],
+) -> dict[str, object]:
+    """Lightweight first-pass guidance audit; stricter gates come in later phases."""
+    text = guidance_markdown or ""
+    lowered = text.lower()
+    blocks: list[dict[str, object]] = []
+    warnings: list[dict[str, object]] = []
+
+    required_sections = guidance_context.get("required_sections", [])
+    if isinstance(required_sections, list):
+        for section in required_sections:
+            section_text = str(section).strip()
+            if section_text and section_text not in text:
+                warnings.append({
+                    "type": "missing_expected_section",
+                    "location": section_text,
+                    "route": "writer",
+                    "severity": "medium",
+                    "fix": f"Add or clearly label the section: {section_text}",
+                })
+
+    verified = result_registry.get("verified_results", []) if isinstance(result_registry, dict) else []
+    blocked = result_registry.get("blocked_results", []) if isinstance(result_registry, dict) else []
+    if blocked and not any(token in lowered for token in ["blocked", "partial", "阻断", "未完成", "无法", "待确认"]):
+        blocks.append({
+            "type": "blocked_items_not_disclosed",
+            "location": "guidance.md",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Disclose blocked or partial results in the final guidance.",
+        })
+
+    status = "passed"
+    if blocks:
+        status = "blocked"
+    elif blocked or warnings:
+        status = "partial"
+
+    return {
+        "artifact_type": "guidance",
+        "status": status,
+        "scores": {
+            "result_coverage": 1.0 if verified and not blocked else (0.5 if verified else 0.0),
+            "blocked_disclosure": 0.0 if blocks else 1.0,
+            "guidance_actionability": 0.8 if text.strip() else 0.0,
+        },
+        "blocks": blocks,
+        "warnings": warnings,
+    }
+
+
+def _write_guidance_audit_report(work_dir: str, report: dict[str, object]) -> str:
+    path = os.path.join(work_dir, "guidance_audit_report.json")
+    save_json(report, path)
+    return path
+
+
 def _registered_generated_files(work_dir: str, structured_result_files: list[str]) -> set[str]:
     root = Path(work_dir)
     registered: set[str] = set()
@@ -2190,7 +2313,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             stage_outputs["charts"] = chart_result.model_dump()
             yield _message("charts", _preview(chart_result.coder_response), section="图表与一致性")
 
-        yield _progress(task_id, "writing", 0.9, "论文组织与润色 Agent 正在整合全文", current_subtask="论文撰写")
+        yield _progress(task_id, "writing", 0.9, "方案组织 Agent 正在整合建模指导方案", current_subtask="方案撰写")
         writer = WriterAgent(
             task_id=task_id,
             model=models["writer"],
@@ -2198,7 +2321,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             format_output=FormatOutPut.Markdown,
             scholar=scholar,
         )
-        writer.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["final_writer"]
+        writer.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["guidance_writer"]
         structured_result_files_for_figures = _unique_structured_result_files(
             solver_result.structured_result_files,
             verification_result.structured_result_files,
@@ -2448,6 +2571,17 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["answer_plan"] = quality_gate_snapshot.answer_plan_diagnostics
         stage_outputs["answer_plan_file"] = "answer_table_plan.json"
         stage_outputs["figure_plan_diagnostics"] = quality_gate_snapshot.figure_plan_diagnostics
+        guidance_context = _build_guidance_context(
+            result_registry=result_registry,
+            answer_plan=quality_gate_snapshot.answer_plan_diagnostics,
+            writer_context=writer_context_payload,
+            figure_bundle=figure_bundle.to_dict(),
+            problem_facts=problem_facts,
+            workflow_mode=workflow_mode,
+        )
+        guidance_context_path = _write_guidance_context(work_dir, guidance_context)
+        stage_outputs["guidance_context"] = guidance_context
+        stage_outputs["guidance_context_path"] = os.path.basename(guidance_context_path)
 
         if not gate_passed:
             logger.warning("Quality gate failed: {}", gate_reason)
@@ -2516,10 +2650,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             f"# writer_context.json（Writer 唯一图表上下文）\n{_json_for_prompt(writer_context_payload, 12000)}\n\n"
             f"# FigureBundle（诊断兼容信息，正文图片仍以 writer_context.available_figures 为准）\n{_json_for_prompt(figure_bundle.to_dict(), 8000)}\n\n"
             f"{WriterStage.context_contract_text()}"
-            "请输出完整论文 Markdown。论文中所有具体数值都必须来自 result_registry.json 的 verified_results；"
-            "若没有对应 id 或结果处于 blocked_results，禁止写入具体数值。"
+            f"# guidance_context.json\n{_json_for_prompt(guidance_context, 14000)}\n\n"
+            "请输出完整 Markdown 建模指导方案，而不是可直接提交的论文。"
+            "必须包含：可信度摘要、问题理解、数据与来源、参数与来源表、模型选择理由、分问题建模步骤、必要计算结果、图表说明、复核与稳健性、阻断项与待确认项、论文转化建议、可复现附件说明。"
+            "所有具体数值必须来自 result_registry.json 的 verified_results；所有 blocked/partial/unverified 项必须明确披露。"
+            "参数来源不明时只能标记为待确认或假设，禁止写成题设事实。"
+            "guidance_context.recommended_structure 是方案的最低结构要求；可以合并相近章节，但不得删除可信度、参数来源、必要计算结果、阻断项和复现说明。"
             "writer_context.explanatory_figures 必须优先插入到模型建立、符号说明、几何关系或算法流程章节。"
-            "writer_context.result_figures 应插入结果分析章节。"
+            "writer_context.result_figures 应插入必要计算结果、结果分析或复核说明章节。"
             "writer_context.required_images 中列出的图片路径必须在 Markdown 中逐一出现。"
             "正文只允许引用 writer_context.available_figures；禁止引用 FigureBundle.diagnostic_figures。"
             "当图的 semantic_role 为 data_overview 时，图注和正文只能描述数值变量分布/相关性概览，"
@@ -2533,12 +2671,21 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             writer=writer,
             prompt=final_prompt,
             available_images=writer_allowed_images,
-            sub_title="论文组织与润色",
+            sub_title="方案组织",
             budget=budget,
         )
         if not final_paper.strip():
             raise ValueError("最终写作阶段返回空内容")
-        yield _message("writing", _preview(final_paper), section="论文组织与润色")
+        yield _message("writing", _preview(final_paper), section="方案组织")
+
+        guidance_audit_report = _build_guidance_audit_report(
+            guidance_markdown=final_paper,
+            guidance_context=guidance_context,
+            result_registry=result_registry,
+        )
+        guidance_audit_path = _write_guidance_audit_report(work_dir, guidance_audit_report)
+        stage_outputs["guidance_audit_report"] = guidance_audit_report
+        stage_outputs["guidance_audit_report_path"] = os.path.basename(guidance_audit_path)
 
         audit_report = ""
         audit_report_machine: dict[str, object] = {"status": "SKIP", "blocks": []}
@@ -2557,7 +2704,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
 
         max_audit_rounds = 2 if workflow_mode == "strict" else 0
         for audit_round in range(1, max_audit_rounds + 1):
-            draft_paper_path = os.path.join(work_dir, f"final_paper_audit_round_{audit_round}.md")
+            draft_paper_path = os.path.join(work_dir, f"guidance_audit_round_{audit_round}.md")
             with open(draft_paper_path, "w", encoding="utf-8") as f:
                 f.write(normalize_math_markdown(final_paper))
 
@@ -2576,9 +2723,9 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"## 求解结构化结果文件\n{', '.join(solver_result.structured_result_files) if solver_result.structured_result_files else '无'}\n\n"
                 f"## 数值复核结构化结果文件\n{', '.join(verification_result.structured_result_files) if verification_result.structured_result_files else '无'}\n\n"
                 f"## 当前工作目录文件\n{get_current_files(work_dir)}\n\n"
-                f"## 最终论文路径\n{os.path.basename(draft_paper_path)}\n\n"
+                f"## 最终指导方案路径\n{os.path.basename(draft_paper_path)}\n\n"
                 f"## 自动抽取审计清单\n{os.path.basename(audit_manifest_path)}\n\n"
-                "请用代码读取最终论文和审计清单，完成公式抽取、表格数值抽取、关键结果复算、论文值与复算值比对、题设参数检查、公式编号/符号/单位检查、参考文献占位或虚构检查。"
+                "请用代码读取最终指导方案和审计清单，完成公式抽取、表格数值抽取、关键结果复算、方案值与复算值比对、题设参数检查、公式编号/符号/单位检查、参考文献占位或虚构检查。"
                 "若发现阻断项，必须明确写出返工路由：modeling、solver、writer。"
                 "同时必须在工作目录写出 paper_audit_report.json，格式为 {status, blocks[]}，每个 block 至少包含 type、location、route、severity、fix。"
             )
@@ -2611,8 +2758,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
                 f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 12000)}\n\n"
                 f"# 可交付终审结构化结果文件\n{', '.join(delivery_audit_result.structured_result_files) if delivery_audit_result.structured_result_files else '无'}\n\n"
-                f"# 最终论文\n{final_paper}\n\n"
-                "请检查最终论文是否完整吸收前序审查意见与可交付终审复核结论，是否仍存在无证据结论、符号不一致、图文不一致、复核失败项被写入正文或无法验证的断言。"
+                f"# 最终指导方案\n{final_paper}\n\n"
+                "请检查最终指导方案是否完整吸收前序审查意见与可交付终审复核结论，是否仍存在无证据结论、符号不一致、图文不一致、复核失败项被写入正文或无法验证的断言。"
             )
             audit_report = await _run_text_agent(
                 task_id,
@@ -2653,7 +2800,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 modeling_repair_prompt = (
                     f"# 原题\n{question}\n\n"
                     f"# 当前建模方案\n{stage_outputs['modeling']}\n\n"
-                    f"# 当前最终论文\n{final_paper}\n\n"
+                    f"# 当前最终指导方案\n{final_paper}\n\n"
                     f"# paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 10000)}\n\n"
                     f"# 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
                     f"# 最终审查报告\n{audit_report}\n\n"
@@ -2710,7 +2857,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     f"## 题目拆解\n{stage_outputs['breakdown']}\n\n"
                     f"## 建模方案\n{stage_outputs['modeling']}\n\n"
                     f"## 模型审查意见\n{stage_outputs['review']}\n\n"
-                    f"## 上一版最终论文\n{final_paper}\n\n"
+                    f"## 上一版最终指导方案\n{final_paper}\n\n"
                     f"## problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
                     f"## paper_audit_report.json\n{_json_for_prompt(audit_report_machine, 10000)}\n\n"
                     f"## 可交付终审复核报告\n{delivery_audit_result.coder_response}\n\n"
@@ -2845,7 +2992,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                     stage_outputs["charts"] = chart_result.model_dump()
                     yield _message("charts", _preview(chart_result.coder_response), section=f"终审回退图表一致性第{audit_round}轮")
 
-            yield _progress(task_id, "writing", 0.985, f"论文组织与润色 Agent 正在根据第{audit_round}轮终审回退重写全文", current_subtask="终审回退-写作")
+            yield _progress(task_id, "writing", 0.985, f"方案组织 Agent 正在根据第{audit_round}轮终审回退重写全文", current_subtask="终审回退-方案组织")
             structured_result_files_for_figures = _unique_structured_result_files(
                 solver_result.structured_result_files,
                 verification_result.structured_result_files,
@@ -2954,7 +3101,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             revision_prompt = (
                 f"# 原题\n{question}\n\n"
                 f"# Workflow mode writing policy\n{_writer_mode_policy(workflow_mode)}\n\n"
-                f"# 已生成论文\n{final_paper}\n\n"
+                f"# 已生成指导方案\n{final_paper}\n\n"
                 f"# problem_facts.json\n{_json_for_prompt(problem_facts, 7000)}\n\n"
                 f"# result_registry.json\n{_json_for_prompt(_compact_result_registry_for_prompt(result_registry), 10000)}\n\n"
                 f"# answer_table_plan.json\n{_json_for_prompt(stage_outputs.get('answer_plan', {}), 8000)}\n\n"
@@ -3002,6 +3149,25 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["writer_context"] = writer_context_payload
         stage_outputs["writer_context_path"] = writer_context_snapshot.path
         stage_outputs["writer_available_images"] = writer_allowed_images
+        guidance_context = _build_guidance_context(
+            result_registry=result_registry,
+            answer_plan=stage_outputs.get("answer_plan", {}) if isinstance(stage_outputs.get("answer_plan"), dict) else {},
+            writer_context=writer_context_payload,
+            figure_bundle=figure_bundle.to_dict(),
+            problem_facts=problem_facts,
+            workflow_mode=workflow_mode,
+        )
+        guidance_context_path = _write_guidance_context(work_dir, guidance_context)
+        guidance_audit_report = _build_guidance_audit_report(
+            guidance_markdown=final_paper,
+            guidance_context=guidance_context,
+            result_registry=result_registry,
+        )
+        guidance_audit_path = _write_guidance_audit_report(work_dir, guidance_audit_report)
+        stage_outputs["guidance_context"] = guidance_context
+        stage_outputs["guidance_context_path"] = os.path.basename(guidance_context_path)
+        stage_outputs["guidance_audit_report"] = guidance_audit_report
+        stage_outputs["guidance_audit_report_path"] = os.path.basename(guidance_audit_path)
 
         finalized_output = await FinalizerStage.finalize_success(
             work_dir=work_dir,
@@ -3013,10 +3179,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             result_payload={
                 "question": question,
                 "data_context": data_context,
+                "primary_artifact_type": "guidance",
+                "guidance_context": guidance_context,
+                "guidance_audit_report": guidance_audit_report,
                 "result_coverage": result_registry.get("summary", {}),
                 "stages": stage_outputs,
             },
             code_interpreter=code_interpreter,
+            artifact_basename="guidance",
         )
         paper_path = finalized_output.paper_path
         docx_path = finalized_output.docx_path
@@ -3035,7 +3205,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             docx_path=docx_path,
             notebook_path=notebook_path,
         )
-        yield _progress(task_id, "done", 1.0, "写作任务完成", status="completed")
+        yield _progress(task_id, "done", 1.0, "方案任务完成", status="completed")
 
     except Exception as exc:
         logger.exception(f"写作工作流执行失败: {exc}")

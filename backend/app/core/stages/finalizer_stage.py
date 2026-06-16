@@ -37,6 +37,7 @@ class FinalizerStage:
         required_images: list[str] | None,
         result_payload: dict[str, Any],
         code_interpreter=None,
+        artifact_basename: str = "res",
     ) -> FinalizedOutput:
         paper_path, docx_path, notebook_path = await DocumentFinalizer.finalize_async(
             work_dir=str(work_dir),
@@ -47,6 +48,7 @@ class FinalizerStage:
             required_images=required_images,
             result_payload=result_payload,
             code_interpreter=code_interpreter,
+            artifact_basename=artifact_basename,
         )
         bundle = build_verified_output_bundle(
             status="passed",

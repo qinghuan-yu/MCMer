@@ -32,10 +32,10 @@
 
         <div v-if="result" class="result-card">
           <div class="result-icon">{{ taskType === 'polish' ? '✨' : '🎉' }}</div>
-          <h3>{{ taskType === 'polish' ? '润色完成' : '写作完成' }}</h3>
+          <h3>{{ taskType === 'polish' ? '润色完成' : '方案完成' }}</h3>
           <div class="result-files">
             <a v-if="result.paper_path" :href="getFileUrl(result.paper_path)" target="_blank" class="file-link">
-              📄 查看论文
+              📄 查看方案
             </a>
             <a v-if="result.docx_path" :href="getFileUrl(result.docx_path)" target="_blank" class="file-link">
               🧾 下载 DOCX
@@ -67,7 +67,7 @@
           </div>
           <div class="monitor-row">
             <span class="label">任务类型</span>
-            <span class="value">{{ taskType === 'polish' ? '论文润色' : '论文写作' }}</span>
+            <span class="value">{{ taskType === 'polish' ? '论文润色' : '方案生成' }}</span>
           </div>
         </div>
 
@@ -182,7 +182,7 @@ const agentMetaByTaskType: Record<TaskType, AgentMeta[]> = {
     { id: 'solve', label: '算法求解', icon: '💻', color: 'rgba(36, 78, 168, 0.22)' },
     { id: 'analysis', label: '结果验证', icon: '📈', color: 'rgba(5, 150, 105, 0.22)' },
     { id: 'charts', label: '图表一致性', icon: '📊', color: 'rgba(124, 58, 237, 0.18)' },
-    { id: 'writing', label: '论文组织', icon: '📝', color: 'rgba(22, 163, 74, 0.18)' },
+    { id: 'writing', label: '方案组织', icon: '📝', color: 'rgba(22, 163, 74, 0.18)' },
     { id: 'final_audit', label: '最终审查', icon: '🛡️', color: 'rgba(99, 102, 241, 0.18)' },
   ],
   polish: [
@@ -270,7 +270,7 @@ function normalizeMessage(msg: RuntimeMessage, index: number, inferredAgent?: st
 
   let text = msg.content || msg.data?.message || msg.message || ''
   if (kind === 'result' && msg.data?.paper_path) {
-    text = props.taskType === 'polish' ? '润色结果已生成，可查看论文与 Notebook。' : '项目结果已生成，可查看论文与 Notebook。'
+    text = props.taskType === 'polish' ? '润色结果已生成，可查看论文与 Notebook。' : '建模指导方案已生成，可查看方案与 Notebook。'
   }
   if (kind === 'error' && msg.data?.error_message) {
     text = msg.data.error_message
@@ -304,7 +304,7 @@ function normalizeAgentKey(stage: string, section: string, taskType: TaskType): 
     if (stageKey === 'solve' || sectionText.includes('算法求解') || sectionText.includes('算法与编程求解') || sectionText.includes('终审回退算法求解')) return 'solve'
     if (stageKey === 'verification' || stageKey === 'analysis' || sectionText.includes('数值复核') || sectionText.includes('结果分析与验证') || sectionText.includes('终审回退数值复核')) return 'analysis'
     if (stageKey === 'charts' || sectionText.includes('图表与一致性')) return 'charts'
-    if (stageKey === 'writing' || sectionText.includes('论文组织与润色') || sectionText.includes('论文撰写') || sectionText.includes('审查后修订')) return 'writing'
+    if (stageKey === 'writing' || sectionText.includes('方案组织') || sectionText.includes('论文组织与润色') || sectionText.includes('论文撰写') || sectionText.includes('审查后修订')) return 'writing'
     if (stageKey === 'delivery_audit' || stageKey === 'final_audit' || sectionText.includes('可交付终审复核') || sectionText.includes('最终审查')) return 'final_audit'
     return 'all'
   }
@@ -761,5 +761,179 @@ watch(
 .action-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+@media (max-width: 1180px) {
+  .chat-container {
+    height: auto;
+    min-height: calc(100dvh - 132px);
+  }
+
+  .runtime-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .messages-list {
+    max-height: min(58dvh, 620px);
+  }
+
+  .monitor-panel {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .agent-overview {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 14px;
+    scrollbar-gutter: auto;
+  }
+
+  .agent-card {
+    flex: 0 0 168px;
+  }
+
+  .timeline-list {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .chat-container {
+    min-height: calc(100dvh - 126px);
+  }
+
+  .progress-section {
+    margin-bottom: 12px;
+  }
+
+  .runtime-layout {
+    gap: 12px;
+  }
+
+  .messages-list {
+    max-height: none;
+    min-height: 360px;
+    padding: 12px;
+    gap: 10px;
+    border-radius: 10px;
+  }
+
+  .message {
+    gap: 10px;
+    padding: 12px;
+    border-radius: 10px;
+  }
+
+  .message-icon {
+    width: 30px;
+    height: 30px;
+    font-size: 1rem;
+  }
+
+  .message-meta {
+    gap: 6px;
+  }
+
+  .message-agent,
+  .message-section,
+  .message-progress {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .monitor-title,
+  .timeline-title,
+  .monitor-current {
+    padding-inline: 12px;
+  }
+
+  .monitor-row {
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .monitor-row .value {
+    text-align: left;
+  }
+
+  .agent-overview {
+    grid-template-columns: none;
+    padding: 10px 12px 12px;
+  }
+
+  .agent-card {
+    flex-basis: 146px;
+    padding: 9px;
+  }
+
+  .timeline-list {
+    max-height: 300px;
+    padding-inline: 10px;
+  }
+
+  .timeline-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .result-card {
+    padding: 18px 14px;
+  }
+
+  .result-icon {
+    font-size: 2.2rem;
+  }
+
+  .file-link {
+    width: 100%;
+    text-align: center;
+  }
+
+  .file-path {
+    overflow-wrap: anywhere;
+  }
+
+  .actions-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 8;
+    margin: 0 -16px -28px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: rgba(248, 248, 246, 0.94);
+    backdrop-filter: blur(10px);
+    flex-wrap: wrap;
+  }
+
+  .action-btn {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 430px) {
+  .messages-list {
+    min-height: 320px;
+  }
+
+  .message {
+    flex-direction: column;
+  }
+
+  .message-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .agent-card {
+    flex-basis: 132px;
+  }
+
+  .actions-bar {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
 }
 </style>

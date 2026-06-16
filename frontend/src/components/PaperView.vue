@@ -4,14 +4,14 @@
     <div class="paper-header">
       <button class="back-btn" @click="$emit('back')">← 返回历史</button>
       <div class="paper-info">
-        <span class="paper-title">项目论文</span>
+        <span class="paper-title">建模指导方案</span>
         <span v-if="paperVersion > 1" class="version-badge">
           v{{ paperVersion }}
         </span>
       </div>
       <div class="header-actions">
         <button class="btn-revise" @click="showRevisePanel = !showRevisePanel">
-          ✏️ 修订论文
+          ✏️ 修订方案
         </button>
       </div>
     </div>
@@ -19,7 +19,7 @@
     <!-- 加载 -->
     <div v-if="loading" class="loading-state">
       <div class="spinner"></div>
-      <span>加载论文...</span>
+      <span>加载方案...</span>
     </div>
 
     <!-- 错误 -->
@@ -34,7 +34,7 @@
       <!-- 左侧：论文预览 -->
       <div class="paper-preview">
         <div class="paper-toolbar">
-          <span class="section-label">📄 论文预览</span>
+          <span class="section-label">📄 方案预览</span>
           <div class="version-selector" v-if="versions.length > 1">
             <label>版本:</label>
             <select v-model="selectedVersion" @change="loadVersion">
@@ -62,7 +62,7 @@
         <label class="input-label">你的修改建议</label>
         <textarea
           v-model="feedback"
-          placeholder="请描述你希望如何修改论文..."
+          placeholder="请描述你希望如何修改方案..."
           rows="10"
           class="revise-textarea"
         ></textarea>
@@ -507,5 +507,146 @@ onMounted(() => {
   border-top-color: white;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+@media (max-width: 1080px) {
+  .paper-container {
+    height: auto;
+    min-height: calc(100dvh - 132px);
+  }
+
+  .paper-layout {
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .paper-preview {
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .paper-content {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .revise-panel {
+    width: 100%;
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 720px) {
+  .paper-container {
+    min-height: calc(100dvh - 126px);
+  }
+
+  .paper-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 0;
+  }
+
+  .paper-info {
+    order: -1;
+    justify-content: space-between;
+  }
+
+  .header-actions {
+    display: grid;
+  }
+
+  .back-btn,
+  .btn-revise {
+    min-height: 42px;
+    border-radius: 10px;
+  }
+
+  .back-btn {
+    border: 1px solid var(--border);
+    background: #ffffff;
+  }
+
+  .paper-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .version-selector {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .version-selector select {
+    min-height: 38px;
+  }
+
+  .paper-content {
+    padding: 18px 14px;
+    border-radius: 10px;
+    font-size: 0.95rem;
+    line-height: 1.72;
+  }
+
+  .markdown-body :deep(h1) {
+    font-size: 1.35rem;
+  }
+
+  .markdown-body :deep(h2) {
+    font-size: 1.16rem;
+  }
+
+  .markdown-body :deep(h3) {
+    font-size: 1.02rem;
+  }
+
+  .markdown-body :deep(table) {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .markdown-body :deep(th),
+  .markdown-body :deep(td) {
+    padding: 7px 9px;
+  }
+
+  .markdown-body :deep(pre) {
+    padding: 12px;
+  }
+
+  .revise-panel {
+    padding: 16px;
+    border-radius: 10px;
+  }
+
+  .revise-panel-header h3 {
+    font-size: 1rem;
+  }
+
+  .revise-textarea {
+    min-height: 180px;
+  }
+
+  .submit-revise-btn {
+    min-height: 46px;
+  }
+}
+
+@media (max-width: 430px) {
+  .paper-content {
+    padding: 14px 12px;
+  }
+
+  .paper-title {
+    overflow-wrap: anywhere;
+  }
+
+  .revise-hints {
+    display: none;
+  }
 }
 </style>

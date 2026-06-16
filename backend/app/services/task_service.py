@@ -255,6 +255,7 @@ class TaskManager:
         if task_id in self._active_tasks:
             self._active_tasks[task_id]["status"] = status.value
             self._save_task_info(task_id, self._active_tasks[task_id])
+
         else:
             self._save_task_info(task_id, task)
 
@@ -343,6 +344,10 @@ class TaskManager:
             self._active_tasks[task_id]["paper_path"] = paper_path
             self._save_task_info(task_id, self._active_tasks[task_id])
 
+    def _primary_markdown_path(self, task_dir: Path) -> Path:
+        guidance_path = task_dir / "guidance.md"
+        return guidance_path if guidance_path.exists() else task_dir / "res.md"
+
     # ============================================================
     # 历史任务管理
     # ============================================================
@@ -363,7 +368,8 @@ class TaskManager:
             if not info_path.exists():
                 continue
 
-            paper_path = task_dir / "res.md"
+            paper_path = self._primary_markdown_path(task_dir)
+            guidance_path = task_dir / "guidance.md"
 
             task_info = {}
             try:
@@ -393,6 +399,7 @@ class TaskManager:
                 "workflow_mode": task_info.get("workflow_mode", "standard"),
                 "created_at": task_info.get("created_at", ""),
                 "has_paper": has_paper,
+                "has_guidance": guidance_path.exists(),
                 "has_notebook": (task_dir / "notebook.ipynb").exists(),
                 "revision_count": len(revisions),
                 "is_revision": task_info.get("is_revision", False),
@@ -413,7 +420,9 @@ class TaskManager:
                     "task_type": info.get("task_type", "writing"),
                     "workflow_mode": info.get("workflow_mode", "standard"),
                     "created_at": info.get("created_at", ""),
-                    "has_paper": os.path.exists(os.path.join(info["work_dir"], "res.md")),
+                    "has_paper": os.path.exists(os.path.join(info["work_dir"], "guidance.md"))
+                    or os.path.exists(os.path.join(info["work_dir"], "res.md")),
+                    "has_guidance": os.path.exists(os.path.join(info["work_dir"], "guidance.md")),
                     "has_notebook": os.path.exists(os.path.join(info["work_dir"], "notebook.ipynb")),
                     "revision_count": 0,
                     "is_revision": info.get("is_revision", False),
@@ -431,7 +440,8 @@ class TaskManager:
         if version > 0:
             paper_path = os.path.join(task_dir, f"res_v{version}.md")
         else:
-            paper_path = os.path.join(task_dir, "res.md")
+            guidance_path = os.path.join(task_dir, "guidance.md")
+            paper_path = guidance_path if os.path.exists(guidance_path) else os.path.join(task_dir, "res.md")
 
         if os.path.exists(paper_path):
             with open(paper_path, "r", encoding="utf-8") as f:
