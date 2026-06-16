@@ -927,3 +927,247 @@ guidance_writer prompt
 ```
 
 这一刀能最快验证新方向是否成立，同时不会过早陷入完整 schema 设计。只要这条 slice 跑通，就可以进入参数来源和答案槽位的深水区。
+
+## 21. 2026-06-16 已落地基线
+
+`guider` 分支已经完成第一条 vertical slice。后续计划不再从零开始，而应基于以下事实继续推进。
+
+### 21.1 已完成能力
+
+- 已新建并推送 `guider` 分支。
+- 主写作链路已从“论文整合”切换为“建模指导方案整合”。
+- `DocumentFinalizer` 已支持 `artifact_basename="guidance"`，默认写出：
+  - `guidance.md`
+  - `guidance.docx`
+  - 兼容别名 `res.md`
+  - 兼容别名 `res.docx`
+- 写作流程已生成简化版：
+  - `guidance_context.json`
+  - `guidance_audit_report.json`
+- `guidance_writer` prompt 已建立，并要求：
+  - 不直接产出可提交论文。
+  - 必须包含参数与来源表。
+  - 必须披露 blocked / partial / unverified 项。
+  - 具体数值必须来自 `result_registry.json` 的 verified results。
+- 严格模式中的 delivery audit / final audit 已覆盖为“指导方案审计”口径。
+- 历史任务读取已优先使用 `guidance.md`，再回退到 `res.md`。
+- 前端主入口、运行页、历史页、预览页已完成第一轮“方案”文案重锚。
+- 前端已完成第一轮响应式修复，覆盖手机、平板和窄屏电脑。
+- 已新增导出兼容测试，验证 `guidance.md` 与 legacy `res.md` 同步存在。
+
+### 21.2 已验证命令
+
+```text
+python -m compileall backend/app
+python -m pytest backend/tests
+vue-tsc --noEmit
+vite build
+```
+
+截至当前基线，后端测试为 `139 passed`。
+
+### 21.3 当前仍保留的兼容债务
+
+- 代码内部仍存在 `paper_*`、`PaperView`、`final_paper` 等历史命名。
+- `paper_audit_report.json` 仍作为严格审计兼容文件存在。
+- `guidance_audit_report.json` 目前是轻量审计，不足以支撑“极高可信度”。
+- 参数来源仍未成为一等 artifact，当前主要依赖 Writer 从上下文中组织。
+- 答案槽位完整性仍未形成强门禁。
+- 尚未用真实题目跑完整端到端质量验收。
+
+### 21.4 当前进度判断
+
+第一阶段产品化进度约为 35% 到 40%。
+
+这个比例的含义是：
+
+- 技术方向已经证明可行。
+- 用户可见主链路已切换。
+- 基础导出和兼容已站住。
+- 但“极高可信度”的核心，即参数来源、答案槽位、强审计、真实题型回归，还未完成。
+
+## 22. 下一阶段优先级重排
+
+从现在开始，优先级应从“能产出方案”转向“方案凭什么可信”。
+
+### P0：必须优先完成
+
+1. `parameter_registry.json`
+   - 目标：所有核心参数都有 `parameter_id`、来源状态、单位、取值、估计方法和可信状态。
+   - 原因：参数来源是指导方案可信度的最短板。
+
+2. `GuidanceAuditGate`
+   - 目标：机器检查 `guidance.md` 是否引用未登记数字、是否漏披露 blocked 项、是否缺参数来源表。
+   - 原因：只靠 prompt 无法防止 Writer 绕过证据链。
+
+3. `answer_table_plan.json` 强化
+   - 目标：每个题目要求回答的槽位都有状态：verified / partial / blocked / not_required。
+   - 原因：指导方案必须告诉用户哪些问题已经被回答，哪些只是建模路线。
+
+4. 真实题型 fixture
+   - 目标：至少建立 3 个代表性题型的端到端样例。
+   - 原因：没有真实题型回归，无法判断方案质量是否只是 prompt 幻觉。
+
+### P1：紧随其后
+
+1. `source_registry.json`
+   - 将题设、上传文件、人工输入和派生数据统一登记。
+
+2. 前端可信度面板
+   - 展示 verified 数、blocked 数、参数覆盖率、答案槽位覆盖率和审计状态。
+
+3. `verified_guidance_bundle.json`
+   - 把所有关键 artifact 打包成一个机器可读的交付摘要。
+
+4. 内部命名迁移
+   - 分批把 `paper_*` 命名迁移为中性命名或 `guidance_*` 命名。
+
+### P2：延后处理
+
+1. 论文派生 Writer。
+2. 在线参考来源自动检索。
+3. 多用户协作批注。
+4. 深度语义图文审计。
+
+## 23. 下一轮开发任务切片
+
+### Slice A：Parameter Registry MVP
+
+目标：先让参数来源成为机器可读 artifact。
+
+交付物：
+
+- 新增 `parameter_registry.json` builder。
+- 从以下来源抽取参数候选：
+  - 题设锁定参数。
+  - 建模假设中的参数。
+  - 求解阶段 structured result 中出现的参数。
+  - Writer context 中声明的关键符号。
+- 每个参数至少包含：
+  - `id`
+  - `symbol`
+  - `name`
+  - `meaning`
+  - `unit`
+  - `value`
+  - `source_type`
+  - `source_ref`
+  - `trust_status`
+  - `linked_result_ids`
+  - `notes`
+- `guidance_context.json` 中加入 parameter registry 摘要。
+- `guidance.md` 中参数表必须从 registry 派生，而不是由 Writer 自由发挥。
+
+验收标准：
+
+- 没有 parameter registry 时，方案状态最多只能是 `partial`。
+- 出现具体参数取值但没有 `parameter_id` 时，审计必须 BLOCK。
+- 单元测试覆盖 source_locked、estimated、assumed、blocked 四类参数。
+
+### Slice B：GuidanceAuditGate MVP
+
+目标：把轻量审计升级为明确门禁。
+
+交付物：
+
+- 新增或扩展 `guidance_audit_report.json` 生成逻辑。
+- 检查项至少包括：
+  - required sections 是否齐全。
+  - 参数表是否存在。
+  - 参数表是否覆盖 `parameter_registry.json` 中所有 core 参数。
+  - `result_registry.blocked_results` 是否在正文中披露。
+  - `verified_results` 中的关键结果是否有正文引用。
+  - Markdown 图片是否都在 writer whitelist 中。
+  - 是否出现常见占位参考文献。
+- 输出 status：
+  - `PASS`
+  - `PARTIAL`
+  - `BLOCK`
+
+验收标准：
+
+- `BLOCK` 时最终 task result 必须包含阻断摘要。
+- `PARTIAL` 时正文必须出现“不确定性/待确认项”。
+- 至少 8 个 artifact-level tests。
+
+### Slice C：Answer Slot Completion Gate
+
+目标：让方案回答“题目要什么，当前完成到哪里”。
+
+交付物：
+
+- 扩展 `answer_table_plan.json`。
+- 每个 slot 必须有：
+  - `id`
+  - `subproblem_id`
+  - `required_output`
+  - `expected_format`
+  - `status`
+  - `filled_by_result_id`
+  - `blocking_reason`
+- 在 `guidance_context.json` 中加入 answer slot summary。
+- 在 `guidance.md` 中加入“答案槽位覆盖表”。
+
+验收标准：
+
+- required slot 未填充时不得给 overall ready。
+- filled slot 指向 blocked result 时必须 BLOCK。
+- slot 数量与问题拆解 subquestions 数量至少有可解释映射。
+
+### Slice D：Frontend Trust Panel
+
+目标：让用户一眼看出方案可信度，而不是只看到一个 Markdown。
+
+交付物：
+
+- 方案结果页新增可信度摘要区域。
+- 展示：
+  - audit status。
+  - verified result count。
+  - blocked result count。
+  - parameter coverage。
+  - answer slot coverage。
+  - required confirmations。
+- 历史列表显示 guidance readiness badge。
+- 手机端保持单列可读。
+
+验收标准：
+
+- 390px、768px、1024px 无横向滚动。
+- BLOCK/PARTIAL/PASS 三种状态视觉区分明确。
+- 旧任务没有 guidance metadata 时显示 legacy 状态，不报错。
+
+## 24. 极高可信度验收矩阵
+
+后续每一轮都应使用以下矩阵判断是否真的更可信。
+
+| 维度 | 最低要求 | 高可信要求 | 极高可信要求 |
+| --- | --- | --- | --- |
+| 参数来源 | 参数表存在 | 每个核心参数有来源状态 | 每个参数可追溯到题设、数据、估计代码或人工确认项 |
+| 数值结果 | verified results 可进入正文 | 所有关键数字绑定 result_id | 正文数字、表格数字、图注数字可自动反查 |
+| 答案完整性 | 能回答主要问题 | 每个子问题有 answer slot 状态 | required slot 未满足时自动降级或 BLOCK |
+| 图表可信度 | 图片能正常显示 | 图表绑定 source data 和 result ids | 图文语义、图注结论与注册结果一致 |
+| blocked 披露 | 审计中出现 | 正文显式披露 | blocked 项无法被 Writer 改写成确定结论 |
+| 可复现性 | 有 notebook | notebook 与结构化结果对应 | 关键结果可由独立复算复核 |
+| 用户可执行性 | 有建模步骤 | 步骤包含输入、公式、参数、输出 | 用户无需猜测即可复刻方案或知道缺什么 |
+| 论文转化 | 有建议段 | 区分可直接写入和需确认内容 | 所有可写入内容都有证据等级 |
+
+极高可信度不是“文字更像专家”，而是“每一句关键话都能追溯、复核、降级或阻断”。
+
+## 25. 下一次提交建议
+
+下一次提交建议只做一个主题：
+
+```text
+Add parameter registry and guidance audit gate
+```
+
+建议变更范围：
+
+- `backend/app/utils/common_utils.py` 或新的 registry builder 模块。
+- `backend/app/core/workflow.py`
+- `backend/app/core/prompts.py`
+- `backend/tests/*`
+- 前端只在需要展示新增 metadata 时少量跟进。
+
+不建议同一提交里继续大改响应式布局、论文派生能力或在线引用检索。下一刀要窄，要深，要让“可信”这件事变硬。
