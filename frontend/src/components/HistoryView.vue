@@ -155,7 +155,7 @@ interface HistoryTask {
   task_id: string
   question: string
   status: string
-  task_type: 'writing' | 'polish'
+  task_type: 'guidance' | 'writing' | 'polish'
   workflow_mode?: WorkflowMode
   created_at: string
   has_paper: boolean

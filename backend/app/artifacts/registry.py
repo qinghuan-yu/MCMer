@@ -302,6 +302,8 @@ class ArtifactRegistry:
         required_requests = [
             item for item in requests
             if bool(item.get("required", True))
+            and str(item.get("status") or "") != "blocked"
+            and not str(item.get("blocked_reason") or "").strip()
         ]
         recommended_requests = [
             item for item in requests

@@ -4,7 +4,7 @@ import { resolve } from 'path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const backendTarget = env.VITE_BACKEND_URL || 'http://127.0.0.1:8000'
+  const backendTarget = env.VITE_BACKEND_URL || 'http://127.0.0.1:8010'
   const backendWsTarget = backendTarget.replace(/^http/i, 'ws')
 
   return {

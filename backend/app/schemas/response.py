@@ -3,6 +3,7 @@
 """
 from typing import Optional, Any
 from pydantic import BaseModel
+from pydantic import model_validator
 
 
 class SystemMessage(BaseModel):
@@ -44,6 +45,9 @@ class TaskResult(BaseModel):
     task_id: str
     status: str
     task_type: str = "writing"
+    primary_artifact_type: str = "paper"
+    markdown_path: str = ""
+    guidance_path: str = ""
     paper_path: str = ""
     docx_path: str = ""
     notebook_path: str = ""
@@ -52,6 +56,20 @@ class TaskResult(BaseModel):
     error_code: str = ""
     error_type: str = ""
     error_details: Optional[Any] = None
+    audit_status: str = ""
+    audit_summary: str = ""
+    audit_blocks: Optional[Any] = None
+
+    @model_validator(mode="after")
+    def fill_markdown_aliases(self) -> "TaskResult":
+        if not self.markdown_path:
+            self.markdown_path = self.guidance_path or self.paper_path
+        if self.primary_artifact_type == "guidance" and not self.guidance_path:
+            self.guidance_path = self.markdown_path or self.paper_path
+            self.docx_path = ""
+        if not self.paper_path:
+            self.paper_path = self.markdown_path or self.guidance_path
+        return self
 
 
 # ============================================================
@@ -66,6 +84,7 @@ class HistoryTaskInfo(BaseModel):
     task_type: str = "writing"
     created_at: str = ""
     has_paper: bool = False
+    has_guidance: bool = False
     has_notebook: bool = False
     revision_count: int = 0
     is_revision: bool = False
@@ -76,11 +95,18 @@ class PaperContent(BaseModel):
     """论文内容"""
     task_id: str
     question: str = ""
+    primary_artifact_type: str = "paper"
+    markdown_path: str = ""
     paper: Optional[str] = None
+    guidance: Optional[str] = None
     latest_paper: Optional[str] = None
+    latest_guidance: Optional[str] = None
     paper_version: int = 0
     status: str = "unknown"
     created_at: str = ""
+    audit_status: str = ""
+    audit_summary: str = ""
+    audit_blocks: Optional[Any] = None
 
 
 class RevisionRequest(BaseModel):

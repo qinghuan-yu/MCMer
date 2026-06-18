@@ -151,6 +151,7 @@ class DocumentFinalizer:
                 error_code="FINALIZER_TOOL_PROTOCOL_LEAK",
             )
         normalized = normalize_math_markdown(paper_content)
+        normalized = DocumentFinalizer.append_guidance_audit_appendix(normalized, result_payload)
         normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
         DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
@@ -173,10 +174,15 @@ class DocumentFinalizer:
         save_json(result_payload, str(root / "res.json"))
 
         # ── Write markdown and export DOCX ─────────────────────────────
-        docx_ok = finalize_markdown_export(paper_path, normalized, docx_path, allowed_images)
-        if not docx_ok:
-            logger.warning("DOCX export failed for %s", paper_path)
+        if DocumentFinalizer._skip_docx_export(result_payload, safe_basename):
+            Path(paper_path).write_text(normalized, encoding="utf-8")
+            DocumentFinalizer._remove_docx_outputs(root, docx_path)
             docx_path = ""
+        else:
+            docx_ok = finalize_markdown_export(paper_path, normalized, docx_path, allowed_images)
+            if not docx_ok:
+                logger.warning("DOCX export failed for %s", paper_path)
+                docx_path = ""
         DocumentFinalizer._write_compat_aliases(root, safe_basename, paper_path, docx_path)
 
         return paper_path, docx_path, notebook_path
@@ -255,6 +261,7 @@ class DocumentFinalizer:
                 error_code="FINALIZER_TOOL_PROTOCOL_LEAK",
             )
         normalized = normalize_math_markdown(paper_content)
+        normalized = DocumentFinalizer.append_guidance_audit_appendix(normalized, result_payload)
         normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
         DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
         normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
@@ -275,10 +282,15 @@ class DocumentFinalizer:
         save_json(result_payload, str(root / "res.json"))
 
         # ── Write markdown and export DOCX ─────────────────────────────
-        docx_ok = finalize_markdown_export(paper_path, normalized, docx_path, allowed_images)
-        if not docx_ok:
-            logger.warning("DOCX export failed for %s", paper_path)
+        if DocumentFinalizer._skip_docx_export(result_payload, safe_basename):
+            Path(paper_path).write_text(normalized, encoding="utf-8")
+            DocumentFinalizer._remove_docx_outputs(root, docx_path)
             docx_path = ""
+        else:
+            docx_ok = finalize_markdown_export(paper_path, normalized, docx_path, allowed_images)
+            if not docx_ok:
+                logger.warning("DOCX export failed for %s", paper_path)
+                docx_path = ""
         DocumentFinalizer._write_compat_aliases(root, safe_basename, paper_path, docx_path)
 
         return paper_path, docx_path, notebook_path
@@ -292,6 +304,71 @@ class DocumentFinalizer:
         return name
 
     @staticmethod
+    def _skip_docx_export(result_payload: dict[str, Any], artifact_basename: str) -> bool:
+        """Guidance deliverables are Markdown-first and intentionally skip DOCX."""
+        if artifact_basename == "guidance":
+            return True
+        if isinstance(result_payload, dict):
+            return result_payload.get("primary_artifact_type") == "guidance"
+        return False
+
+    @staticmethod
+    def append_guidance_audit_appendix(markdown: str, result_payload: dict[str, Any] | None) -> str:
+        """Append a compact parameter/source table for machine auditability."""
+        if not isinstance(result_payload, dict):
+            return markdown
+        if result_payload.get("primary_artifact_type") != "guidance":
+            return markdown
+        if "机器可审计参数附录" in markdown:
+            return markdown
+
+        guidance_context = result_payload.get("guidance_context")
+        if not isinstance(guidance_context, dict):
+            return markdown
+        parameter_registry = guidance_context.get("parameter_registry")
+        if not isinstance(parameter_registry, dict):
+            return markdown
+        parameters = parameter_registry.get("parameters")
+        if not isinstance(parameters, list) or not parameters:
+            return markdown
+
+        rows = [
+            "\n\n## 机器可审计参数附录\n",
+            "\n| 参数ID | 符号 | 名称 | 取值 | 来源类型 | 来源位置 | 信任状态 | 关联结果 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for parameter in parameters:
+            if not isinstance(parameter, dict):
+                continue
+            rows.append(
+                "| "
+                + " | ".join(
+                    [
+                        DocumentFinalizer._escape_table_cell(parameter.get("id")),
+                        DocumentFinalizer._escape_table_cell(parameter.get("symbol")),
+                        DocumentFinalizer._escape_table_cell(parameter.get("name")),
+                        DocumentFinalizer._escape_table_cell(parameter.get("value")),
+                        DocumentFinalizer._escape_table_cell(parameter.get("source_type")),
+                        DocumentFinalizer._escape_table_cell(parameter.get("source_ref") or parameter.get("source_location")),
+                        DocumentFinalizer._escape_table_cell(parameter.get("trust_status")),
+                        DocumentFinalizer._escape_table_cell(parameter.get("linked_result_ids")),
+                    ]
+                )
+                + " |"
+            )
+        return markdown.rstrip() + "\n" + "\n".join(rows) + "\n"
+
+    @staticmethod
+    def _escape_table_cell(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        else:
+            text = str(value)
+        return text.replace("\n", " ").replace("|", "\\|")
+
+    @staticmethod
     def _write_compat_aliases(root: Path, artifact_basename: str, paper_path: str, docx_path: str) -> None:
         """Keep legacy res.* consumers working while newer tasks use guidance.*."""
         if artifact_basename == "res":
@@ -303,8 +380,23 @@ class DocumentFinalizer:
             shutil.copyfile(paper_path, compat_md)
             if docx_path and Path(docx_path).exists():
                 shutil.copyfile(docx_path, compat_docx)
+            elif compat_docx.exists():
+                compat_docx.unlink()
         except Exception as exc:
             logger.warning("Failed to write legacy res.* aliases for %s: %s", paper_path, exc)
+
+    @staticmethod
+    def _remove_docx_outputs(root: Path, docx_path: str) -> None:
+        """Remove stale DOCX files when an artifact is Markdown-only."""
+        candidates = [root / "res.docx"]
+        if docx_path:
+            candidates.append(Path(docx_path))
+        for candidate in candidates:
+            try:
+                if candidate.exists():
+                    candidate.unlink()
+            except Exception as exc:
+                logger.warning("Failed to remove stale DOCX artifact %s: %s", candidate, exc)
 
     @staticmethod
     def export_failure_report(

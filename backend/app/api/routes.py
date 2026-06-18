@@ -1,9 +1,11 @@
 """REST API 路由"""
 import os
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.services.task_service import task_manager
@@ -93,20 +95,22 @@ async def create_task(req: CreateTaskRequest):
     """创建新的数学建模任务"""
     task_type = (req.task_type or "writing").strip().lower()
     requested_workflow_mode = (req.workflow_mode or DEFAULT_WORKFLOW_MODE).strip().lower()
-    if task_type not in {"writing", "polish"}:
+    if task_type not in {"guidance", "writing", "polish"}:
         raise HTTPException(status_code=400, detail="不支持的任务类型")
     if requested_workflow_mode not in SUPPORTED_WORKFLOW_MODES:
         raise HTTPException(status_code=400, detail="不支持的 workflow_mode")
 
     workflow_mode = normalize_workflow_mode(requested_workflow_mode)
 
-    if task_type == "writing" and not req.question.strip() and not req.expect_files:
+    if task_type in {"guidance", "writing"} and not req.question.strip() and not req.expect_files:
         raise HTTPException(status_code=400, detail="问题不能为空")
 
     if task_type == "polish" and not req.paper_content.strip() and not req.expect_files:
         raise HTTPException(status_code=400, detail="润色任务需要提供论文内容")
 
     default_question = "论文润色任务" if task_type == "polish" else ""
+    if task_type == "writing":
+        task_type = "guidance"
     task_id = task_manager.create_task(
         question=req.question.strip() or default_question,
         task_type=task_type,
@@ -272,11 +276,18 @@ async def get_task_context(task_id: str):
     return PaperContent(
         task_id=ctx["task_id"],
         question=ctx["question"],
+        primary_artifact_type=ctx["primary_artifact_type"],
+        markdown_path=ctx["markdown_path"],
         paper=ctx["paper"],
+        guidance=ctx["guidance"],
         latest_paper=ctx["latest_paper"],
+        latest_guidance=ctx["latest_guidance"],
         paper_version=ctx["paper_version"],
         status=ctx["status"],
         created_at=ctx["created_at"],
+        audit_status=ctx["audit_status"],
+        audit_summary=ctx["audit_summary"],
+        audit_blocks=ctx["audit_blocks"],
     )
 
 
@@ -292,6 +303,24 @@ async def get_paper(task_id: str, version: int = 0):
         "version": version,
         "content": paper,
     }
+
+
+@router.get("/tasks/{task_id}/guidance.md")
+async def download_guidance(task_id: str):
+    """Download the task's primary guidance artifact as Markdown."""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    guidance_path = Path(task.get("work_dir", "")) / "guidance.md"
+    if not guidance_path.is_file():
+        raise HTTPException(status_code=404, detail="指导方案不存在")
+
+    return FileResponse(
+        path=guidance_path,
+        media_type="text/markdown",
+        filename="guidance.md",
+    )
 
 
 # ============================================================

@@ -615,6 +615,34 @@ def test_artifact_registry_marks_solve_spec_figure_requests_fallback(tmp_path: P
     assert registry.protocol_warnings[0]["code"] == "DEPRECATED_SOLVE_SPEC_FIGURE_REQUESTS_FALLBACK"
 
 
+def test_artifact_registry_excludes_blocked_requests_from_required_missing(tmp_path: Path) -> None:
+    from app.artifacts.registry import ArtifactRegistry
+
+    (tmp_path / "figure_plan.json").write_text(
+        json.dumps(
+            {
+                "figure_requests": [
+                    {
+                        "id": "fig_q4_residual_plot",
+                        "required": True,
+                        "status": "blocked",
+                        "blocked_reason": "deterministic renderer unavailable",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    registry = ArtifactRegistry.load(str(tmp_path), structured_result_files=[])
+    bundle = registry.build_figure_bundle()
+
+    assert bundle.required_requests == []
+    assert bundle.missing_requests == []
+    assert bundle.blocked_requests[0]["id"] == "fig_q4_residual_plot"
+
+
 def test_quality_gate_stage_writes_reports_and_trace(tmp_path: Path) -> None:
     class FakeRegistry:
         figure_rejections = []
@@ -783,6 +811,31 @@ def test_figure_recovery_stage_refreshes_registry_after_render(monkeypatch, tmp_
     assert snapshot.report["created_images"] == ["output/fig_q1.png"]
     assert snapshot.chart_images == ["output/existing.png", "output/fig_q1.png"]
     assert snapshot.artifact_valid_images == ["output/fig_q1.png"]
+
+
+def test_figure_recovery_blocks_unrendered_requests_without_llm_repair(tmp_path: Path) -> None:
+    figure_plan = {
+        "figure_requests": [
+            {"id": "fig_q4_residual_plot", "required": True, "semantic_role": "residual_plot"},
+            {"id": "fig_q1_fit", "required": True, "semantic_role": "fitting_curve"},
+        ]
+    }
+
+    updated = FigureRecoveryStage.block_unrendered_requests(
+        work_dir=tmp_path,
+        figure_plan_payload=figure_plan,
+        missing_requests=[
+            {"figure_request_id": "fig_q4_residual_plot", "reason": "missing_residual_columns"},
+        ],
+        reason_prefix="deterministic_renderer_unavailable",
+    )
+
+    requests = {item["id"]: item for item in updated["figure_requests"]}
+    assert requests["fig_q4_residual_plot"]["status"] == "blocked"
+    assert requests["fig_q4_residual_plot"]["required"] is False
+    assert "deterministic_renderer_unavailable" in requests["fig_q4_residual_plot"]["blocked_reason"]
+    assert requests["fig_q1_fit"]["required"] is True
+    assert (tmp_path / "figure_plan.json").exists()
 
 
 def test_figure_recovery_reevaluates_plan_without_mutating_solve_spec(tmp_path: Path) -> None:
@@ -1285,6 +1338,41 @@ def test_renderer_skill_renders_fitting_curve_and_residual_plot(tmp_path: Path) 
     ]
     assert len(result.satisfied) == 2
     assert result.missing == []
+
+
+def test_renderer_skill_sanitizes_dict_subproblem_id_for_output_filename(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "fit.csv").write_text(
+        "x,observed,fitted,residual\n1,1.1,1.0,0.1\n2,1.9,2.0,-0.1\n",
+        encoding="utf-8",
+    )
+
+    result = RendererSkill.render_required_requests(
+        work_dir=str(tmp_path),
+        result_registry={"verified_results": [{"id": "q4_fit", "source_data": ["data/fit.csv"]}]},
+        required_requests=[
+                {
+                    "id": "fig_{'number': '第四题', 'title': '四条支路汇入主路4的交通流量模型'}_residual_plot",
+                    "subproblem_id": {
+                        "number": "第四题",
+                    "title": "四条支路汇入主路4的交通流量模型",
+                    "keywords": ["交通流量模型", "参数估计"],
+                },
+                "required": True,
+                "figure_kind": "result_figure",
+                "semantic_role": "residual_plot",
+                "required_data": ["data/fit.csv"],
+                "linked_result_ids": ["q4_fit"],
+                "expected_content": ["Residual plot"],
+            }
+        ],
+        chart_language="English",
+    )
+
+    assert result.created_images == ["output/fig_problem_4_residual_plot.png"]
+    assert "{" not in result.created_images[0]
+    assert ":" not in result.created_images[0]
+    assert (tmp_path / result.created_images[0]).exists()
 
 
 def test_renderer_skill_renders_spectrum_curve(tmp_path: Path) -> None:

@@ -172,7 +172,7 @@ async function loadPaper(version?: number) {
     question.value = ctx.question || ''
     paperVersion.value = ctx.paper_version || 1
     latestVersion.value = ctx.paper_version || 1
-    paperContent.value = ctx.latest_paper || ctx.paper || ''
+    paperContent.value = ctx.latest_guidance || ctx.guidance || ctx.latest_paper || ctx.paper || ''
 
     // 如果需要加载特定版本
     const ver = version || 1

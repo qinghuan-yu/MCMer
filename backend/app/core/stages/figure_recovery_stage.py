@@ -165,3 +165,44 @@ class FigureRecoveryStage:
             artifact_registry=registry,
             artifact_valid_images=artifact_valid_images,
         )
+
+    @staticmethod
+    def block_unrendered_requests(
+        *,
+        work_dir: str | Path,
+        figure_plan_payload: dict[str, Any],
+        missing_requests: list[dict[str, Any]],
+        reason_prefix: str,
+    ) -> dict[str, Any]:
+        """Mark deterministic-unrenderable figures as blocked instead of invoking LLM repair."""
+        if not isinstance(figure_plan_payload, dict):
+            return {}
+        requests = figure_plan_payload.get("figure_requests", [])
+        if not isinstance(requests, list):
+            return figure_plan_payload
+
+        reasons = {
+            str(item.get("figure_request_id") or "").strip(): str(item.get("reason") or "").strip()
+            for item in missing_requests
+            if isinstance(item, dict) and str(item.get("figure_request_id") or "").strip()
+        }
+        if not reasons:
+            return figure_plan_payload
+
+        updated = dict(figure_plan_payload)
+        updated_requests: list[dict[str, Any]] = []
+        for request in requests:
+            if not isinstance(request, dict):
+                continue
+            item = dict(request)
+            req_id = str(item.get("id") or "").strip()
+            if req_id in reasons:
+                item["required"] = False
+                item["status"] = "blocked"
+                item["blocked_reason"] = f"{reason_prefix}:{reasons[req_id] or 'unrenderable'}"
+                item["repair_route"] = "compute_or_registry_update"
+            updated_requests.append(item)
+        updated["figure_requests"] = updated_requests
+        updated.update(FigureRecoveryStage._plan_counts(updated_requests))
+        FigurePlanBuilder.save(str(work_dir), updated)
+        return updated

@@ -130,7 +130,8 @@ import PaperView from './components/PaperView.vue'
 import SettingsPage from './components/SettingsPage.vue'
 import type { WorkflowMode } from './constants/workflowModes'
 
-type TaskType = 'writing' | 'polish'
+type TaskType = 'guidance' | 'writing' | 'polish'
+type TaskMode = 'writing' | 'polish'
 
 interface RuntimeMessage {
   type: string
@@ -146,10 +147,17 @@ interface RuntimeMessage {
     message: string
     task_type?: TaskType
     current_subtask?: string
+    primary_artifact_type?: string
+    markdown_path?: string
+    guidance_path?: string
     paper_path?: string
+    docx_path?: string
     notebook_path?: string
     work_dir?: string
     error_message?: string
+    audit_status?: string
+    audit_summary?: string
+    audit_blocks?: unknown
   }
 }
 
@@ -176,14 +184,30 @@ interface TaskDetail {
   work_dir: string
 }
 
+interface TaskContext {
+  task_id: string
+  primary_artifact_type?: string
+  markdown_path?: string
+  audit_status?: string
+  audit_summary?: string
+  audit_blocks?: unknown
+}
+
 interface TaskResultPayload {
   task_id: string
   status: string
   task_type: TaskType
+  primary_artifact_type?: string
+  markdown_path?: string
+  guidance_path?: string
   paper_path: string
+  docx_path?: string
   notebook_path: string
   work_dir: string
   error_message?: string
+  audit_status?: string
+  audit_summary?: string
+  audit_blocks?: unknown
 }
 
 interface TaskDraftPayload {
@@ -213,7 +237,7 @@ const selectedTaskId = ref('')
 const runtimeSourceView = ref<'new' | 'history'>('new')
 const reconnectAttempts = ref(0)
 const isStoppingTask = ref(false)
-const selectedTaskType = ref<TaskType>('writing')
+const selectedTaskType = ref<TaskMode>('writing')
 const currentTaskType = ref<TaskType>('writing')
 
 let activeSocket: WebSocket | null = null
@@ -233,13 +257,13 @@ const statusText = computed(() => {
 const pageClass = computed(() => `view-${currentView.value}`)
 const entryOptions = [
   {
-    id: 'writing' as TaskType,
+    id: 'writing' as TaskMode,
     kicker: '8 AGENTS',
     title: '方案生成',
     description: '题目拆解、建模、审查、求解、验证、图表、指导方案与最终审查。',
   },
   {
-    id: 'polish' as TaskType,
+    id: 'polish' as TaskMode,
     kicker: '5 AGENTS',
     title: '文档润色',
     description: '一致性审查、数据复核、图文核对与竞赛化措辞修订。',
@@ -255,7 +279,7 @@ function switchView(view: ViewState) {
 
 function uploadPurposeForFile(taskType: TaskType, file: File) {
   const ext = `.${file.name.split('.').pop()?.toLowerCase() || ''}`
-  if (taskType === 'writing' && ['.pdf', '.docx', '.txt', '.md'].includes(ext)) {
+  if (taskType !== 'polish' && ['.pdf', '.docx', '.txt', '.md'].includes(ext)) {
     return 'question_source'
   }
   if (taskType === 'polish' && ['.zip', '.md', '.pdf', '.docx'].includes(ext)) {
@@ -356,6 +380,12 @@ async function fetchTaskDetail(taskId: string): Promise<TaskDetail | null> {
   return res.json()
 }
 
+async function fetchTaskContext(taskId: string): Promise<TaskContext | null> {
+  const res = await fetch(`/api/history/${taskId}`)
+  if (!res.ok) return null
+  return res.json()
+}
+
 function hydrateRuntimeState(runtimeMessages: RuntimeMessage[]) {
   const progressMessages = runtimeMessages.filter(
     (msg) => msg.type === 'progress' && msg.data
@@ -426,20 +456,29 @@ function startMessagePolling(taskId: string) {
   }, 1200)
 }
 
-function buildFallbackResult(task: HistoryTask, detail: TaskDetail | null) {
+function buildFallbackResult(task: HistoryTask, detail: TaskDetail | null, context: TaskContext | null = null) {
   if (!detail?.work_dir) return null
   if (!task.has_paper && !task.has_notebook && task.status !== 'failed' && task.status !== 'completed') {
     return null
   }
 
+  const primaryArtifactType = context?.primary_artifact_type || (task.has_guidance ? 'guidance' : 'paper')
+  const markdownPath = context?.markdown_path || (task.has_paper ? `${detail.work_dir}\\${primaryArtifactType === 'guidance' ? 'guidance.md' : 'res.md'}` : '')
   return {
     task_id: task.task_id,
     status: detail.status || task.status,
     task_type: detail.task_type || task.task_type,
-    paper_path: task.has_paper ? `${detail.work_dir}\\${task.has_guidance ? 'guidance.md' : 'res.md'}` : '',
+    primary_artifact_type: primaryArtifactType,
+    markdown_path: markdownPath,
+    guidance_path: primaryArtifactType === 'guidance' ? markdownPath : '',
+    paper_path: markdownPath,
+    docx_path: '',
     notebook_path: task.has_notebook ? `${detail.work_dir}\\notebook.ipynb` : '',
     work_dir: detail.work_dir,
     error_message: task.status === 'failed' ? '任务执行失败，请查看过程日志。' : '',
+    audit_status: context?.audit_status || '',
+    audit_summary: context?.audit_summary || '',
+    audit_blocks: context?.audit_blocks,
   } as TaskResultPayload
 }
 
@@ -453,7 +492,7 @@ async function handleSubmit(payload: TaskDraftPayload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         question: payload.question,
-        task_type: payload.taskType,
+        task_type: payload.taskType === 'writing' ? 'guidance' : payload.taskType,
         workflow_mode: payload.workflowMode,
         source_question: payload.sourceQuestion,
         paper_content: payload.paperContent,
@@ -510,8 +549,11 @@ async function handleOpenProject(task: HistoryTask) {
   await syncTaskMessages(task.task_id)
 
   if (!taskResult.value) {
-    const detail = await fetchTaskDetail(task.task_id)
-    taskResult.value = buildFallbackResult(task, detail)
+    const [detail, context] = await Promise.all([
+      fetchTaskDetail(task.task_id),
+      fetchTaskContext(task.task_id),
+    ])
+    taskResult.value = buildFallbackResult(task, detail, context)
   }
 
   if (task.status === 'completed' && progress.value < 1) {

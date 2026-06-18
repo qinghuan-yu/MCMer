@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # --- Service ---
     ENV: str = "DEV"
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 8010
 
     # --- Agent ---
     MAX_CHAT_TURNS: int = 30

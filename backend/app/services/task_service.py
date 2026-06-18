@@ -456,17 +456,36 @@ class TaskManager:
 
         paper = self.load_paper(task_id)
         paper_v2 = self.load_paper(task_id, version=2)
+        task_dir = Path(settings.WORK_DIR) / task_id
+        guidance_path = task_dir / "guidance.md"
+        guidance = guidance_path.read_text(encoding="utf-8") if guidance_path.exists() else None
+        primary_artifact_type = "guidance" if guidance else "paper"
+        markdown_path = str(guidance_path if guidance else self._primary_markdown_path(task_dir))
+        audit_report_path = task_dir / "guidance_audit_report.json"
+        audit_report: dict = {}
+        if audit_report_path.exists():
+            try:
+                audit_report = json.loads(audit_report_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.warning("Failed to read guidance audit report for %s: %s", task_id, exc)
 
         return {
             "task_id": task_id,
             "question": task.get("question", ""),
+            "primary_artifact_type": primary_artifact_type,
+            "markdown_path": markdown_path,
             "paper": paper,
+            "guidance": guidance,
             "latest_paper": paper_v2 or paper,
+            "latest_guidance": guidance or paper_v2 or paper,
             "paper_version": 2 if paper_v2 else (1 if paper else 0),
             "status": task.get("status", "unknown"),
             "task_type": task.get("task_type", "writing"),
             "workflow_mode": task.get("workflow_mode", "standard"),
             "created_at": task.get("created_at", ""),
+            "audit_status": str(audit_report.get("status") or ""),
+            "audit_summary": str(audit_report.get("summary") or ""),
+            "audit_blocks": audit_report.get("blocks", []),
         }
 
     def save_revision(

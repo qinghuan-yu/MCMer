@@ -9,8 +9,13 @@ from typing import AsyncGenerator
 from app.artifacts.contracts import ProblemContract
 from app.artifacts.answer_plan import AnswerPlanBuilder
 from app.artifacts.registry import ArtifactRegistry
-from app.artifacts.exporters import FinalizationValidationError
+from app.artifacts.exporters import DocumentFinalizer, FinalizationValidationError
 from app.artifacts.figure_plan import FigurePlanBuilder
+from app.artifacts.guidance_audit import (
+    build_guidance_audit_report as build_guidance_audit_gate_report,
+    sanitize_unregistered_numeric_claims,
+)
+from app.artifacts.parameter_registry import build_parameter_registry
 from app.artifacts.diagnostics import (
     BudgetReport,
     WorkflowTrace,
@@ -34,6 +39,8 @@ from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import CoderStageBudget, WorkflowBudget, normalize_workflow_mode, resolve_workflow_budget
+from app.guidance.workflow import run_guidance_workflow
+from app.guidance.policy import GUIDANCE_RUNTIME_POLICY
 from app.core.prompts import POLISH_STAGE_SYSTEM_PROMPTS, WRITING_STAGE_SYSTEM_PROMPTS
 from app.schemas.A2A import CoderToWriter
 from app.schemas.enums import FormatOutPut, TaskStatus
@@ -86,18 +93,30 @@ def _build_completed_task_result(
     paper_path: str,
     docx_path: str,
     notebook_path: str,
+    primary_artifact_type: str = "paper",
+    audit_status: str = "",
+    audit_summary: str = "",
+    audit_blocks: list | None = None,
 ) -> dict:
     """Build a normalized completed TaskResult payload."""
+    guidance_path = paper_path if primary_artifact_type == "guidance" else ""
+    if primary_artifact_type == "guidance":
+        docx_path = ""
     return {
         "type": "result",
         "data": TaskResult(
             task_id=task_id,
             status="completed",
             task_type=task_type,
+            primary_artifact_type=primary_artifact_type,
+            guidance_path=guidance_path,
             paper_path=paper_path,
             docx_path=docx_path,
             notebook_path=notebook_path,
             work_dir=work_dir,
+            audit_status=audit_status,
+            audit_summary=audit_summary,
+            audit_blocks=audit_blocks,
         ).model_dump(),
     }
 
@@ -113,14 +132,23 @@ def _build_failed_task_result(
     paper_path: str = "",
     docx_path: str = "",
     notebook_path: str = "",
+    primary_artifact_type: str = "paper",
+    audit_status: str = "",
+    audit_summary: str = "",
+    audit_blocks: list | None = None,
 ) -> dict:
     """Build a normalized failed TaskResult payload."""
+    guidance_path = paper_path if primary_artifact_type == "guidance" else ""
+    if primary_artifact_type == "guidance":
+        docx_path = ""
     return {
         "type": "result",
         "data": TaskResult(
             task_id=task_id,
             status="failed",
             task_type=task_type,
+            primary_artifact_type=primary_artifact_type,
+            guidance_path=guidance_path,
             error_message=error_message,
             error_code=error_code,
             error_type=error_type,
@@ -129,6 +157,9 @@ def _build_failed_task_result(
             docx_path=docx_path,
             notebook_path=notebook_path,
             work_dir=work_dir,
+            audit_status=audit_status,
+            audit_summary=audit_summary,
+            audit_blocks=audit_blocks,
         ).model_dump(),
     }
 
@@ -472,6 +503,7 @@ def _build_guidance_context(
     summary = result_registry.get("summary", {}) if isinstance(result_registry, dict) else {}
     blocked = result_registry.get("blocked_results", []) if isinstance(result_registry, dict) else []
     verified = result_registry.get("verified_results", []) if isinstance(result_registry, dict) else []
+    parameter_registry = build_parameter_registry(result_registry if isinstance(result_registry, dict) else {})
     return {
         "artifact_type": "guidance",
         "workflow_mode": workflow_mode,
@@ -485,12 +517,21 @@ def _build_guidance_context(
         },
         "problem_facts": problem_facts if isinstance(problem_facts, dict) else {},
         "result_registry": result_registry if isinstance(result_registry, dict) else {},
+        "parameter_registry": parameter_registry,
         "answer_table_plan": answer_plan if isinstance(answer_plan, dict) else {},
         "writer_context": writer_context if isinstance(writer_context, dict) else {},
         "figure_bundle": figure_bundle if isinstance(figure_bundle, dict) else {},
         "rules": {
             "primary_output": "guidance.md",
             "legacy_alias": "res.md",
+            "docx_export": False,
+            "compute_first": True,
+            "preferred_compute_artifacts": [
+                "solve_spec.json",
+                "compute_run_manifest.json",
+                "result_registry.json",
+                "parameter_registry.json",
+            ],
             "no_unregistered_numbers": True,
             "must_disclose_blocked_items": True,
             "must_label_assumptions": True,
@@ -518,6 +559,9 @@ def _build_guidance_context(
 def _write_guidance_context(work_dir: str, context: dict[str, object]) -> str:
     path = os.path.join(work_dir, "guidance_context.json")
     save_json(context, path)
+    parameter_registry = context.get("parameter_registry") if isinstance(context, dict) else None
+    if isinstance(parameter_registry, dict):
+        save_json(parameter_registry, os.path.join(work_dir, "parameter_registry.json"))
     return path
 
 
@@ -528,6 +572,14 @@ def _build_guidance_audit_report(
     result_registry: dict[str, object],
 ) -> dict[str, object]:
     """Lightweight first-pass guidance audit; stricter gates come in later phases."""
+    parameter_registry = guidance_context.get("parameter_registry") if isinstance(guidance_context, dict) else None
+    return build_guidance_audit_gate_report(
+        guidance_markdown=guidance_markdown,
+        guidance_context=guidance_context,
+        result_registry=result_registry,
+        parameter_registry=parameter_registry if isinstance(parameter_registry, dict) else None,
+    )
+
     text = guidance_markdown or ""
     lowered = text.lower()
     blocks: list[dict[str, object]] = []
@@ -580,6 +632,38 @@ def _write_guidance_audit_report(work_dir: str, report: dict[str, object]) -> st
     path = os.path.join(work_dir, "guidance_audit_report.json")
     save_json(report, path)
     return path
+
+
+def _audit_and_sanitize_guidance(
+    *,
+    guidance_markdown: str,
+    guidance_context: dict[str, object],
+    result_registry: dict[str, object],
+) -> tuple[str, dict[str, object]]:
+    """Run guidance audit and hide unsupported numbers before final export."""
+    report = _build_guidance_audit_report(
+        guidance_markdown=guidance_markdown,
+        guidance_context=guidance_context,
+        result_registry=result_registry,
+    )
+    block_types = {
+        str(block.get("type"))
+        for block in report.get("blocks", [])
+        if isinstance(block, dict)
+    }
+    if "unregistered_numeric_claim" not in block_types:
+        return guidance_markdown, report
+
+    sanitized = sanitize_unregistered_numeric_claims(guidance_markdown, report)
+    if sanitized == guidance_markdown:
+        return guidance_markdown, report
+
+    sanitized_report = _build_guidance_audit_report(
+        guidance_markdown=sanitized,
+        guidance_context=guidance_context,
+        result_registry=result_registry,
+    )
+    return sanitized, sanitized_report
 
 
 def _registered_generated_files(work_dir: str, structured_result_files: list[str]) -> set[str]:
@@ -1660,7 +1744,8 @@ async def _run_text_agent(
     return response.strip()
 
 
-async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, None]:
+async def _legacy_paper_writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, None]:
+    """Deprecated mixed paper workflow retained temporarily for code migration only."""
     question = _resolve_question(task)
     work_dir = task["work_dir"]
     workflow_mode = _resolve_workflow_mode(task)
@@ -2123,7 +2208,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
         stage_outputs["verify_plan"] = verify_plan
         stage_outputs["verify_plan_file"] = os.path.basename(verify_plan_path)
 
-        if workflow_mode != "fast" and _verify_plan_requires_agent(verify_plan):
+        run_verification_agent = GUIDANCE_RUNTIME_POLICY.run_verification_agent
+        if run_verification_agent and workflow_mode != "fast" and _verify_plan_requires_agent(verify_plan):
             yield _progress(task_id, "verification", 0.56, "数值复核 Agent 正在按清单复核关键结果", current_subtask="数值复核")
             verification_agent = CoderAgent(
                 task_id=task_id,
@@ -2221,7 +2307,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             structured_result_files=[],
         )
         chart_images = solver_images
-        if _should_run_chart_agent(workflow_mode, result_registry, solver_images, budget):
+        run_chart_agent = GUIDANCE_RUNTIME_POLICY.run_chart_agent
+        if run_chart_agent and _should_run_chart_agent(workflow_mode, result_registry, solver_images, budget):
             yield _progress(task_id, "charts", 0.8, "图表与一致性 Agent 正在生成图表", current_subtask="图表生成")
             chart_agent = CoderAgent(
                 task_id=task_id,
@@ -2364,11 +2451,26 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 structured_result_files=structured_result_files_for_figures,
                 contract=contract,
             )
+            deterministic_missing = deterministic_snapshot.report.get("missing", [])
+            if isinstance(deterministic_missing, list) and deterministic_missing:
+                figure_plan_payload = FigureRecoveryStage.block_unrendered_requests(
+                    work_dir=work_dir,
+                    figure_plan_payload=figure_plan_payload if isinstance(figure_plan_payload, dict) else {},
+                    missing_requests=[item for item in deterministic_missing if isinstance(item, dict)],
+                    reason_prefix="deterministic_renderer_unavailable",
+                )
+                if figure_plan_payload:
+                    stage_outputs["figure_plan"] = figure_plan_payload
+                    figure_plan = figure_plan_payload
             if deterministic_snapshot.report.get("created_images"):
                 chart_images = deterministic_snapshot.chart_images
                 stage_outputs["deterministic_request_recovery"] = deterministic_snapshot.report
-                art_registry = deterministic_snapshot.artifact_registry
-                artifact_valid_images = deterministic_snapshot.artifact_valid_images
+            art_registry = ArtifactRegistry.load(
+                work_dir,
+                structured_result_files=structured_result_files_for_figures,
+                contract=contract,
+            )
+            artifact_valid_images = art_registry.validate_for_paper()
 
         semantic_bundle_snapshot = FigureGateStage.from_registry(art_registry)
         artifact_valid_images = semantic_bundle_snapshot.artifact_valid_images
@@ -2379,17 +2481,45 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             [*solver_images, *chart_images],
         )
         if missing_required_requests:
+            figure_plan_payload = FigureRecoveryStage.block_unrendered_requests(
+                work_dir=work_dir,
+                figure_plan_payload=figure_plan_payload if isinstance(figure_plan_payload, dict) else {},
+                missing_requests=[
+                    item for item in missing_required_requests
+                    if isinstance(item, dict)
+                ],
+                reason_prefix="guidance_no_llm_chart_repair",
+            )
+            if figure_plan_payload:
+                stage_outputs["figure_plan"] = figure_plan_payload
+                figure_plan = figure_plan_payload
+            art_registry = ArtifactRegistry.load(
+                work_dir,
+                structured_result_files=structured_result_files_for_figures,
+                contract=contract,
+            )
+            artifact_valid_images = art_registry.validate_for_paper()
+            semantic_bundle_snapshot = FigureGateStage.from_registry(art_registry)
+            artifact_valid_images = semantic_bundle_snapshot.artifact_valid_images
+            stage_outputs["chart_recovery"] = {
+                "mode": "blocked_disclosure",
+                "llm_repair": False,
+                "blocked_requests": semantic_bundle_snapshot.figure_bundle.blocked_requests,
+                "remaining_missing_requests": semantic_bundle_snapshot.figure_bundle.missing_requests,
+            }
+            missing_required_requests = list(semantic_bundle_snapshot.figure_bundle.missing_requests)
             pre_recovery_image_evidence = [*solver_images, *chart_images]
             yield _progress(
                 task_id,
                 "charts",
                 0.84,
-                "Deterministic 渲染后仍有 required figure 缺口，正在逐项 LLM 修复。",
-                current_subtask="Figure artifact repair",
+                "Deterministic 渲染后仍有图表缺口，已转为阻断披露。",
+                current_subtask="图表缺口披露",
             )
             recovery_round_outputs: list[dict[str, object]] = []
             # Execute one request at a time for precise failure localization.
-            for missing_req in list(missing_required_requests):
+            repair_requests = missing_required_requests if GUIDANCE_RUNTIME_POLICY.run_llm_figure_repair else []
+            for missing_req in list(repair_requests):
                 req_id = str(missing_req.get("figure_request_id") or "").strip()
                 if not req_id:
                     continue
@@ -2471,11 +2601,12 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 if not missing_required_requests:
                     break
 
-            stage_outputs["chart_recovery"] = {
-                "mode": "per_request",
-                "rounds": recovery_round_outputs,
-                "remaining_missing_requests": missing_required_requests,
-            }
+            if stage_outputs.get("chart_recovery", {}).get("mode") != "blocked_disclosure":
+                stage_outputs["chart_recovery"] = {
+                    "mode": "per_request",
+                    "rounds": recovery_round_outputs,
+                    "remaining_missing_requests": missing_required_requests,
+                }
             if recovery_round_outputs:
                 yield _message(
                     "charts",
@@ -2628,6 +2759,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 paper_path=failure_output.paper_path,
                 docx_path=failure_output.docx_path if failure_output.docx_path and os.path.exists(failure_output.docx_path) else "",
                 notebook_path=os.path.join(work_dir, "notebook.ipynb"),
+                primary_artifact_type="guidance",
             )
             yield _progress(task_id, "done", 1.0, "质量门禁未通过，已输出失败报告", status="failed")
             return
@@ -2654,6 +2786,8 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             "请输出完整 Markdown 建模指导方案，而不是可直接提交的论文。"
             "必须包含：可信度摘要、问题理解、数据与来源、参数与来源表、模型选择理由、分问题建模步骤、必要计算结果、图表说明、复核与稳健性、阻断项与待确认项、论文转化建议、可复现附件说明。"
             "所有具体数值必须来自 result_registry.json 的 verified_results；所有 blocked/partial/unverified 项必须明确披露。"
+            "禁止自行计算、四舍五入或补写 result_registry/parameter_registry 中没有登记的派生数值；若需要该数值但 registry 没有对应来源，只能写“待补算/待登记”，不得写具体数字。"
+            "章节编号、步骤编号以外的每一个具体数字都必须能回指 result_id 或 parameter_id。"
             "参数来源不明时只能标记为待确认或假设，禁止写成题设事实。"
             "guidance_context.recommended_structure 是方案的最低结构要求；可以合并相近章节，但不得删除可信度、参数来源、必要计算结果、阻断项和复现说明。"
             "writer_context.explanatory_figures 必须优先插入到模型建立、符号说明、几何关系或算法流程章节。"
@@ -2678,7 +2812,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             raise ValueError("最终写作阶段返回空内容")
         yield _message("writing", _preview(final_paper), section="方案组织")
 
-        guidance_audit_report = _build_guidance_audit_report(
+        final_paper = DocumentFinalizer.append_guidance_audit_appendix(
+            final_paper,
+            {
+                "primary_artifact_type": "guidance",
+                "guidance_context": guidance_context,
+            },
+        )
+        final_paper, guidance_audit_report = _audit_and_sanitize_guidance(
             guidance_markdown=final_paper,
             guidance_context=guidance_context,
             result_registry=result_registry,
@@ -2702,7 +2843,11 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             )
             delivery_auditor.system_prompt = WRITING_STAGE_SYSTEM_PROMPTS["delivery_audit"]
 
-        max_audit_rounds = 2 if workflow_mode == "strict" else 0
+        max_audit_rounds = (
+            2
+            if workflow_mode == "strict" and GUIDANCE_RUNTIME_POLICY.run_final_audit_repair_agents
+            else 0
+        )
         for audit_round in range(1, max_audit_rounds + 1):
             draft_paper_path = os.path.join(work_dir, f"guidance_audit_round_{audit_round}.md")
             with open(draft_paper_path, "w", encoding="utf-8") as f:
@@ -3119,6 +3264,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
                 f"# 返工路由\n{', '.join(repair_routes) if repair_routes else 'writer'}\n\n"
                 "请严格根据终审报告与返工后的最新结果重写全文。若 verified_results 与 blocked_results 同时存在，只能对 blocked 条目降级，不能把已 verified 的结果整体写成未计算。"
                 "若某问题仍无法修正，必须在正文中降级措辞，不得忽略，也不得保留与复核报告冲突的确定性表述。"
+                "不得新增 result_registry/parameter_registry 中没有登记的具体数字；需要但未登记的数字必须写成“待补算/待登记”，不能写出具体值。"
                 "严格模式重写时必须删减套话和重复解释，只保留能提升数值正确性的内容。"
             )
             final_paper = await _run_writer_stage(
@@ -3158,7 +3304,14 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             workflow_mode=workflow_mode,
         )
         guidance_context_path = _write_guidance_context(work_dir, guidance_context)
-        guidance_audit_report = _build_guidance_audit_report(
+        final_paper = DocumentFinalizer.append_guidance_audit_appendix(
+            final_paper,
+            {
+                "primary_artifact_type": "guidance",
+                "guidance_context": guidance_context,
+            },
+        )
+        final_paper, guidance_audit_report = _audit_and_sanitize_guidance(
             guidance_markdown=final_paper,
             guidance_context=guidance_context,
             result_registry=result_registry,
@@ -3204,6 +3357,10 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             paper_path=paper_path,
             docx_path=docx_path,
             notebook_path=notebook_path,
+            primary_artifact_type="guidance",
+            audit_status=str(guidance_audit_report.get("status") or ""),
+            audit_summary=str(guidance_audit_report.get("summary") or ""),
+            audit_blocks=guidance_audit_report.get("blocks", []),
         )
         yield _progress(task_id, "done", 1.0, "方案任务完成", status="completed")
 
@@ -3219,6 +3376,7 @@ async def _writing_workflow(task_id: str, task: dict) -> AsyncGenerator[dict, No
             error_code=error_code,
             error_type=error_type,
             error_details=error_details,
+            primary_artifact_type="guidance",
         )
     finally:
         await code_interpreter.close()
@@ -3532,7 +3690,7 @@ async def run_workflow(task_id: str, question: str) -> AsyncGenerator[dict, None
             yield payload
         return
 
-    async for payload in _writing_workflow(task_id, task):
+    async for payload in run_guidance_workflow(task_id, task):
         yield payload
 
 

@@ -30,14 +30,22 @@
           </div>
         </div>
 
-        <div v-if="result" class="result-card">
-          <div class="result-icon">{{ taskType === 'polish' ? '✨' : '🎉' }}</div>
-          <h3>{{ taskType === 'polish' ? '润色完成' : '方案完成' }}</h3>
+        <div v-if="result" class="result-card" :class="{ blocked: isGuidanceBlocked }">
+          <div class="result-icon">{{ resultIcon }}</div>
+          <h3>{{ resultTitle }}</h3>
+          <p v-if="isGuidanceBlocked" class="result-audit">
+            审计未通过：参数来源或数值追踪仍需修复，请先查看方案与审计报告。
+          </p>
           <div class="result-files">
-            <a v-if="result.paper_path" :href="getFileUrl(result.paper_path)" target="_blank" class="file-link">
-              📄 查看方案
+            <a
+              v-if="primaryMarkdownPath"
+              :href="guidanceDownloadUrl"
+              download="guidance.md"
+              class="file-link"
+            >
+              📄 下载 MD
             </a>
-            <a v-if="result.docx_path" :href="getFileUrl(result.docx_path)" target="_blank" class="file-link">
+            <a v-if="showDocxLink" :href="getFileUrl(result.docx_path)" target="_blank" class="file-link">
               🧾 下载 DOCX
             </a>
             <a v-if="result.notebook_path" :href="getFileUrl(result.notebook_path)" target="_blank" class="file-link">
@@ -112,7 +120,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 
-type TaskType = 'writing' | 'polish'
+type TaskType = 'guidance' | 'writing' | 'polish'
 
 interface RuntimeMessage {
   type?: string
@@ -125,11 +133,17 @@ interface RuntimeMessage {
     stage?: string
     progress?: number
     current_subtask?: string
+    primary_artifact_type?: string
+    markdown_path?: string
+    guidance_path?: string
     paper_path?: string
     docx_path?: string
     notebook_path?: string
     work_dir?: string
     error_message?: string
+    audit_status?: string
+    audit_summary?: string
+    audit_blocks?: unknown
   }
 }
 
@@ -174,8 +188,7 @@ defineEmits<{
 const messagesContainer = ref<HTMLElement>()
 const selectedAgent = ref('all')
 
-const agentMetaByTaskType: Record<TaskType, AgentMeta[]> = {
-  writing: [
+const guidanceAgentMeta: AgentMeta[] = [
     { id: 'breakdown', label: '题目拆解', icon: '🧭', color: 'rgba(15, 118, 110, 0.22)' },
     { id: 'modeling', label: '假设与建模', icon: '🧮', color: 'rgba(245, 158, 11, 0.22)' },
     { id: 'review', label: '模型审查', icon: '🔎', color: 'rgba(220, 38, 38, 0.18)' },
@@ -184,7 +197,11 @@ const agentMetaByTaskType: Record<TaskType, AgentMeta[]> = {
     { id: 'charts', label: '图表一致性', icon: '📊', color: 'rgba(124, 58, 237, 0.18)' },
     { id: 'writing', label: '方案组织', icon: '📝', color: 'rgba(22, 163, 74, 0.18)' },
     { id: 'final_audit', label: '最终审查', icon: '🛡️', color: 'rgba(99, 102, 241, 0.18)' },
-  ],
+]
+
+const agentMetaByTaskType: Record<TaskType, AgentMeta[]> = {
+  guidance: guidanceAgentMeta,
+  writing: guidanceAgentMeta,
   polish: [
     { id: 'breakdown', label: '题目拆解', icon: '🧭', color: 'rgba(15, 118, 110, 0.22)' },
     { id: 'consistency', label: '模型一致性', icon: '🧩', color: 'rgba(245, 158, 11, 0.22)' },
@@ -202,6 +219,24 @@ const agentTabs = computed(() => [
 const agentMetaMap = computed(() => Object.fromEntries(agentTabs.value.map((tab) => [tab.id, tab])))
 
 const isRunning = computed(() => !props.result && props.progress < 1)
+const primaryMarkdownPath = computed(() => props.result?.markdown_path || props.result?.guidance_path || props.result?.paper_path || '')
+const isGuidanceResult = computed(() => props.taskType !== 'polish' || props.result?.primary_artifact_type === 'guidance')
+const guidanceDownloadUrl = computed(() => {
+  if (isGuidanceResult.value && props.taskId) {
+    return `/api/tasks/${encodeURIComponent(props.taskId)}/guidance.md`
+  }
+  return getFileUrl(primaryMarkdownPath.value)
+})
+const isGuidanceBlocked = computed(() => isGuidanceResult.value && String(props.result?.audit_status || '').toUpperCase() === 'BLOCK')
+const resultIcon = computed(() => {
+  if (isGuidanceBlocked.value) return '!'
+  return props.taskType === 'polish' ? 'OK' : 'MD'
+})
+const resultTitle = computed(() => {
+  if (isGuidanceBlocked.value) return '方案需返工'
+  return props.taskType === 'polish' ? '润色完成' : '方案完成'
+})
+const showDocxLink = computed(() => Boolean(props.taskType === 'polish' && props.result?.docx_path && props.result?.primary_artifact_type !== 'guidance'))
 
 const normalizedMessages = computed<NormalizedMessage[]>(() => {
   let activeAgent = normalizeAgentKey(props.stage, '', props.taskType)
@@ -297,7 +332,7 @@ function normalizeAgentKey(stage: string, section: string, taskType: TaskType): 
   const stageKey = (stage || '').trim().toLowerCase()
   const sectionText = (section || '').trim()
 
-  if (taskType === 'writing') {
+  if (taskType !== 'polish') {
     if (stageKey === 'breakdown' || sectionText.includes('题目拆解')) return 'breakdown'
     if (stageKey === 'modeling' || sectionText.includes('模型建立') || sectionText.includes('假设与建模') || sectionText.includes('终审回退建模')) return 'modeling'
     if (stageKey === 'review' || sectionText.includes('模型审查')) return 'review'
@@ -650,6 +685,11 @@ watch(
   text-align: center;
 }
 
+.result-card.blocked {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(220, 38, 38, 0.08));
+  border-color: rgba(220, 38, 38, 0.28);
+}
+
 .result-icon {
   font-size: 3rem;
   margin-bottom: 8px;
@@ -657,6 +697,14 @@ watch(
 
 .result-card h3 {
   margin-bottom: 16px;
+}
+
+.result-audit {
+  max-width: 520px;
+  margin: -4px auto 16px;
+  color: #92400e;
+  font-size: 0.92rem;
+  line-height: 1.6;
 }
 
 .result-files {

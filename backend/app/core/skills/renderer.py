@@ -7,6 +7,7 @@ implementation while the per-view renderers are migrated behind this facade.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -799,11 +800,12 @@ class RendererSkill:
 
     @staticmethod
     def _subproblem_id(request: dict[str, Any]) -> str:
-        return str(request.get("subproblem_id") or request.get("problem_section") or "").strip()
+        return RendererSkill._safe_subproblem_id(request.get("subproblem_id") or request.get("problem_section"))
 
     @staticmethod
     def _request_id_and_data(request: dict[str, Any]) -> tuple[str, list[str]]:
-        req_id = str(request.get("id") or "").strip()
+        role = normalize_figure_role(request.get("semantic_role") or request.get("role")) or "figure"
+        req_id = RendererSkill._safe_request_id(request.get("id"), request.get("subproblem_id"), role)
         required_data = request.get("required_data", [])
         required_data_list = [
             str(item).strip()
@@ -811,6 +813,78 @@ class RendererSkill:
             if str(item).strip()
         ] if isinstance(required_data, list) else []
         return req_id, required_data_list
+
+    @staticmethod
+    def _safe_request_id(raw_id: Any, raw_subproblem: Any, role: str) -> str:
+        explicit = "" if RendererSkill._looks_serialized_mapping(raw_id) else RendererSkill._slug(raw_id)
+        if explicit:
+            return explicit
+        subproblem_id = RendererSkill._safe_subproblem_id(raw_subproblem)
+        role_slug = RendererSkill._slug(role) or "figure"
+        return f"fig_{subproblem_id}_{role_slug}"
+
+    @staticmethod
+    def _looks_serialized_mapping(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        text = value.strip()
+        return "{" in text and "}" in text and any(key in text for key in ("number", "title", "keywords", "'number'", '"number"'))
+
+    @staticmethod
+    def _safe_subproblem_id(raw: Any) -> str:
+        if isinstance(raw, dict):
+            number = str(raw.get("number") or raw.get("id") or raw.get("name") or "").strip()
+            mapped = RendererSkill._problem_number_slug(number)
+            if mapped:
+                return mapped
+            title = RendererSkill._slug(raw.get("title"))
+            if title:
+                return title
+            return "problem"
+        mapped = RendererSkill._problem_number_slug(str(raw or "").strip())
+        if mapped:
+            return mapped
+        return RendererSkill._slug(raw) or "problem"
+
+    @staticmethod
+    def _problem_number_slug(text: str) -> str:
+        if not text:
+            return ""
+        match = re.search(r"(?:problem|question|q)\s*([0-9]+)", text, re.IGNORECASE)
+        if match:
+            return f"problem_{match.group(1)}"
+        match = re.search(r"第\s*([一二三四五六七八九十0-9]+)\s*[题問问]", text)
+        if match:
+            value = RendererSkill._chinese_number_to_int(match.group(1))
+            if value:
+                return f"problem_{value}"
+        if text.strip().isdigit():
+            return f"problem_{text.strip()}"
+        return ""
+
+    @staticmethod
+    def _chinese_number_to_int(text: str) -> int:
+        if text.isdigit():
+            return int(text)
+        digits = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        if text == "十":
+            return 10
+        if text.startswith("十"):
+            return 10 + digits.get(text[1:], 0)
+        if "十" in text:
+            left, right = text.split("十", 1)
+            return digits.get(left, 0) * 10 + digits.get(right, 0)
+        return digits.get(text, 0)
+
+    @staticmethod
+    def _slug(value: Any) -> str:
+        if not isinstance(value, (str, int, float)):
+            return ""
+        text = str(value).strip().lower()
+        if not text:
+            return ""
+        text = re.sub(r"[^0-9a-zA-Z]+", "_", text).strip("_")
+        return text
 
     @staticmethod
     def _model_contract(request: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:

@@ -1,0 +1,91 @@
+import asyncio
+from pathlib import Path
+
+from app.core.workflow import _build_completed_task_result
+from app.schemas.response import TaskResult
+
+
+def test_guidance_completed_result_exposes_guidance_path_and_legacy_paper_path() -> None:
+    payload = _build_completed_task_result(
+        task_id="task-1",
+        task_type="writing",
+        work_dir="work/task-1",
+        paper_path="work/task-1/guidance.md",
+        docx_path="work/task-1/guidance.docx",
+        notebook_path="work/task-1/notebook.ipynb",
+        primary_artifact_type="guidance",
+        audit_status="BLOCK",
+        audit_summary="parameter provenance is incomplete",
+        audit_blocks=[{"type": "missing_parameter_registry_coverage"}],
+    )
+
+    data = payload["data"]
+    assert data["primary_artifact_type"] == "guidance"
+    assert data["markdown_path"] == "work/task-1/guidance.md"
+    assert data["guidance_path"] == "work/task-1/guidance.md"
+    assert data["paper_path"] == data["guidance_path"]
+    assert data["docx_path"] == ""
+    assert data["audit_status"] == "BLOCK"
+    assert data["audit_summary"] == "parameter provenance is incomplete"
+    assert data["audit_blocks"] == [{"type": "missing_parameter_registry_coverage"}]
+
+
+def test_task_result_defaults_to_legacy_paper_artifact() -> None:
+    data = TaskResult(
+        task_id="task-2",
+        status="completed",
+        paper_path="work/task-2/res.md",
+    ).model_dump()
+
+    assert data["primary_artifact_type"] == "paper"
+    assert data["markdown_path"] == "work/task-2/res.md"
+    assert data["guidance_path"] == ""
+    assert data["paper_path"] == "work/task-2/res.md"
+
+
+def test_guidance_download_returns_markdown_attachment(tmp_path: Path, monkeypatch) -> None:
+    from app.api import routes
+
+    guidance_path = tmp_path / "guidance.md"
+    guidance_path.write_text("# trusted guidance\n", encoding="utf-8")
+    monkeypatch.setattr(
+        routes.task_manager,
+        "get_task",
+        lambda task_id: {"task_id": task_id, "work_dir": str(tmp_path)},
+    )
+
+    response = asyncio.run(routes.download_guidance("task-1"))
+
+    assert Path(response.path) == guidance_path
+    assert response.media_type == "text/markdown"
+    assert response.filename == "guidance.md"
+
+
+def test_workflow_dispatches_guidance_without_legacy_writing_runner(monkeypatch) -> None:
+    from app.core import workflow
+
+    task = {"task_id": "task-1", "task_type": "guidance"}
+    monkeypatch.setattr(workflow.task_manager, "get_task", lambda task_id: task)
+
+    async def fake_guidance_runner(task_id, current_task):
+        yield {"type": "guidance-runner", "task_id": task_id, "task": current_task}
+
+    monkeypatch.setattr(workflow, "run_guidance_workflow", fake_guidance_runner, raising=False)
+
+    async def collect_messages():
+        return [message async for message in workflow.run_workflow("task-1", "question")]
+
+    messages = asyncio.run(collect_messages())
+
+    assert messages == [{"type": "guidance-runner", "task_id": "task-1", "task": task}]
+
+
+def test_guidance_runtime_policy_cannot_reenter_legacy_repair_agents() -> None:
+    from app.guidance.policy import GUIDANCE_RUNTIME_POLICY
+
+    assert GUIDANCE_RUNTIME_POLICY.output_format == "markdown"
+    assert GUIDANCE_RUNTIME_POLICY.run_verification_agent is False
+    assert GUIDANCE_RUNTIME_POLICY.run_chart_agent is False
+    assert GUIDANCE_RUNTIME_POLICY.run_llm_figure_repair is False
+    assert GUIDANCE_RUNTIME_POLICY.run_final_audit_repair_agents is False
+    assert GUIDANCE_RUNTIME_POLICY.export_docx is False

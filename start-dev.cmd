@@ -52,9 +52,11 @@ if "%NEED_FRONTEND%"=="1" (
   )
 )
 
+set "BACKEND_PORT=8010"
+
 REM Check backend port conflict only when backend is requested
 if "%NEED_BACKEND%"=="1" (
-  powershell -NoProfile -Command "$p = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue; if ($p) { Write-Host '[WARN] Port 8000 is in use.'; Write-Host '[WARN] If Docker backend is already running, use: start-dev.cmd frontend'; exit 2 } else { exit 0 }"
+  powershell -NoProfile -Command "$p = Get-NetTCPConnection -LocalPort %BACKEND_PORT% -ErrorAction SilentlyContinue; if ($p) { Write-Host '[WARN] Port %BACKEND_PORT% is in use.'; Write-Host '[WARN] If Docker backend is already running, use: start-dev.cmd frontend'; exit 2 } else { exit 0 }"
   if errorlevel 2 (
     echo.
     choice /C YN /N /M "Continue launching local backend anyway? [Y/N]: "
@@ -64,7 +66,7 @@ if "%NEED_BACKEND%"=="1" (
 
 if "%NEED_BACKEND%"=="1" (
   echo [INFO] Starting local backend...
-  start "MCMer Backend" powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location '%BACKEND_DIR%'; & '%PYTHON_EXE%' -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+  start "MCMer Backend" powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location '%BACKEND_DIR%'; & '%PYTHON_EXE%' -m uvicorn app.main:app --host 0.0.0.0 --port %BACKEND_PORT%"
 )
 
 if "%NEED_FRONTEND%"=="1" (
@@ -76,9 +78,9 @@ echo.
 echo [DONE] Started mode: [%MODE%]
 if "%NEED_FRONTEND%"=="1" echo Frontend: http://127.0.0.1:5173
 if "%NEED_BACKEND%"=="1" (
-  echo Backend docs: http://127.0.0.1:8000/docs
+  echo Backend docs: http://127.0.0.1:%BACKEND_PORT%/docs
 ) else (
-  echo Backend source: Docker or external service at http://127.0.0.1:8000
+  echo Backend source: Docker or external service configured by VITE_BACKEND_URL
 )
 echo Stop each service with Ctrl+C in its own terminal window.
 

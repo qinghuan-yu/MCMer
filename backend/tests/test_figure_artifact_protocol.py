@@ -906,6 +906,9 @@ def test_document_finalizer_exports_guidance_aliases(tmp_path: Path) -> None:
     """Guidance exports should keep legacy res.* aliases for existing readers."""
     from app.artifacts.exporters import DocumentFinalizer
 
+    (tmp_path / "guidance.docx").write_text("stale", encoding="utf-8")
+    (tmp_path / "res.docx").write_text("stale", encoding="utf-8")
+
     md_path, docx_path, _ = DocumentFinalizer.finalize(
         work_dir=str(tmp_path),
         task_id="test",
@@ -924,8 +927,48 @@ def test_document_finalizer_exports_guidance_aliases(tmp_path: Path) -> None:
     assert guidance_md.exists()
     assert legacy_md.exists()
     assert legacy_md.read_text(encoding="utf-8") == guidance_md.read_text(encoding="utf-8")
-    if docx_path:
-        assert (tmp_path / "res.docx").exists()
+    assert docx_path == ""
+    assert not (tmp_path / "guidance.docx").exists()
+    assert not (tmp_path / "res.docx").exists()
+
+
+def test_document_finalizer_appends_guidance_parameter_registry(tmp_path: Path) -> None:
+    """Guidance markdown should include a machine-auditable parameter appendix."""
+    from app.artifacts.exporters import DocumentFinalizer
+
+    md_path, docx_path, _ = DocumentFinalizer.finalize(
+        work_dir=str(tmp_path),
+        task_id="test",
+        task_type="writing",
+        paper_content="# Guidance\n\n可信度摘要\n",
+        allowed_images=None,
+        required_images=None,
+        result_payload={
+            "primary_artifact_type": "guidance",
+            "guidance_context": {
+                "parameter_registry": {
+                    "parameters": [
+                        {
+                            "id": "param_alpha",
+                            "symbol": "alpha",
+                            "name": "growth rate",
+                            "value": 0.12,
+                            "source_type": "estimated_from_data",
+                            "source_ref": "fit.csv",
+                            "trust_status": "estimated",
+                        }
+                    ]
+                }
+            },
+        },
+        artifact_basename="guidance",
+    )
+
+    content = Path(md_path).read_text(encoding="utf-8")
+    assert docx_path == ""
+    assert "机器可审计参数附录" in content
+    assert "param_alpha" in content
+    assert "fit.csv" in content
 
 
 def test_document_finalizer_requires_partial_coverage_disclosure(tmp_path: Path) -> None:
