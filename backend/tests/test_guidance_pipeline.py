@@ -2,11 +2,19 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 
 class RecordingStage:
-    def __init__(self, name: str, calls: list[tuple[str, str | None]]) -> None:
+    def __init__(
+        self,
+        name: str,
+        calls: list[tuple[str, str | None]],
+        payload: dict | None = None,
+    ) -> None:
         self.name = name
         self.calls = calls
+        self.payload = payload or {}
 
     async def run(
         self,
@@ -17,72 +25,8 @@ class RecordingStage:
         output_path: Path,
     ) -> Path:
         self.calls.append((self.name, input_path.name if input_path else None))
-        output_path.write_text("{}", encoding="utf-8")
+        output_path.write_text(json.dumps(self.payload), encoding="utf-8")
         return output_path
-
-
-class FakePlanner:
-    async def plan(self, *, question: str, data_files: list[str], workflow_mode: str):
-        return {
-            "spec_id": "traffic-guidance",
-            "subproblem_id": "problem_1",
-            "problem_summary": "Estimate traffic flow from registered inputs.",
-            "method_guidance": "Use a deterministic conservation equation.",
-            "assumptions": ["The registered observations are representative."],
-            "steps": ["Register source parameters.", "Evaluate the conservation equation."],
-            "parameters": [
-                {
-                    "symbol": "q_main",
-                    "name": "Main-road flow",
-                    "value": 120,
-                    "unit": "vehicles/min",
-                    "source_type": "uploaded_data",
-                    "source_ref": "traffic.csv",
-                },
-                {
-                    "symbol": "q_branch",
-                    "name": "Branch flow",
-                    "value": 30,
-                    "unit": "vehicles/min",
-                    "source_type": "uploaded_data",
-                    "source_ref": "traffic.csv",
-                },
-                {
-                    "symbol": "q_total",
-                    "name": "Total flow",
-                    "formula": "q_main + q_branch",
-                    "unit": "vehicles/min",
-                },
-            ],
-            "results": [
-                {
-                    "id": "result_total_flow",
-                    "claim_text": "The registered total flow is 150 vehicles/min.",
-                    "parameters": ["q_main", "q_branch", "q_total"],
-                    "source_data": ["traffic.csv"],
-                }
-            ],
-        }
-
-
-class UnresolvedFitPlanner:
-    async def plan(self, *, question: str, data_files: list[str], workflow_mode: str):
-        return {
-            "spec_id": "unresolved-fit",
-            "subproblem_id": "problem_1",
-            "problem_summary": "A piecewise model requires fitted coefficients.",
-            "method_guidance": "Fit coefficients before evaluating the continuity condition.",
-            "assumptions": [],
-            "steps": ["Estimate the missing coefficients from source observations."],
-            "parameters": [
-                {"symbol": "b21", "source_type": "estimated", "source_ref": "least squares"},
-                {"symbol": "a21", "source_type": "estimated", "source_ref": "least squares"},
-                {"symbol": "a22", "source_type": "estimated", "source_ref": "least squares"},
-                {"symbol": "t_c", "source_type": "estimated", "source_ref": "least squares"},
-                {"symbol": "b22", "formula": "b21 + (a21 - a22) * t_c"},
-            ],
-            "results": [],
-        }
 
 
 def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path: Path) -> None:
@@ -92,7 +36,11 @@ def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path
     pipeline = GuidancePipeline(
         decomposition_stage=RecordingStage("decomposition", calls),
         modeling_stage=RecordingStage("modeling", calls),
-        model_review_stage=RecordingStage("model_review", calls),
+        model_review_stage=RecordingStage(
+            "model_review",
+            calls,
+            {"review_status": "approved", "model_id": "test-model"},
+        ),
         calculation_stage=RecordingStage("calculation", calls),
         result_verification_stage=RecordingStage("result_verification", calls),
         guidance_stage=RecordingStage("guidance", calls),
@@ -119,34 +67,54 @@ def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path
     ]
 
 
-def test_guidance_pipeline_writes_auditable_markdown_without_docx(tmp_path: Path) -> None:
+def test_guidance_pipeline_never_runs_calculation_for_unapproved_model(tmp_path: Path) -> None:
+    from app.guidance.execution import UnapprovedModelError
     from app.guidance.pipeline import GuidancePipeline
 
+    calls: list[tuple[str, str | None]] = []
+    pipeline = GuidancePipeline(
+        decomposition_stage=RecordingStage("decomposition", calls),
+        modeling_stage=RecordingStage("modeling", calls),
+        model_review_stage=RecordingStage(
+            "model_review",
+            calls,
+            {"review_status": "revision_required", "model_id": "rejected-model"},
+        ),
+        calculation_stage=RecordingStage("calculation", calls),
+        result_verification_stage=RecordingStage("result_verification", calls),
+        guidance_stage=RecordingStage("guidance", calls),
+    )
     task = {
-        "task_id": "task-1",
-        "question": "Estimate traffic flow.",
+        "task_id": "task-unapproved",
+        "question": "Analyze the uploaded competition problem.",
         "work_dir": str(tmp_path),
-        "workflow_mode": "standard",
     }
 
     async def collect():
-        pipeline = GuidancePipeline(planner=FakePlanner())
-        return [payload async for payload in pipeline.run("task-1", task)]
+        return [payload async for payload in pipeline.run("task-unapproved", task)]
 
-    messages = asyncio.run(collect())
+    with pytest.raises(UnapprovedModelError):
+        asyncio.run(collect())
 
-    guidance = tmp_path / "guidance.md"
-    assert guidance.is_file()
-    assert (tmp_path / "solve_spec.json").is_file()
-    assert (tmp_path / "result_registry.json").is_file()
-    assert (tmp_path / "parameter_registry.json").is_file()
-    assert (tmp_path / "guidance_audit_report.json").is_file()
-    assert not (tmp_path / "guidance.docx").exists()
-    assert "param_q_total" in guidance.read_text(encoding="utf-8")
-    audit = json.loads((tmp_path / "guidance_audit_report.json").read_text(encoding="utf-8"))
-    assert audit["status"] == "PASS"
-    assert messages[-1]["data"]["primary_artifact_type"] == "guidance"
-    assert messages[-1]["data"]["docx_path"] == ""
+    assert [name for name, _ in calls] == ["decomposition", "modeling", "model_review"]
+
+
+def test_default_guidance_pipeline_uses_only_the_six_new_business_stages() -> None:
+    from app.guidance.workflow import build_default_guidance_pipeline
+
+    pipeline = build_default_guidance_pipeline()
+
+    assert list(pipeline._stages) == [
+        "decomposition",
+        "modeling",
+        "model_review",
+        "calculation",
+        "result_verification",
+        "guidance",
+    ]
+    source = (Path(__file__).parents[1] / "app" / "guidance" / "pipeline.py").read_text(encoding="utf-8")
+    assert "LLMGuidancePlanner" not in source
+    assert "run_solve_spec" not in source
 
 
 def test_guidance_package_does_not_depend_on_legacy_workflow() -> None:
@@ -158,25 +126,3 @@ def test_guidance_package_does_not_depend_on_legacy_workflow() -> None:
 
     assert "app.core.workflow" not in source
     assert "_writing_workflow" not in source
-
-
-def test_guidance_pipeline_completes_with_blocked_disclosure_for_unresolved_formula(tmp_path: Path) -> None:
-    from app.guidance.pipeline import GuidancePipeline
-
-    task = {
-        "task_id": "task-blocked",
-        "question": "Fit a piecewise model.",
-        "work_dir": str(tmp_path),
-        "workflow_mode": "standard",
-    }
-
-    async def collect():
-        return [payload async for payload in GuidancePipeline(planner=UnresolvedFitPlanner()).run("task-blocked", task)]
-
-    messages = asyncio.run(collect())
-    result_registry = json.loads((tmp_path / "result_registry.json").read_text(encoding="utf-8"))
-
-    assert messages[-1]["data"]["status"] == "completed"
-    assert (tmp_path / "guidance.md").is_file()
-    assert result_registry["summary"]["blocked_count"] == 5
-    assert "阻断" in (tmp_path / "guidance.md").read_text(encoding="utf-8")

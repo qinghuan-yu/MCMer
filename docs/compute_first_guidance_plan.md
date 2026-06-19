@@ -13,16 +13,19 @@
 
 ## 当前步骤
 
-**CURRENT：Phase 1 - 以测试先行整体替换 `GuidancePipeline`。**
+**CURRENT：Phase 2 - 建立模型审核闭环。**
 
 - [x] 将仓库执行规则固化到根目录 `AGENTS.md`。
 - [x] 删除与本计划冲突的旧版路线图文档。
 - [x] 提交 `GuidancePipeline` 模块级重构提案并获得用户批准。
 - [x] 将最终链路收敛为六个必要业务阶段，并冻结“不新增非必要依赖”规则。
 - [x] RED：先写端到端阶段顺序测试，证明当前 Pipeline 缺少拆题、建模、审核、计算、复核和指导输出契约。
-- [ ] RED：审核状态不是 approved 时，计算阶段必须完全不运行。
-- [ ] RED：计算阶段必须一次生成并执行完整 `solve.py`，不得逐步工具调用。
-- [ ] GREEN：整体替换临时算术主链，不保留旧新双轨或 feature flag。
+- [x] RED：审核状态不是 approved 时，计算阶段必须完全不运行。
+- [x] RED：计算阶段必须一次生成并执行完整 `solve.py`，不得逐步工具调用。
+- [x] GREEN：整体替换临时算术主链，不保留旧新双轨或 feature flag。
+- [ ] 审核失败只允许返回建模阶段一次。
+- [ ] 第二次仍未通过则产出 blocked guidance，不进入计算。
+- [ ] 用不可辨识参数、错误单位和数据不足三个 fixture 验证阻断。
 
 ## Go / No-Go
 
@@ -159,17 +162,19 @@ GuidanceStage
 **目的**：用五一 A 题问题一证明目标链路成立，不先追求题型通用化。
 
 - [x] RED：阶段顺序测试要求严格执行拆题、建模、审核、计算、复核、指导输出。
-- [ ] RED：审核状态不是 approved 时，计算阶段必须完全不运行。
-- [ ] RED：计算阶段必须一次生成并执行完整 `solve.py`，不得逐步工具调用。
-- [ ] 实现 `DecompositionStage`，保存 `problem_spec.json`。
-- [ ] 实现 `ModelingStage`，保存含候选方法、选择理由、假设、公式、参数和图表需求的 `model_spec.json`。
-- [ ] 实现 `ModelReviewStage`，审核可辨识性、数据充分性、公式与单位，并保存 `approved_model_spec.json`。
-- [ ] 实现 `CalculationStage`，复用现有代码生成能力和 `LocalProgramExecutor`，生成参数表、结果表和必要图片。
-- [ ] 实现 `ResultVerificationStage`，检查输入、单位、约束、残差和复算结果。
-- [ ] 实现 `GuidanceStage`，输出参数来源表、建模细节、必要图片、复核结论和复现路径。
-- [ ] 删除临时 `LLMGuidancePlanner -> run_solve_spec` 主链，不保留运行开关。
+- [x] RED：审核状态不是 approved 时，计算阶段必须完全不运行。
+- [x] RED：计算阶段必须一次生成并执行完整 `solve.py`，不得逐步工具调用。
+- [x] 实现 `DecompositionStage`，保存 `problem_spec.json`。
+- [x] 实现 `ModelingStage`，保存含候选方法、选择理由、假设、公式、参数和图表需求的 `model_spec.json`。
+- [x] 实现 `ModelReviewStage`，审核可辨识性、数据充分性、公式与单位，并保存 `approved_model_spec.json`。
+- [x] 实现 `CalculationStage`，复用现有代码生成能力和 `LocalProgramExecutor`，生成参数表、结果表和必要图片。
+- [x] 实现 `ResultVerificationStage`，检查输入、单位、约束、残差和复算结果。
+- [x] 实现 `GuidanceStage`，输出参数来源表、建模细节、必要图片、复核结论和复现路径。
+- [x] 删除临时 `LLMGuidancePlanner -> run_solve_spec` 主链，不保留运行开关。
 
 **退出证据**：真实附件被读取；支路模型完成最小二乘拟合；关键参数、残差指标和说明图落盘；`guidance.md` 能从参数追到数据、代码和复核结论。
+
+**已验证**：2026-06-19 使用历史任务中的原始 `附件(Attachment).xlsx` 完成实测；断点为 30，支路斜率约为 0.5 和 1.0，RMSE 为 `1.63e-14`，复核状态为 verified，guidance 审计为 PASS，并生成真实 Jupyter notebook 与 PNG。
 
 **止损规则**：若完整程序仍需 LLM 在运行期间逐步补代码，停止后续开发，先修正代码生成契约。
 

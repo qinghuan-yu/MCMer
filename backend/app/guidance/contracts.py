@@ -87,4 +87,4 @@ class VerificationReport(BaseModel):
     residual_checks: list[dict[str, Any]] = Field(default_factory=list)
     sensitivity_checks: list[dict[str, Any]] = Field(default_factory=list)
     blocking_issues: list[str] = Field(default_factory=list)
-
+    artifact_refs: dict[str, Any] = Field(default_factory=dict)
