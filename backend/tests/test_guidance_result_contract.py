@@ -80,6 +80,12 @@ def test_workflow_dispatches_guidance_without_legacy_writing_runner(monkeypatch)
     assert messages == [{"type": "guidance-runner", "task_id": "task-1", "task": task}]
 
 
+def test_core_workflow_no_longer_exposes_legacy_paper_writing_runner() -> None:
+    from app.core import workflow
+
+    assert not hasattr(workflow, "_legacy_paper_writing_workflow")
+
+
 def test_guidance_runtime_policy_cannot_reenter_legacy_repair_agents() -> None:
     from app.guidance.policy import GUIDANCE_RUNTIME_POLICY
 
