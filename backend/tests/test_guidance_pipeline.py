@@ -81,6 +81,31 @@ class FailingStage:
         raise self.error
 
 
+class SequentialModelingStage:
+    def __init__(
+        self,
+        calls: list[tuple[str, str | None]],
+        steps: list[dict | Exception],
+    ) -> None:
+        self.calls = calls
+        self.steps = iter(steps)
+
+    async def run(
+        self,
+        *,
+        task_id: str,
+        task: dict,
+        input_path: Path | None,
+        output_path: Path,
+    ) -> Path:
+        self.calls.append(("modeling", input_path.name if input_path else None))
+        step = next(self.steps)
+        if isinstance(step, Exception):
+            raise step
+        output_path.write_text(json.dumps(step), encoding="utf-8")
+        return output_path
+
+
 def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path: Path) -> None:
     from app.guidance.pipeline import GuidancePipeline
 
@@ -245,6 +270,60 @@ def test_guidance_pipeline_returns_to_modeling_once_then_runs_approved_model(tmp
         ("result_verification", "execution_manifest.json"),
         ("guidance", "verification_report.json"),
     ]
+    assert messages[-1]["data"]["status"] == "completed"
+
+
+def test_guidance_pipeline_writes_blocked_guidance_after_revision_contract_failure(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.pipeline import GuidancePipeline
+    from app.guidance.stages import GuidanceStage
+
+    calls: list[tuple[str, str | None]] = []
+    pipeline = GuidancePipeline(
+        decomposition_stage=RecordingStage("decomposition", calls),
+        modeling_stage=SequentialModelingStage(
+            calls,
+            [
+                {"model_id": "returned-model"},
+                RuntimeError(
+                    "GuidanceModelReviser failed to generate valid RevisedModelSpec after 2 complete attempts: "
+                    "JSONDecodeError: Expecting ',' delimiter: line 823 column 6"
+                ),
+            ],
+        ),
+        model_review_stage=SequentialReviewStage(
+            calls,
+            ["revision_required"],
+        ),
+        calculation_stage=RecordingStage("calculation", calls),
+        result_verification_stage=RecordingStage("result_verification", calls),
+        guidance_stage=GuidanceStage(),
+    )
+    task = {
+        "task_id": "task-reviser-json-failure",
+        "question": "Revise a returned model.",
+        "work_dir": str(tmp_path),
+    }
+
+    async def collect():
+        return [payload async for payload in pipeline.run("task-reviser-json-failure", task)]
+
+    messages = asyncio.run(collect())
+
+    assert calls == [
+        ("decomposition", None),
+        ("modeling", "problem_spec.json"),
+        ("model_review", "model_spec.json"),
+        ("modeling", "model_review.json"),
+    ]
+    assert not (tmp_path / "solve.py").exists()
+    assert not (tmp_path / "execution_manifest.json").exists()
+    failure = json.loads((tmp_path / "modeling_failure.json").read_text(encoding="utf-8"))
+    assert failure["input_ref"] == "model_review.json"
+    assert "GuidanceModelReviser failed to generate valid RevisedModelSpec" in failure["error"]
+    guidance = (tmp_path / "guidance.md").read_text(encoding="utf-8")
+    assert "GuidanceModelReviser failed to generate valid RevisedModelSpec" in guidance
     assert messages[-1]["data"]["status"] == "completed"
 
 

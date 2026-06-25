@@ -52,6 +52,7 @@
 - [x] 所有结构化代理首轮请求必须携带完整目标 JSON Schema，降低包装层级和字段形态错误。
 - [x] ProblemSpec 缺失或空白子问题 ID 时由合同层确定性补齐，避免实测中覆盖校验出现空 ID 列表。
 - [x] GuidanceModeler 结构化 JSON 两轮失败时必须落盘诊断并产出 blocked guidance，禁止链路直接中断。
+- [x] GuidanceModelReviser 结构化 JSON 两轮失败时必须复用同一 blocked guidance 收束路径，禁止修订阶段直接中断。
 
 ## Go / No-Go
 
