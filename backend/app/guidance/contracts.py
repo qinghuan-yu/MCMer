@@ -69,6 +69,14 @@ class SubproblemModelSpec(BaseModel):
     solve_steps: list[str] = Field(min_length=1)
     expected_results: list[str] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def canonicalize_subproblem_id(self) -> SubproblemModelSpec:
+        subproblem_id = self.subproblem_id.strip()
+        if subproblem_id.isdigit():
+            subproblem_id = f"problem{int(subproblem_id)}"
+        self.subproblem_id = subproblem_id
+        return self
+
 
 class ReviewResolution(BaseModel):
     model_config = ConfigDict(extra="forbid")

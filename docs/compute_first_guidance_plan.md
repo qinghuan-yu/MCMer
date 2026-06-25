@@ -53,6 +53,7 @@
 - [x] ProblemSpec 缺失或空白子问题 ID 时由合同层确定性补齐，避免实测中覆盖校验出现空 ID 列表。
 - [x] GuidanceModeler 结构化 JSON 两轮失败时必须落盘诊断并产出 blocked guidance，禁止链路直接中断。
 - [x] GuidanceModelReviser 结构化 JSON 两轮失败时必须复用同一 blocked guidance 收束路径，禁止修订阶段直接中断。
+- [x] ModelSpec 裸数字子问题 ID 由合同层规范为 `problemN`，避免有效建模方案被覆盖校验误阻断。
 
 ## Go / No-Go
 
