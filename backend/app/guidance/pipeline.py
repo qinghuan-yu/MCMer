@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import AsyncGenerator, Protocol
 
 from app.guidance.contracts import ApprovedModelSpec
-from app.guidance.execution import UnapprovedModelError
 from app.schemas.response import TaskProgress, TaskResult
 
 
@@ -24,15 +23,6 @@ class GuidanceStage(Protocol):
 
 class GuidancePipeline:
     """Run six file-contract stages without owning their business logic."""
-
-    _STAGE_FLOW = (
-        ("decomposition", "problem_spec.json", 0.10, "正在拆解题目与数据"),
-        ("modeling", "model_spec.json", 0.25, "正在生成建模方案"),
-        ("model_review", "approved_model_spec.json", 0.40, "正在独立审核模型"),
-        ("calculation", "execution_manifest.json", 0.62, "正在生成并执行完整求解程序"),
-        ("result_verification", "verification_report.json", 0.80, "正在复核数值与结果"),
-        ("guidance", "guidance.md", 0.94, "正在生成建模指导"),
-    )
 
     def __init__(
         self,
@@ -56,19 +46,55 @@ class GuidancePipeline:
     async def run(self, task_id: str, task: dict) -> AsyncGenerator[dict, None]:
         root = Path(str(task["work_dir"]))
         root.mkdir(parents=True, exist_ok=True)
-        input_path: Path | None = None
 
-        for stage_name, filename, progress, message in self._STAGE_FLOW:
-            yield _progress(task_id, stage_name, progress, message)
-            output_path = root / filename
-            input_path = await self._stages[stage_name].run(
-                task_id=task_id,
-                task=task,
-                input_path=input_path,
-                output_path=output_path,
+        yield _progress(task_id, "decomposition", 0.10, "正在拆解题目与数据")
+        problem_path = await self._run_stage(
+            "decomposition", task_id, task, None, root / "problem_spec.json"
+        )
+
+        yield _progress(task_id, "modeling", 0.25, "正在生成建模方案")
+        model_path = await self._run_stage(
+            "modeling", task_id, task, problem_path, root / "model_spec.json"
+        )
+
+        yield _progress(task_id, "model_review", 0.40, "正在独立审核模型")
+        approved_path = await self._run_stage(
+            "model_review", task_id, task, model_path, root / "approved_model_spec.json"
+        )
+        approved = _load_approved_model(approved_path)
+
+        if approved.review_status == "revision_required":
+            yield _progress(task_id, "modeling", 0.46, "正在根据审核意见修订模型")
+            model_path = await self._run_stage(
+                "modeling", task_id, task, root / "model_review.json", root / "model_spec.json"
             )
-            if stage_name == "model_review":
-                _require_approved_model(input_path)
+            yield _progress(task_id, "model_review", 0.52, "正在复审修订后的模型")
+            approved_path = await self._run_stage(
+                "model_review", task_id, task, model_path, root / "approved_model_spec.json"
+            )
+
+        approved = _load_approved_model(approved_path)
+        if approved.review_status == "approved":
+            yield _progress(task_id, "calculation", 0.62, "正在生成并执行完整求解程序")
+            manifest_path = await self._run_stage(
+                "calculation", task_id, task, approved_path, root / "execution_manifest.json"
+            )
+
+            yield _progress(task_id, "result_verification", 0.80, "正在复核数值与结果")
+            verification_path = await self._run_stage(
+                "result_verification", task_id, task, manifest_path, root / "verification_report.json"
+            )
+
+            guidance_input = verification_path
+            guidance_message = "正在生成建模指导"
+        else:
+            guidance_input = approved_path
+            guidance_message = "正在生成审核阻断说明"
+
+        yield _progress(task_id, "guidance", 0.94, guidance_message)
+        await self._run_stage(
+            "guidance", task_id, task, guidance_input, root / "guidance.md"
+        )
 
         guidance_path = root / "guidance.md"
         audit = _read_json(root / "guidance_audit_report.json")
@@ -91,6 +117,21 @@ class GuidancePipeline:
                 audit_blocks=audit.get("blocks", []),
             ).model_dump(),
         }
+
+    async def _run_stage(
+        self,
+        stage_name: str,
+        task_id: str,
+        task: dict,
+        input_path: Path | None,
+        output_path: Path,
+    ) -> Path:
+        return await self._stages[stage_name].run(
+            task_id=task_id,
+            task=task,
+            input_path=input_path,
+            output_path=output_path,
+        )
 
 
 def _progress(
@@ -121,9 +162,5 @@ def _read_json(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _require_approved_model(path: Path) -> None:
-    approved = ApprovedModelSpec.model_validate(_read_json(path))
-    if approved.review_status != "approved":
-        raise UnapprovedModelError(
-            f"calculation requires approved model, got {approved.review_status}"
-        )
+def _load_approved_model(path: Path) -> ApprovedModelSpec:
+    return ApprovedModelSpec.model_validate(_read_json(path))

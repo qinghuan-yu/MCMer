@@ -168,10 +168,36 @@ def render_verified_guidance(
                 lines.append(f"- 备选方法：{candidate.get('name') or candidate.get('method') or '未命名'}")
 
     lines.extend(["", "## 分问题建模步骤", ""])
-    for step in model.get("solve_steps", []):
-        lines.append(f"- {step}")
-    for equation in model.get("equations", []):
-        lines.append(f"- 公式：`{equation}`")
+    for subproblem in model.get("subproblem_models", []):
+        if not isinstance(subproblem, dict):
+            continue
+        subproblem_id = _cell(subproblem.get("subproblem_id"))
+        lines.append(f"### 子问题 {subproblem_id}")
+        lines.append("")
+        lines.append(f"- 目标：{subproblem.get('objective')}")
+        lines.append(f"- 方法：{subproblem.get('selected_method')}")
+        lines.append(f"- 选择理由：{subproblem.get('rationale')}")
+        for equation in subproblem.get("equations", []):
+            lines.append(f"- 公式：`{equation}`")
+        for parameter in subproblem.get("parameters", []):
+            if not isinstance(parameter, dict):
+                continue
+            lines.append(
+                "- 参数 `{symbol}`：{meaning}；单位 `{unit}`；来源 `{source}`；估计方法：{method}。".format(
+                    symbol=_cell(parameter.get("symbol")),
+                    meaning=parameter.get("meaning"),
+                    unit=_cell(parameter.get("unit")),
+                    source=parameter.get("source_detail"),
+                    method=parameter.get("estimation_method"),
+                )
+            )
+        for constraint in subproblem.get("constraints", []):
+            lines.append(f"- 约束：{constraint}")
+        for index, step in enumerate(subproblem.get("solve_steps", []), start=1):
+            lines.append(f"- 求解步骤 {index}：{step}")
+        for result in subproblem.get("expected_results", []):
+            lines.append(f"- 预期结果：{result}")
+        lines.append("")
 
     lines.extend(["", "## 必要计算结果", ""])
     for result in result_registry.get("verified_results", []):
@@ -186,12 +212,35 @@ def render_verified_guidance(
     lines.extend(["", "## 图片解读", ""])
     figures = verification_report.get("artifact_refs", {}).get("figures", [])
     for figure in figures if isinstance(figures, list) else []:
-        lines.append(f"![模型拟合与复核图]({figure})")
-        lines.append(f"- 图片 `{figure}` 绑定已登记拟合结果与源数据。")
+        if not isinstance(figure, dict):
+            continue
+        path = _cell(figure.get("path"))
+        role = _cell(figure.get("role"))
+        sources = ", ".join(f"`{_cell(item)}`" for item in figure.get("source_data", []))
+        result_ids = ", ".join(
+            f"`{_cell(item)}`" for item in figure.get("linked_result_ids", [])
+        )
+        lines.append(f"![{role}]({path})")
+        lines.append(
+            f"- 图片 `{path}`；用途 `{role}`；来源数据：{sources}；绑定结果：{result_ids}。"
+        )
 
     lines.extend(["", "## 复核与稳健性", ""])
     lines.append(f"- 数值复核结论：`{status}`。")
-    lines.append("- 可辨识性：支路分解结论仅在审核通过的显式识别约束下成立。")
+    lines.append("- 可辨识性与计算可行性：以模型审核结论和本轮数值复核状态为准。")
+    checked_groups = [
+        ("输入覆盖", verification_report.get("input_checks", [])),
+        ("公式/目标函数", verification_report.get("equation_checks", [])),
+        ("单位一致性", verification_report.get("unit_checks", [])),
+        ("约束满足", verification_report.get("constraint_checks", [])),
+        ("残差/目标值", verification_report.get("residual_checks", [])),
+        ("敏感性", verification_report.get("sensitivity_checks", [])),
+    ]
+    for label, checks in checked_groups:
+        if not isinstance(checks, list) or not checks:
+            continue
+        passed = sum(1 for check in checks if isinstance(check, dict) and check.get("status") == "passed")
+        lines.append(f"- {label}复核：{passed}/{len(checks)} 项通过。")
     for assumption in model.get("assumptions", []):
         lines.append(f"- 假设与局限：{assumption}")
 
@@ -200,13 +249,13 @@ def render_verified_guidance(
     if blocks:
         lines.extend(f"- 阻断：{item}" for item in blocks)
     else:
-        lines.append("- 当前复核未记录阻断项；识别约束仍需人工确认。")
+        lines.append("- 当前复核未记录阻断项；仍需人工确认题设假设、参数来源和约束口径。")
 
     lines.extend([
         "",
         "## 论文转化建议",
         "",
-        "将模型选择、识别约束、参数来源和残差复核分别写入论文，禁止省略条件性结论。",
+        "将模型选择、核心假设、参数来源、约束条件和数值复核分别写入论文，禁止把待确认前提写成既定事实。",
         "",
         "## 可复现附件说明",
         "",

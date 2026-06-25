@@ -30,6 +30,12 @@ class FakeInterpreter:
         self.closed = True
 
 
+class ThrowingInterpreter(FakeInterpreter):
+    async def execute_code(self, code: str):
+        self.execute_calls += 1
+        raise RuntimeError("interpreter crashed before returning a result")
+
+
 def test_program_executor_runs_complete_solver_once_and_records_artifacts(tmp_path: Path) -> None:
     from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
     from app.guidance.execution import LocalProgramExecutor
@@ -44,6 +50,7 @@ def test_program_executor_runs_complete_solver_once_and_records_artifacts(tmp_pa
         language="python",
         entrypoint="solve.py",
         source_code="print('run complete')",
+        declared_outputs=approved_model.required_outputs,
     )
 
     async def run():
@@ -73,6 +80,103 @@ def test_program_executor_runs_complete_solver_once_and_records_artifacts(tmp_pa
     assert saved["program_sha256"]
 
 
+def test_program_executor_expands_required_output_glob(tmp_path: Path) -> None:
+    from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
+    from app.guidance.execution import LocalProgramExecutor
+
+    interpreter = FakeInterpreter(tmp_path)
+
+    async def run():
+        executor = LocalProgramExecutor(interpreter_factory=lambda work_dir: interpreter)
+        return await executor.execute(
+            task_id="task-glob",
+            work_dir=tmp_path,
+            approved_model=ApprovedModelSpec(
+                review_status="approved",
+                model_id="glob-output",
+                required_outputs=["solver_results.json", "parameter_table.csv", "figures/*.png"],
+            ),
+            program=GeneratedProgram(
+                source_code="print('run complete')",
+                declared_outputs=["solver_results.json", "parameter_table.csv", "figures/*.png"],
+            ),
+        )
+
+    manifest = asyncio.run(run())
+
+    assert manifest.status == "passed"
+    assert "figures/fit.png" in manifest.generated_files
+    assert manifest.missing_required_outputs == []
+
+
+def test_program_executor_rejects_incomplete_declared_outputs_before_execution(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
+    from app.guidance.execution import LocalProgramExecutor
+
+    interpreter = FakeInterpreter(tmp_path)
+    approved_model = ApprovedModelSpec(
+        review_status="approved",
+        model_id="output-contract",
+        required_outputs=[
+            "solver_results.json",
+            "parameter_registry.json",
+            "result_registry.json",
+            "figure_registry.json",
+        ],
+    )
+    program = GeneratedProgram(
+        source_code="print('incomplete outputs')",
+        declared_outputs=["solver_results.json"],
+    )
+
+    async def run():
+        executor = LocalProgramExecutor(interpreter_factory=lambda work_dir: interpreter)
+        return await executor.execute(
+            task_id="task-output-contract",
+            work_dir=tmp_path,
+            approved_model=approved_model,
+            program=program,
+        )
+
+    with pytest.raises(ValueError, match="declared output mismatch"):
+        asyncio.run(run())
+    assert interpreter.execute_calls == 0
+
+
+def test_program_executor_records_interpreter_exception_as_failed_manifest(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
+    from app.guidance.execution import LocalProgramExecutor
+
+    interpreter = ThrowingInterpreter(tmp_path)
+    approved_model = ApprovedModelSpec(
+        review_status="approved",
+        model_id="runtime-failure",
+        required_outputs=["solver_results.json"],
+    )
+
+    async def run():
+        executor = LocalProgramExecutor(interpreter_factory=lambda work_dir: interpreter)
+        return await executor.execute(
+            task_id="task-runtime-failure",
+            work_dir=tmp_path,
+            approved_model=approved_model,
+            program=GeneratedProgram(
+                source_code="print('runtime failure')",
+                declared_outputs=["solver_results.json"],
+            ),
+        )
+
+    manifest = asyncio.run(run())
+
+    assert manifest.status == "failed"
+    assert "interpreter crashed" in manifest.error_message
+    assert json.loads((tmp_path / "execution_manifest.json").read_text(encoding="utf-8"))["status"] == "failed"
+
+
 def test_program_executor_rejects_unsafe_generated_code_before_execution(tmp_path: Path) -> None:
     from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
     from app.guidance.execution import LocalProgramExecutor, UnsafeGeneratedProgramError
@@ -82,6 +186,7 @@ def test_program_executor_rejects_unsafe_generated_code_before_execution(tmp_pat
         language="python",
         entrypoint="solve.py",
         source_code="import subprocess\nsubprocess.run(['cmd', '/c', 'echo unsafe'])",
+        declared_outputs=["solver_results.json"],
     )
 
     async def run():
@@ -89,7 +194,11 @@ def test_program_executor_rejects_unsafe_generated_code_before_execution(tmp_pat
         return await executor.execute(
             task_id="task-unsafe",
             work_dir=tmp_path,
-            approved_model=ApprovedModelSpec(review_status="approved", model_id="unsafe"),
+            approved_model=ApprovedModelSpec(
+                review_status="approved",
+                model_id="unsafe",
+                required_outputs=["solver_results.json"],
+            ),
             program=program,
         )
 
@@ -130,7 +239,10 @@ print('solver complete')
                 model_id="smoke-fit",
                 required_outputs=["solver_results.json", "parameter_table.csv", "figures/fit.png"],
             ),
-            program=GeneratedProgram(source_code=source_code),
+            program=GeneratedProgram(
+                source_code=source_code,
+                declared_outputs=["solver_results.json", "parameter_table.csv", "figures/fit.png"],
+            ),
         )
 
     manifest = asyncio.run(run())

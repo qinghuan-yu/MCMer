@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 
@@ -26,12 +27,15 @@ def build_guidance_audit_report(
     guidance_context: dict[str, object] | None,
     result_registry: dict[str, object] | None,
     parameter_registry: dict[str, object] | None = None,
+    figure_registry: dict[str, object] | None = None,
+    artifact_root: Path | None = None,
 ) -> dict[str, object]:
     """Audit whether a guidance document is traceable enough to trust."""
     text = guidance_markdown or ""
     context = guidance_context if isinstance(guidance_context, dict) else {}
     results = result_registry if isinstance(result_registry, dict) else {}
     parameters = parameter_registry if isinstance(parameter_registry, dict) else {}
+    figures = figure_registry if isinstance(figure_registry, dict) else {}
 
     blocks: list[dict[str, object]] = []
     warnings: list[dict[str, object]] = []
@@ -40,6 +44,7 @@ def build_guidance_audit_report(
     _check_blocked_disclosure(text, results, blocks)
     _check_parameter_coverage(text, parameters, blocks)
     _check_registered_numbers(text, results, parameters, blocks)
+    _check_figure_coverage(text, figures, artifact_root, blocks)
 
     status = "PASS"
     if blocks:
@@ -60,6 +65,45 @@ def build_guidance_audit_report(
         "blocks": blocks,
         "warnings": warnings,
     }
+
+
+def _check_figure_coverage(
+    text: str,
+    figure_registry: dict[str, object],
+    artifact_root: Path | None,
+    blocks: list[dict[str, object]],
+) -> None:
+    figures = figure_registry.get("figures", [])
+    if not isinstance(figures, list):
+        return
+    for figure in figures:
+        if not isinstance(figure, dict):
+            continue
+        path = str(figure.get("path") or "").strip()
+        if path and artifact_root is not None and not (artifact_root / path).is_file():
+            blocks.append({
+                "type": "missing_figure_file",
+                "location": path,
+                "route": "calculation",
+                "severity": "high",
+                "fix": "Regenerate the registered figure before publishing guidance.",
+            })
+        required_refs = [
+            path,
+            str(figure.get("role") or "").strip(),
+            *[str(item) for item in figure.get("source_data", [])],
+            *[str(item) for item in figure.get("linked_result_ids", [])],
+        ]
+        missing_refs = [ref for ref in required_refs if ref and ref not in text]
+        if missing_refs:
+            blocks.append({
+                "type": "missing_figure_binding_disclosure",
+                "location": path or "图片解读",
+                "route": "writer",
+                "severity": "high",
+                "fix": "List each figure's role, source data, and linked result IDs.",
+                "missing_refs": missing_refs,
+            })
 
 
 def _check_required_sections(

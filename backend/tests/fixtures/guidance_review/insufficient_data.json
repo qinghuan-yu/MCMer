@@ -1,0 +1,7 @@
+{
+  "case_id": "insufficient_data",
+  "review_field": "data_sufficiency",
+  "review_value": "failed",
+  "issue": "The available observations do not cover the parameters required by the model.",
+  "required_revision": "Provide the missing observations or reduce the model scope."
+}

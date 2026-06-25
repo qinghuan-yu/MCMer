@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import glob
 import hashlib
 import json
 import time
@@ -52,6 +53,13 @@ class LocalProgramExecutor:
         if program.entrypoint != "solve.py":
             raise ValueError("Python guidance programs must use solve.py as the entrypoint")
 
+        required_contract = [_normalize_relative_path(path) for path in approved_model.required_outputs]
+        declared_contract = [_normalize_relative_path(path) for path in program.declared_outputs]
+        if required_contract != declared_contract:
+            raise ValueError(
+                f"declared output mismatch: required={required_contract}; declared={declared_contract}"
+            )
+
         _validate_generated_program(program.source_code)
         root = Path(work_dir)
         root.mkdir(parents=True, exist_ok=True)
@@ -64,14 +72,21 @@ class LocalProgramExecutor:
         error_occurred = False
         error_message = ""
         try:
-            output, error_occurred, error_message = await interpreter.execute_code(program.source_code)
-            await interpreter.save_notebook(str(root / "notebook.ipynb"))
+            try:
+                output, error_occurred, error_message = await interpreter.execute_code(program.source_code)
+                await interpreter.save_notebook(str(root / "notebook.ipynb"))
+            except Exception as exc:
+                error_occurred = True
+                error_message = f"{type(exc).__name__}: {exc}"
         finally:
-            await interpreter.close()
+            try:
+                await interpreter.close()
+            except Exception as exc:
+                error_occurred = True
+                close_error = f"{type(exc).__name__}: {exc}"
+                error_message = "; ".join(item for item in (error_message, close_error) if item)
 
-        required = [_normalize_relative_path(path) for path in approved_model.required_outputs]
-        missing = [path for path in required if not (root / path).is_file()]
-        generated = [path for path in required if (root / path).is_file()]
+        generated, missing = _resolve_required_outputs(root, approved_model.required_outputs)
         if (root / "notebook.ipynb").is_file():
             generated.append("notebook.ipynb")
 
@@ -134,3 +149,19 @@ def _normalize_relative_path(value: str) -> str:
     if not normalized or ".." in path.parts or path.is_absolute():
         raise ValueError(f"required output must be a safe relative path: {value}")
     return path.as_posix()
+
+
+def _resolve_required_outputs(root: Path, required_outputs: list[str]) -> tuple[list[str], list[str]]:
+    generated: list[str] = []
+    missing: list[str] = []
+    for value in required_outputs:
+        pattern = _normalize_relative_path(value)
+        matches = sorted(path for path in root.glob(pattern) if path.is_file())
+        if not matches:
+            missing.append(pattern)
+            continue
+        if glob.has_magic(pattern):
+            generated.extend(path.relative_to(root).as_posix() for path in matches)
+        else:
+            generated.append(pattern)
+    return list(dict.fromkeys(generated)), list(dict.fromkeys(missing))

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import AsyncGenerator
 
 from app.core.llm.llm import LLM
+from app.core.workflow_budget import resolve_workflow_budget
 from app.guidance.agents import (
     LLMModeler,
     LLMModelReviewer,
@@ -27,26 +28,31 @@ from app.services.config_manager import config_manager
 from app.services.task_service import task_manager
 
 
-def build_default_guidance_pipeline() -> GuidancePipeline:
+def build_default_guidance_pipeline(workflow_mode: str = "standard") -> GuidancePipeline:
+    budget = resolve_workflow_budget(workflow_mode)
     decomposition_llm = LLM(
         model=config_manager.get_effective_model("COORDINATOR_MODEL"),
         temperature=0.1,
         max_tokens=8192,
+        request_timeout=budget.llm_timeout,
     )
     modeling_llm = LLM(
         model=config_manager.get_effective_model("MODELER_MODEL"),
         temperature=0.15,
         max_tokens=12288,
+        request_timeout=budget.llm_timeout,
     )
     review_llm = LLM(
         model=config_manager.get_effective_model("MODELER_MODEL"),
         temperature=0.0,
         max_tokens=8192,
+        request_timeout=budget.llm_timeout,
     )
     coder_llm = LLM(
         model=config_manager.get_effective_model("CODER_MODEL"),
         temperature=0.1,
         max_tokens=16384,
+        request_timeout=budget.llm_timeout,
     )
     return GuidancePipeline(
         decomposition_stage=DecompositionStage(decomposer=LLMProblemDecomposer(decomposition_llm)),
@@ -65,7 +71,9 @@ async def run_guidance_workflow(task_id: str, task: dict) -> AsyncGenerator[dict
     """Run guidance without entering the historical paper workflow."""
     task_manager.update_status(task_id, TaskStatus.RUNNING)
     try:
-        async for payload in build_default_guidance_pipeline().run(task_id, task):
+        async for payload in build_default_guidance_pipeline(
+            str(task.get("workflow_mode") or "standard")
+        ).run(task_id, task):
             yield payload
         task_manager.update_status(task_id, TaskStatus.COMPLETED)
     except Exception as exc:

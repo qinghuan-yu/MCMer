@@ -1,0 +1,7 @@
+{
+  "case_id": "wrong_unit",
+  "review_field": "dimensional_consistency",
+  "review_value": "failed",
+  "issue": "The response variable and model equation use incompatible units.",
+  "required_revision": "Correct the symbol units and rederive the affected equation."
+}

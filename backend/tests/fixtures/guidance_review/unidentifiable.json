@@ -1,0 +1,7 @@
+{
+  "case_id": "unidentifiable",
+  "review_field": "identifiability",
+  "review_value": "failed",
+  "issue": "Branch parameters are not uniquely identifiable from the observed aggregate flow.",
+  "required_revision": "Add an independently justified identification constraint."
+}
