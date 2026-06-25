@@ -53,9 +53,29 @@ class GuidancePipeline:
         )
 
         yield _progress(task_id, "modeling", 0.25, "正在生成建模方案")
-        model_path = await self._run_stage(
-            "modeling", task_id, task, problem_path, root / "model_spec.json"
-        )
+        try:
+            model_path = await self._run_stage(
+                "modeling", task_id, task, problem_path, root / "model_spec.json"
+            )
+        except Exception as exc:
+            approved_path = _write_modeling_failure_contracts(
+                root,
+                task_id=task_id,
+                input_path=problem_path,
+                exc=exc,
+            )
+            yield _progress(
+                task_id,
+                "guidance",
+                0.94,
+                "正在生成建模失败阻断说明",
+            )
+            await self._run_stage(
+                "guidance", task_id, task, approved_path, root / "guidance.md"
+            )
+            for payload in _final_result(task_id, root):
+                yield payload
+            return
 
         yield _progress(task_id, "model_review", 0.40, "正在独立审核模型")
         approved_path = await self._run_stage(
@@ -65,9 +85,30 @@ class GuidancePipeline:
 
         if approved.review_status == "revision_required":
             yield _progress(task_id, "modeling", 0.46, "正在根据审核意见修订模型")
-            model_path = await self._run_stage(
-                "modeling", task_id, task, root / "model_review.json", root / "model_spec.json"
-            )
+            review_path = root / "model_review.json"
+            try:
+                model_path = await self._run_stage(
+                    "modeling", task_id, task, review_path, root / "model_spec.json"
+                )
+            except Exception as exc:
+                approved_path = _write_modeling_failure_contracts(
+                    root,
+                    task_id=task_id,
+                    input_path=review_path,
+                    exc=exc,
+                )
+                yield _progress(
+                    task_id,
+                    "guidance",
+                    0.94,
+                    "正在生成建模失败阻断说明",
+                )
+                await self._run_stage(
+                    "guidance", task_id, task, approved_path, root / "guidance.md"
+                )
+                for payload in _final_result(task_id, root):
+                    yield payload
+                return
             yield _progress(task_id, "model_review", 0.52, "正在复审修订后的模型")
             approved_path = await self._run_stage(
                 "model_review", task_id, task, model_path, root / "approved_model_spec.json"
@@ -96,27 +137,8 @@ class GuidancePipeline:
             "guidance", task_id, task, guidance_input, root / "guidance.md"
         )
 
-        guidance_path = root / "guidance.md"
-        audit = _read_json(root / "guidance_audit_report.json")
-        yield _progress(task_id, "done", 1.0, "建模指导方案已生成", status="completed")
-        yield {
-            "type": "result",
-            "data": TaskResult(
-                task_id=task_id,
-                status="completed",
-                task_type="guidance",
-                primary_artifact_type="guidance",
-                markdown_path=str(guidance_path),
-                guidance_path=str(guidance_path),
-                paper_path=str(guidance_path),
-                docx_path="",
-                notebook_path=str(root / "notebook.ipynb") if (root / "notebook.ipynb").is_file() else "",
-                work_dir=str(root),
-                audit_status=str(audit.get("status") or ""),
-                audit_summary=json.dumps(audit.get("scores", {}), ensure_ascii=False),
-                audit_blocks=audit.get("blocks", []),
-            ).model_dump(),
-        }
+        for payload in _final_result(task_id, root):
+            yield payload
 
     async def _run_stage(
         self,
@@ -132,6 +154,30 @@ class GuidancePipeline:
             input_path=input_path,
             output_path=output_path,
         )
+
+
+def _final_result(task_id: str, root: Path):
+    guidance_path = root / "guidance.md"
+    audit = _read_json(root / "guidance_audit_report.json")
+    yield _progress(task_id, "done", 1.0, "建模指导方案已生成", status="completed")
+    yield {
+        "type": "result",
+        "data": TaskResult(
+            task_id=task_id,
+            status="completed",
+            task_type="guidance",
+            primary_artifact_type="guidance",
+            markdown_path=str(guidance_path),
+            guidance_path=str(guidance_path),
+            paper_path=str(guidance_path),
+            docx_path="",
+            notebook_path=str(root / "notebook.ipynb") if (root / "notebook.ipynb").is_file() else "",
+            work_dir=str(root),
+            audit_status=str(audit.get("status") or ""),
+            audit_summary=json.dumps(audit.get("scores", {}), ensure_ascii=False),
+            audit_blocks=audit.get("blocks", []),
+        ).model_dump(),
+    }
 
 
 def _progress(
@@ -164,3 +210,62 @@ def _read_json(path: Path) -> dict:
 
 def _load_approved_model(path: Path) -> ApprovedModelSpec:
     return ApprovedModelSpec.model_validate(_read_json(path))
+
+
+def _write_modeling_failure_contracts(
+    root: Path,
+    *,
+    task_id: str,
+    input_path: Path,
+    exc: Exception,
+) -> Path:
+    message = str(exc)
+    failure = {
+        "task_id": task_id,
+        "failed_stage": "modeling",
+        "failed_operation": "model_spec_generation",
+        "input_ref": input_path.name,
+        "error_type": type(exc).__name__,
+        "error": message,
+        "resume_from": input_path.name,
+    }
+    (root / "modeling_failure.json").write_text(
+        json.dumps(failure, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    review = {
+        "model_id": "modeling-contract-failure",
+        "status": "blocked",
+        "problem_spec_ref": "problem_spec.json",
+        "model_spec_ref": "model_spec.json",
+        "identifiability": "not_reviewed",
+        "dimensional_consistency": "not_reviewed",
+        "data_sufficiency": "not_reviewed",
+        "computational_feasibility": "blocked",
+        "blocking_issues": [message],
+        "required_revisions": [
+            "Regenerate a syntactically valid ModelSpec JSON contract before model review."
+        ],
+    }
+    (root / "model_review.json").write_text(
+        json.dumps(review, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    approved = ApprovedModelSpec(
+        review_status="blocked",
+        model_id="modeling-contract-failure",
+        approved_model={
+            "model_id": "modeling-contract-failure",
+            "selected_method": "blocked_before_model_review",
+            "candidate_methods": [],
+            "assumptions": [],
+            "subproblem_models": [],
+            "blocking_issues": [message],
+        },
+    )
+    approved_path = root / "approved_model_spec.json"
+    approved_path.write_text(
+        approved.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    return approved_path

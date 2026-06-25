@@ -58,6 +58,29 @@ class SequentialReviewStage:
         return output_path
 
 
+class FailingStage:
+    def __init__(
+        self,
+        name: str,
+        calls: list[tuple[str, str | None]],
+        error: Exception,
+    ) -> None:
+        self.name = name
+        self.calls = calls
+        self.error = error
+
+    async def run(
+        self,
+        *,
+        task_id: str,
+        task: dict,
+        input_path: Path | None,
+        output_path: Path,
+    ) -> Path:
+        self.calls.append((self.name, input_path.name if input_path else None))
+        raise self.error
+
+
 def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path: Path) -> None:
     from app.guidance.pipeline import GuidancePipeline
 
@@ -129,6 +152,60 @@ def test_guidance_pipeline_never_runs_calculation_for_unapproved_model(tmp_path:
         "model_review",
         "guidance",
     ]
+    assert messages[-1]["data"]["status"] == "completed"
+
+
+def test_guidance_pipeline_writes_blocked_guidance_after_modeling_contract_failure(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.pipeline import GuidancePipeline
+    from app.guidance.stages import GuidanceStage
+
+    calls: list[tuple[str, str | None]] = []
+    pipeline = GuidancePipeline(
+        decomposition_stage=RecordingStage(
+            "decomposition",
+            calls,
+            {
+                "task_summary": "Solve the malformed model generation case.",
+                "subproblems": [{"id": "problem1", "objective": "Build a model."}],
+            },
+        ),
+        modeling_stage=FailingStage(
+            "modeling",
+            calls,
+            RuntimeError(
+                "GuidanceModeler failed to generate valid ModelSpec after 2 complete attempts: "
+                "JSONDecodeError: Expecting ',' delimiter: line 413 column 18"
+            ),
+        ),
+        model_review_stage=RecordingStage("model_review", calls),
+        calculation_stage=RecordingStage("calculation", calls),
+        result_verification_stage=RecordingStage("result_verification", calls),
+        guidance_stage=GuidanceStage(),
+    )
+    task = {
+        "task_id": "task-model-json-failure",
+        "question": "Generate a robust modeling plan.",
+        "work_dir": str(tmp_path),
+    }
+
+    async def collect():
+        return [payload async for payload in pipeline.run("task-model-json-failure", task)]
+
+    messages = asyncio.run(collect())
+
+    assert calls == [
+        ("decomposition", None),
+        ("modeling", "problem_spec.json"),
+    ]
+    assert not (tmp_path / "solve.py").exists()
+    assert not (tmp_path / "execution_manifest.json").exists()
+    assert (tmp_path / "modeling_failure.json").is_file()
+    assert (tmp_path / "approved_model_spec.json").is_file()
+    assert (tmp_path / "guidance.md").is_file()
+    guidance = (tmp_path / "guidance.md").read_text(encoding="utf-8")
+    assert "GuidanceModeler failed to generate valid ModelSpec" in guidance
     assert messages[-1]["data"]["status"] == "completed"
 
 
