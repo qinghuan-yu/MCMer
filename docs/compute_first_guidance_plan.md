@@ -233,7 +233,7 @@ GuidanceStage
 - [x] 增加一个优化题 fixture。
 - [x] 增加一个预测或评价题 fixture。
 - [x] 删除 `_legacy_paper_writing_workflow` 及 guidance 不再使用的旧修复代码。
-- [ ] 保留 polish 所需代码并迁入独立边界。
+- [x] 保留 polish 所需代码并迁入独立边界。
 
 **退出证据**：三类真实题均走同一六阶段接口；guidance 调用图不再依赖旧写作 workflow。
 

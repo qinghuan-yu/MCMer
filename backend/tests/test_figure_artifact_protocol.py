@@ -1508,7 +1508,7 @@ def test_deterministic_renderer_requires_cjk_font(monkeypatch) -> None:
 def test_polish_contract_prefers_parent_contract(tmp_path: Path, monkeypatch) -> None:
     """Polish should inherit parent ProblemContract before fallback text detection."""
     from app.artifacts.contracts import ProblemContract
-    from app.core.workflow import _resolve_polish_contract
+    from app.polish.workflow import _resolve_polish_contract
 
     parent_dir = tmp_path / "parent"
     parent_dir.mkdir(parents=True, exist_ok=True)

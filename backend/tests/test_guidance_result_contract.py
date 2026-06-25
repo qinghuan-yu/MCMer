@@ -80,10 +80,36 @@ def test_workflow_dispatches_guidance_without_legacy_writing_runner(monkeypatch)
     assert messages == [{"type": "guidance-runner", "task_id": "task-1", "task": task}]
 
 
+def test_workflow_dispatches_polish_through_independent_polish_boundary(monkeypatch) -> None:
+    from app.core import workflow
+    from app.polish import workflow as polish_workflow
+
+    task = {"task_id": "task-polish", "task_type": "polish"}
+    monkeypatch.setattr(workflow.task_manager, "get_task", lambda task_id: task)
+
+    async def fake_polish_runner(task_id, current_task):
+        yield {"type": "polish-runner", "task_id": task_id, "task": current_task}
+
+    monkeypatch.setattr(polish_workflow, "run_polish_workflow", fake_polish_runner)
+
+    async def collect_messages():
+        return [message async for message in workflow.run_workflow("task-polish", "ignored")]
+
+    messages = asyncio.run(collect_messages())
+
+    assert messages == [{"type": "polish-runner", "task_id": "task-polish", "task": task}]
+
+
 def test_core_workflow_no_longer_exposes_legacy_paper_writing_runner() -> None:
     from app.core import workflow
 
     assert not hasattr(workflow, "_legacy_paper_writing_workflow")
+
+
+def test_core_workflow_no_longer_exposes_polish_implementation() -> None:
+    from app.core import workflow
+
+    assert not hasattr(workflow, "_polish_workflow")
 
 
 def test_guidance_runtime_policy_cannot_reenter_legacy_repair_agents() -> None:
