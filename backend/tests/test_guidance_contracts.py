@@ -37,3 +37,63 @@ def test_candidate_method_contract_requires_named_object() -> None:
         CandidateMethodSpec.model_validate("least squares")
     with pytest.raises(ValidationError):
         CandidateMethodSpec.model_validate({})
+
+
+def test_problem_spec_assigns_stable_ids_to_blank_subproblems_for_coverage() -> None:
+    from app.guidance.contracts import ModelSpec, ProblemSpec, validate_subproblem_coverage
+
+    problem_spec = ProblemSpec(
+        task_summary="Solve five decomposed modeling tasks.",
+        subproblems=[
+            {"objective": "Analyze the first task."},
+            {"id": "", "objective": "Analyze the second task."},
+            {"id": "   ", "objective": "Analyze the third task."},
+            {"id": None, "objective": "Analyze the fourth task."},
+            {"id": "problem5", "objective": "Analyze the fifth task."},
+        ],
+    )
+    model_spec = ModelSpec(
+        model_id="five-task-model",
+        selected_method="structured modeling",
+        candidate_methods=[
+            {
+                "name": "structured modeling",
+                "selected": True,
+                "reason": "covers every decomposed task",
+            }
+        ],
+        subproblem_models=[
+            {
+                "subproblem_id": f"problem{index}",
+                "objective": f"Model task {index}.",
+                "selected_method": "structured modeling",
+                "rationale": "Each task receives a concrete model.",
+                "equations": ["y = f(x)"],
+                "parameters": [
+                    {
+                        "parameter_id": f"theta_{index}",
+                        "symbol": f"theta_{index}",
+                        "meaning": "task parameter",
+                        "unit": "dimensionless",
+                        "source_type": "assumption",
+                        "source_detail": "problem statement",
+                        "estimation_method": "declared assumption",
+                        "constraints": ["finite"],
+                    }
+                ],
+                "constraints": ["finite parameter values"],
+                "solve_steps": ["Build the model.", "Compute the result."],
+                "expected_results": ["task result"],
+            }
+            for index in range(1, 6)
+        ],
+    )
+
+    validate_subproblem_coverage(problem_spec, model_spec)
+    assert [item["id"] for item in problem_spec.subproblems] == [
+        "problem1",
+        "problem2",
+        "problem3",
+        "problem4",
+        "problem5",
+    ]

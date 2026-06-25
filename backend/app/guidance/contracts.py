@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 CORE_EXECUTION_OUTPUTS = (
@@ -22,6 +22,17 @@ class ProblemSpec(BaseModel):
     data_sources: list[dict[str, Any]] = Field(default_factory=list)
     locked_facts: list[str] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def assign_stable_subproblem_ids(self) -> ProblemSpec:
+        normalized: list[dict[str, Any]] = []
+        for index, subproblem in enumerate(self.subproblems, start=1):
+            item = dict(subproblem)
+            subproblem_id = str(item.get("id") or "").strip()
+            item["id"] = subproblem_id or f"problem{index}"
+            normalized.append(item)
+        self.subproblems = normalized
+        return self
 
 
 class ParameterDefinition(BaseModel):
