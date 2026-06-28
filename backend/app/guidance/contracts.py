@@ -39,36 +39,36 @@ class ProblemSpec(BaseModel):
 class ParameterDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    parameter_id: str
-    symbol: str
-    meaning: str
-    unit: str
+    parameter_id: str = Field(max_length=80)
+    symbol: str = Field(max_length=40)
+    meaning: str = Field(max_length=160)
+    unit: str = Field(max_length=80)
     source_type: Literal["given", "data", "estimated", "assumption"]
-    source_detail: str
-    estimation_method: str
-    constraints: list[str] = Field(min_length=1)
+    source_detail: str = Field(max_length=160)
+    estimation_method: str = Field(max_length=120)
+    constraints: list[str] = Field(min_length=1, max_length=4)
 
 
 class CandidateMethodSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str
+    name: str = Field(max_length=80)
     selected: bool
-    reason: str
+    reason: str = Field(max_length=180)
 
 
 class SubproblemModelSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subproblem_id: str
-    objective: str
-    selected_method: str
-    rationale: str
-    equations: list[str] = Field(min_length=1)
-    parameters: list[ParameterDefinition] = Field(min_length=1)
-    constraints: list[str] = Field(min_length=1)
-    solve_steps: list[str] = Field(min_length=1)
-    expected_results: list[str] = Field(min_length=1)
+    objective: str = Field(max_length=240)
+    selected_method: str = Field(max_length=120)
+    rationale: str = Field(max_length=260)
+    equations: list[str] = Field(min_length=1, max_length=5)
+    parameters: list[ParameterDefinition] = Field(min_length=1, max_length=8)
+    constraints: list[str] = Field(min_length=1, max_length=8)
+    solve_steps: list[str] = Field(min_length=1, max_length=8)
+    expected_results: list[str] = Field(min_length=1, max_length=5)
 
     @model_validator(mode="after")
     def canonicalize_subproblem_id(self) -> SubproblemModelSpec:
@@ -92,11 +92,11 @@ class ModelSpec(BaseModel):
     model_id: str
     problem_spec_ref: str = "problem_spec.json"
     selected_method: str
-    candidate_methods: list[CandidateMethodSpec] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list)
-    symbols: list[dict[str, Any]] = Field(default_factory=list)
+    candidate_methods: list[CandidateMethodSpec] = Field(default_factory=list, max_length=4)
+    assumptions: list[str] = Field(default_factory=list, max_length=12)
+    symbols: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
     subproblem_models: list[SubproblemModelSpec] = Field(min_length=1)
-    figure_requests: list[dict[str, Any]] = Field(default_factory=list)
+    figure_requests: list[dict[str, Any]] = Field(default_factory=list, max_length=8)
     review_resolutions: list[ReviewResolution] = Field(default_factory=list)
 
 

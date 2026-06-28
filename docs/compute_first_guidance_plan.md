@@ -73,6 +73,15 @@
 - [x] GuidanceProgramGenerator 首轮提示必须明确根目录 required output 只能写入工作目录根部，禁止默认写入 output/results 子目录。
 - [x] 计算阶段失败且无 verified evidence 时 guidance 必须渲染为计算链路阻断诊断，禁止输出空壳正式方案。
 - [x] 阻断诊断报告必须使用诊断专属审计章节清单，避免被正式方案章节误报 warning。
+- [x] 生成程序中辅助函数引用未定义全局变量时必须在执行前拒绝，避免真实链路运行到 NameError 才失败。
+- [x] solver_results.evidence 禁止写入 `kind=blocked`，阻断项必须进入 result_registry.blocked_results，图片只能绑定 verified result。
+- [x] 生成程序静态作用域检查必须跳过嵌套函数体并允许嵌套函数自有参数，避免误拒绝合法求解器。
+- [x] 结果复核状态为 blocked 时 guidance 必须渲染为结果复核阻断诊断，禁止继续输出正式建模指导方案外壳。
+- [x] 回归 evidence 的 `constraint_values` 禁止复用 residuals/errors，必须表示非负约束裕度或模型中的非负量。
+- [x] 结构化契约重试必须保留原始业务系统提示，避免第二轮重生成遗忘建模、可辨识性或产物协议约束。
+- [x] 生成程序中的回归 evidence 必须包含非空 observed/predicted/residuals/constraint_values，且源码禁止 not implemented/would need to compute 等占位实现短语。
+- [x] ModelSpec 输出必须使用 schema 级长度与数量约束压缩，复杂子问题用参数组概括，避免真实题建模 JSON 过长截断。
+- [x] 阻断诊断 guidance 的审计必须只检查诊断披露完整性，不得套用正式方案的参数、数值与图片覆盖率规则。
 ## Go / No-Go
 
 - **判断**：Go，但停止把简易公式计算器扩展为通用求解器。

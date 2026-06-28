@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import glob
 import hashlib
 import json
@@ -134,6 +135,13 @@ def _validate_generated_program(source_code: str) -> None:
         "随机数据": "随机数据",
         "兜底": "兜底",
         "placeholder": "placeholder",
+        "not implemented": "not implemented",
+        "would need to compute": "would need to compute",
+        "due to complexity": "due to complexity",
+        "简化": "简化",
+        "未实现": "未实现",
+        "暂不实现": "暂不实现",
+        "需要另行计算": "需要另行计算",
         "dummy data": "dummy data",
     }
     lowered_source = source_code.lower()
@@ -146,22 +154,51 @@ def _validate_generated_program(source_code: str) -> None:
     except SyntaxError as exc:
         raise UnsafeGeneratedProgramError(f"generated solve.py is not valid Python: {exc}") from exc
 
+    _validate_function_global_names(tree)
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Dict):
+            is_regression_evidence = _dict_has_kind_value(node, "regression")
             for key, value in zip(node.keys, node.values):
+                if (
+                    is_regression_evidence
+                    and _is_regression_required_series_key(key)
+                    and _is_empty_list(value)
+                ):
+                    raise UnsafeGeneratedProgramError(
+                        f"{_constant_string_value(key)} must be a non-empty numeric list in regression solver evidence"
+                    )
                 if _is_constraint_values_key(key) and _is_empty_list(value):
                     raise UnsafeGeneratedProgramError(
                         "constraint_values must be a non-empty numeric list in solver evidence"
+                    )
+                if _is_constraint_values_key(key) and _value_mentions_residual(value):
+                    raise UnsafeGeneratedProgramError(
+                        "constraint_values must not reuse residuals; record nonnegative constraint margins or modeled nonnegative quantities"
+                    )
+                if _is_kind_key(key) and _is_blocked_kind_value(value):
+                    raise UnsafeGeneratedProgramError(
+                        "solver_results.evidence must not use kind=blocked; write blockers to result_registry.blocked_results"
                     )
         if isinstance(node, ast.Assign) and _is_empty_list(node.value):
             if any(_target_mentions_constraint_values(target) for target in node.targets):
                 raise UnsafeGeneratedProgramError(
                     "constraint_values must be a non-empty numeric list in solver evidence"
                 )
+        if isinstance(node, ast.Assign) and _value_mentions_residual(node.value):
+            if any(_target_mentions_constraint_values(target) for target in node.targets):
+                raise UnsafeGeneratedProgramError(
+                    "constraint_values must not reuse residuals; record nonnegative constraint margins or modeled nonnegative quantities"
+                )
         if isinstance(node, ast.AnnAssign) and _is_empty_list(node.value):
             if _target_mentions_constraint_values(node.target):
                 raise UnsafeGeneratedProgramError(
                     "constraint_values must be a non-empty numeric list in solver evidence"
+                )
+        if isinstance(node, ast.AnnAssign) and _value_mentions_residual(node.value):
+            if _target_mentions_constraint_values(node.target):
+                raise UnsafeGeneratedProgramError(
+                    "constraint_values must not reuse residuals; record nonnegative constraint margins or modeled nonnegative quantities"
                 )
 
     forbidden_modules = {"subprocess", "socket", "ctypes", "multiprocessing"}
@@ -217,8 +254,125 @@ def _is_empty_list(node: ast.AST | None) -> bool:
     return isinstance(node, ast.List) and not node.elts
 
 
+def _validate_function_global_names(tree: ast.Module) -> None:
+    module_names = set(dir(builtins))
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            module_names.add(node.name)
+        elif isinstance(node, ast.Import):
+            module_names.update(alias.asname or alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module_names.update(alias.asname or alias.name for alias in node.names)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                module_names.update(_assigned_names(target))
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _validate_single_function_scope(node, module_names)
+
+
+def _validate_single_function_scope(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    module_names: set[str],
+) -> None:
+    local_names = _function_argument_names(function)
+    for node in _walk_function_body(function):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                local_names.update(_assigned_names(target))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            local_names.add(node.name)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            local_names.update(_assigned_names(node.target))
+        elif isinstance(node, ast.With):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    local_names.update(_assigned_names(item.optional_vars))
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            local_names.add(str(node.name))
+        elif isinstance(node, ast.comprehension):
+            local_names.update(_assigned_names(node.target))
+
+    for node in _walk_function_body(function):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in local_names or node.id in module_names:
+                continue
+            raise UnsafeGeneratedProgramError(
+                f"undefined global name in generated solve.py function {function.name}: {node.id}"
+            )
+
+
+def _function_argument_names(function: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    args = function.args
+    names = {arg.arg for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]}
+    if args.vararg is not None:
+        names.add(args.vararg.arg)
+    if args.kwarg is not None:
+        names.add(args.kwarg.arg)
+    return names
+
+
+def _walk_function_body(function: ast.FunctionDef | ast.AsyncFunctionDef):
+    for statement in function.body:
+        yield from _walk_scope_node(statement)
+
+
+def _walk_scope_node(node: ast.AST):
+    yield node
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+        return
+    for child in ast.iter_child_nodes(node):
+        yield from _walk_scope_node(child)
+
+
+def _assigned_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: set[str] = set()
+        for item in node.elts:
+            names.update(_assigned_names(item))
+        return names
+    return set()
+
+
 def _is_constraint_values_key(node: ast.AST | None) -> bool:
     return isinstance(node, ast.Constant) and node.value == "constraint_values"
+
+
+def _is_regression_required_series_key(node: ast.AST | None) -> bool:
+    return _constant_string_value(node) in {
+        "observed",
+        "predicted",
+        "residuals",
+        "constraint_values",
+    }
+
+
+def _is_kind_key(node: ast.AST | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value == "kind"
+
+
+def _is_blocked_kind_value(node: ast.AST | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value == "blocked"
+
+
+def _dict_has_kind_value(node: ast.Dict, value: str) -> bool:
+    return any(
+        _is_kind_key(key)
+        and isinstance(item, ast.Constant)
+        and item.value == value
+        for key, item in zip(node.keys, node.values)
+    )
+
+
+def _constant_string_value(node: ast.AST | None) -> str:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return ""
 
 
 def _target_mentions_constraint_values(node: ast.AST) -> bool:
@@ -231,6 +385,18 @@ def _target_mentions_constraint_values(node: ast.AST) -> bool:
     if isinstance(node, (ast.Tuple, ast.List)):
         return any(_target_mentions_constraint_values(item) for item in node.elts)
     return False
+
+
+def _value_mentions_residual(node: ast.AST | None) -> bool:
+    if node is None:
+        return False
+    if isinstance(node, ast.Name):
+        return "residual" in node.id.lower()
+    if isinstance(node, ast.Attribute):
+        return "residual" in node.attr.lower() or _value_mentions_residual(node.value)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return "residual" in node.value.lower()
+    return any(_value_mentions_residual(child) for child in ast.iter_child_nodes(node))
 
 
 def _is_numpy_random_attribute(node: ast.Attribute, numpy_aliases: set[str]) -> bool:

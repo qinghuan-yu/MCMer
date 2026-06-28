@@ -43,10 +43,11 @@ def build_guidance_audit_report(
 
     _check_required_sections(text, context, warnings)
     _check_blocked_disclosure(text, results, blocks)
-    _check_parameter_coverage(text, parameters, blocks)
-    _check_minimum_guidance_evidence(results, parameters, blocks)
-    _check_registered_numbers(text, results, parameters, blocks)
-    _check_figure_coverage(text, figures, artifact_root, blocks)
+    if not _is_blocking_diagnostic(text):
+        _check_parameter_coverage(text, parameters, blocks)
+        _check_minimum_guidance_evidence(results, parameters, blocks)
+        _check_registered_numbers(text, results, parameters, blocks)
+        _check_figure_coverage(text, figures, artifact_root, blocks)
 
     status = "PASS"
     if blocks:
@@ -67,6 +68,14 @@ def build_guidance_audit_report(
         "blocks": blocks,
         "warnings": warnings,
     }
+
+
+def _is_blocking_diagnostic(text: str) -> bool:
+    return text.startswith((
+        "# 计算链路阻断诊断",
+        "# 建模链路阻断诊断",
+        "# 结果复核阻断诊断",
+    ))
 
 
 def _check_figure_coverage(

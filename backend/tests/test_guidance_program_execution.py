@@ -260,12 +260,36 @@ def test_program_executor_rejects_unsafe_generated_code_before_execution(tmp_pat
             "示例",
         ),
         (
+            "# not implemented due to complexity\nprint('blocked')",
+            "not implemented",
+        ),
+        (
+            "# would need to compute from model\nprint('empty evidence')",
+            "would need to compute",
+        ),
+        (
             "constraint_values = []\nprint('bad regression evidence')",
             "constraint_values",
         ),
         (
             "evidence = {'constraint_values': []}\nprint(evidence)",
             "constraint_values",
+        ),
+        (
+            "evidence = {'kind': 'regression', 'predicted': [], 'residuals': [0.0], 'constraint_values': [1.0]}\n"
+            "print(evidence)",
+            "predicted",
+        ),
+        (
+            "evidence = {'kind': 'regression', 'predicted': [1.0], 'residuals': [], 'constraint_values': [1.0]}\n"
+            "print(evidence)",
+            "residuals",
+        ),
+        (
+            "residuals = [1.0, -2.0]\n"
+            "evidence = {'kind': 'regression', 'constraint_values': residuals}\n"
+            "print(evidence)",
+            "constraint_values.*residual",
         ),
     ],
 )
@@ -354,6 +378,90 @@ with open('results/solver_results.json', 'w') as f:
         asyncio.run(run())
 
     assert interpreter.execute_calls == 0
+
+
+def test_program_executor_rejects_helper_function_with_undefined_global_before_execution(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
+    from app.guidance.execution import LocalProgramExecutor, UnsafeGeneratedProgramError
+
+    interpreter = FakeInterpreter(tmp_path)
+    source_code = """
+import numpy as np
+
+def create_residual_plot(problem2_results, t):
+    residuals = np.array(problem2_results['pred']) - np.array(Q5)
+    return residuals
+
+def main():
+    Q5 = [1.0, 2.0, 3.0]
+    create_residual_plot({'pred': [1.0, 2.0, 3.0]}, [0, 1, 2])
+
+if __name__ == '__main__':
+    main()
+""".strip()
+
+    async def run():
+        executor = LocalProgramExecutor(interpreter_factory=lambda work_dir: interpreter)
+        return await executor.execute(
+            task_id="task-undefined-helper-global",
+            work_dir=tmp_path,
+            approved_model=ApprovedModelSpec(
+                review_status="approved",
+                model_id="undefined-helper-global",
+                required_outputs=["solver_results.json"],
+            ),
+            program=GeneratedProgram(
+                source_code=source_code,
+                declared_outputs=["solver_results.json"],
+            ),
+        )
+
+    with pytest.raises(UnsafeGeneratedProgramError, match="undefined global name.*Q5"):
+        asyncio.run(run())
+
+    assert interpreter.execute_calls == 0
+
+
+def test_program_executor_allows_nested_helper_function_own_arguments(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
+    from app.guidance.execution import LocalProgramExecutor
+
+    interpreter = FakeInterpreter(tmp_path)
+    source_code = """
+def solve_problem1(values):
+    def model(params, x):
+        a, b = params
+        return [a * item + b for item in x]
+    fitted = model([1.0, 0.0], values)
+    return fitted
+
+solve_problem1([1.0, 2.0, 3.0])
+""".strip()
+
+    async def run():
+        executor = LocalProgramExecutor(interpreter_factory=lambda work_dir: interpreter)
+        return await executor.execute(
+            task_id="task-nested-helper-arguments",
+            work_dir=tmp_path,
+            approved_model=ApprovedModelSpec(
+                review_status="approved",
+                model_id="nested-helper-arguments",
+                required_outputs=["solver_results.json"],
+            ),
+            program=GeneratedProgram(
+                source_code=source_code,
+                declared_outputs=["solver_results.json"],
+            ),
+        )
+
+    manifest = asyncio.run(run())
+
+    assert manifest.status == "passed"
+    assert interpreter.execute_calls == 1
 
 
 def test_program_executor_runs_real_local_solver_and_figure(tmp_path: Path) -> None:

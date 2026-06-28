@@ -148,4 +148,4 @@ def test_review_fixture_blocks_before_solver_generation(
     assert fixture["issue"] in guidance
     assert fixture["required_revision"] in guidance
     assert audit["status"] == "PASS"
-    assert messages[-1]["data"]["status"] == "completed"
+    assert messages[-1]["data"]["status"] == "blocked"

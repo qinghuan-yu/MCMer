@@ -472,11 +472,16 @@ class GuidanceStage:
 
 
 def _required_guidance_sections(guidance: str) -> list[str]:
-    if guidance.startswith("# 计算链路阻断诊断") or guidance.startswith("# 建模链路阻断诊断"):
+    if (
+        guidance.startswith("# 计算链路阻断诊断")
+        or guidance.startswith("# 建模链路阻断诊断")
+        or guidance.startswith("# 结果复核阻断诊断")
+    ):
         return [
             "可信度摘要",
             "阻断位置",
             "阻断原因",
+            "复核检查概览" if guidance.startswith("# 结果复核阻断诊断") else "",
             "下一步修复动作",
             "可复现附件说明",
         ]

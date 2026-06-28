@@ -1161,8 +1161,8 @@ def test_guidance_discloses_failed_solver_without_result_registries(tmp_path: Pa
     assert "model review did not pass dimensional consistency" not in guidance
     assert "No such file or directory" not in guidance
     assert str(tmp_path) not in guidance
-    assert audit["status"] == "BLOCK"
-    assert audit["blocks"]
+    assert audit["status"] == "PASS"
+    assert audit["blocks"] == []
     assert not [
         warning
         for warning in audit["warnings"]
@@ -1230,8 +1230,55 @@ def test_guidance_downgrades_forged_verified_report_without_checks(tmp_path: Pat
     )
 
     guidance = output.read_text(encoding="utf-8")
-    assert "结果复核状态为 `blocked`" in guidance
+    assert guidance.startswith("# 结果复核阻断诊断")
     assert "verified guidance evidence missing: equation checks" in guidance
+    assert "## 参数与来源表" not in guidance
+
+
+def test_guidance_stage_renders_blocked_verification_as_diagnostic_not_formal_plan(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.stages import GuidanceStage, ResultVerificationStage
+
+    manifest_path = _write_verified_fit_artifacts(tmp_path)
+    report_path = asyncio.run(
+        ResultVerificationStage().run(
+            task_id="task-blocked-verification",
+            task={"work_dir": str(tmp_path)},
+            input_path=manifest_path,
+            output_path=tmp_path / "verification_report.json",
+        )
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["status"] = "blocked"
+    report["constraint_checks"] = [{"status": "failed", "result_id": "result_piecewise_fit"}]
+    report["blocking_issues"] = ["result_piecewise_fit: recorded nonnegative constraints fail"]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    output = asyncio.run(
+        GuidanceStage().run(
+            task_id="task-blocked-verification",
+            task={"work_dir": str(tmp_path)},
+            input_path=report_path,
+            output_path=tmp_path / "guidance.md",
+        )
+    )
+
+    guidance = output.read_text(encoding="utf-8")
+    audit = json.loads((tmp_path / "guidance_audit_report.json").read_text(encoding="utf-8"))
+    assert guidance.startswith("# 结果复核阻断诊断")
+    assert "失败阶段：`verification`" in guidance
+    assert "约束满足复核：0/1 项通过" in guidance
+    assert "result_piecewise_fit: recorded nonnegative constraints fail" in guidance
+    assert "## 参数与来源表" not in guidance
+    assert "## 必要计算结果" not in guidance
+    assert audit["status"] == "PASS"
+    assert audit["blocks"] == []
+    assert not [
+        warning
+        for warning in audit["warnings"]
+        if warning["type"] == "missing_expected_section"
+    ]
 
 
 def test_guidance_audit_blocks_deleted_registered_figure(tmp_path: Path) -> None:
@@ -1318,11 +1365,8 @@ def test_guidance_stage_writes_blocked_artifacts_from_failed_model_review(tmp_pa
     assert "Add an independently justified identification constraint." in guidance
     assert "unconstrained branch decomposition" not in guidance
     assert "q_main = q_1 + q_2" not in guidance
-    assert audit["status"] == "BLOCK"
-    assert any(
-        block["type"] == "no_verified_guidance_evidence"
-        for block in audit["blocks"]
-    )
+    assert audit["status"] == "PASS"
+    assert audit["blocks"] == []
 
 
 def test_guidance_stage_renders_modeling_failure_as_diagnostic_not_empty_plan(

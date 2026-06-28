@@ -144,6 +144,12 @@ def render_verified_guidance(
             verification_report=verification_report,
             result_registry=result_registry,
         )
+    if status == "blocked":
+        return _render_verification_failure_diagnostic(
+            approved_model=approved_model,
+            verification_report=verification_report,
+            result_registry=result_registry,
+        )
     lines = [
         "# 建模指导方案",
         "",
@@ -383,6 +389,85 @@ def _render_calculation_failure_diagnostic(
         "- 重新生成 `solve.py`，确保它只读取真实附件和题设事实，不使用占位、模拟、随机或兜底数据。",
         "- 将 `solver_results.json`、`parameter_registry.json`、`result_registry.json` 和 `figure_registry.json` 写到 required output 指定的精确相对路径。",
         "- 写出 typed solver evidence 后重新执行结果复核；只有复核通过的参数和结果才能进入正式指导方案。",
+        "",
+        "## 可复现附件说明",
+        "",
+    ])
+    for name, ref in verification_report.get("artifact_refs", {}).items():
+        if name == "figures":
+            continue
+        lines.append(f"- `{name}`：`{ref}`")
+    return "\n".join(lines) + "\n"
+
+
+def _render_verification_failure_diagnostic(
+    *,
+    approved_model: dict[str, Any],
+    verification_report: dict[str, Any],
+    result_registry: dict[str, Any],
+) -> str:
+    blocking_issues = verification_report.get("blocking_issues", [])
+    if not isinstance(blocking_issues, list):
+        blocking_issues = []
+    blocked_results = result_registry.get("blocked_results", [])
+    if not isinstance(blocked_results, list):
+        blocked_results = []
+
+    lines = [
+        "# 结果复核阻断诊断",
+        "",
+        "## 可信度摘要",
+        "",
+        "本次任务已有计算产物，但结果复核未通过，因此不会输出正式建模指导方案。",
+        "系统不会展示参数表、数值结论、模型公式或图片解读作为可信内容；这些内容必须先修复并重新复核。",
+        "",
+        "## 阻断位置",
+        "",
+        "- 失败阶段：`verification`",
+        f"- 模型 ID：`{_cell(verification_report.get('model_id') or approved_model.get('model_id'))}`",
+        "- 恢复入口：`execution_manifest.json`",
+        "",
+        "## 阻断原因",
+        "",
+    ]
+    if blocking_issues:
+        lines.extend(f"- {issue}" for issue in blocking_issues)
+    else:
+        lines.append("- 复核报告状态为 blocked，但未登记详细阻断项；以 verification_report.json 为准。")
+
+    lines.extend(["", "## 复核检查概览", ""])
+    checked_groups = [
+        ("输入覆盖", verification_report.get("input_checks", [])),
+        ("公式/目标函数", verification_report.get("equation_checks", [])),
+        ("单位一致性", verification_report.get("unit_checks", [])),
+        ("约束满足", verification_report.get("constraint_checks", [])),
+        ("残差/目标值", verification_report.get("residual_checks", [])),
+        ("敏感性", verification_report.get("sensitivity_checks", [])),
+    ]
+    for label, checks in checked_groups:
+        if not isinstance(checks, list) or not checks:
+            continue
+        passed = sum(
+            1 for check in checks if isinstance(check, dict) and check.get("status") == "passed"
+        )
+        lines.append(f"- {label}复核：{passed}/{len(checks)} 项通过。")
+
+    lines.extend(["", "## 已登记阻断结果", ""])
+    if blocked_results:
+        for item in blocked_results:
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"- `{_cell(item.get('id'))}`：{item.get('message') or item.get('reason')}")
+    else:
+        lines.append("- 结果注册表未登记 blocked_results；本轮阻断来自 verification_report.json 的复核检查。")
+
+    lines.extend([
+        "",
+        "## 下一步修复动作",
+        "",
+        "- 回到 `solve.py` 与 `solver_results.json`，修正导致复核失败的 typed solver evidence。",
+        "- 对回归 evidence，`constraint_values` 必须是非负约束裕度或模型中的非负量，不能复用 residuals/errors。",
+        "- 将题设常量、单位换算和显式假设补登记到 `parameter_registry.json`，再重新执行结果复核。",
         "",
         "## 可复现附件说明",
         "",

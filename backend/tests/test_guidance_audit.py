@@ -104,6 +104,58 @@ def test_guidance_audit_blocks_empty_pre_model_guidance() -> None:
     assert any(block["type"] == "no_verified_guidance_evidence" for block in report["blocks"])
 
 
+def test_guidance_audit_treats_blocking_diagnostic_as_diagnostic_artifact() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 结果复核阻断诊断\n\n"
+            "## 可信度摘要\n\n"
+            "本次任务已有计算产物，但结果复核未通过，因此不会输出正式建模指导方案。\n\n"
+            "## 阻断位置\n\n"
+            "- 失败阶段：`verification`\n\n"
+            "## 阻断原因\n\n"
+            "- problem3: recorded nonnegative constraints fail\n\n"
+            "## 复核检查概览\n\n"
+            "- 约束满足复核：0/1 项通过。\n\n"
+            "## 下一步修复动作\n\n"
+            "- 回到 solve.py 与 solver_results.json 修正 typed solver evidence。\n\n"
+            "## 可复现附件说明\n\n"
+            "- `result_registry`：`result_registry.json`\n"
+        ),
+        guidance_context={
+            "required_sections": [
+                "可信度摘要",
+                "阻断位置",
+                "阻断原因",
+                "复核检查概览",
+                "下一步修复动作",
+                "可复现附件说明",
+            ]
+        },
+        result_registry={
+            "verified_results": [{"id": "problem3", "value": {"rmse": 24.7}}],
+            "blocked_results": [{"id": "problem1", "reason": "Optimization failed"}],
+        },
+        parameter_registry={
+            "parameters": [
+                {"id": "theta_problem3", "symbol": "theta_3", "value": [1, 2, 3]},
+            ]
+        },
+        figure_registry={
+            "figures": [
+                {
+                    "path": "result_fit_prob3.png",
+                    "role": "result_fit",
+                    "source_data": ["data/附件(Attachment).xlsx"],
+                    "linked_result_ids": ["problem3"],
+                }
+            ]
+        },
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocks"] == []
+
+
 def test_guidance_audit_ignores_decimal_section_numbers() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(

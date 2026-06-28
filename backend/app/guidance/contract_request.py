@@ -141,7 +141,9 @@ class StructuredContractRequester(Generic[ModelT]):
             {
                 "role": "system",
                 "content": (
-                    f"你正在重新生成 {self.model_type.__name__}。必须完整重新生成并严格满足 JSON Schema。\n\n"
+                    f"{self.system_prompt}\n\n"
+                    f"你正在重新生成 {self.model_type.__name__}。必须完整重新生成并严格满足 JSON Schema，"
+                    "同时保留上述所有业务约束。\n\n"
                     f"{STRICT_JSON_RULES}"
                 ),
             },
