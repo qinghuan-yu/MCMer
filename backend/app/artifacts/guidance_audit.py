@@ -9,6 +9,7 @@ from typing import Any
 
 
 _NUMBER_RE = re.compile(r"(?<![\w.])-?(?:\d+\.\d+|\d+)(?:[eE][+-]?\d+)?(?![\w.])")
+_URL_RE = re.compile(r"https?://\S+")
 _DISCLOSURE_TOKENS = (
     "blocked",
     "partial",
@@ -43,6 +44,7 @@ def build_guidance_audit_report(
     _check_required_sections(text, context, warnings)
     _check_blocked_disclosure(text, results, blocks)
     _check_parameter_coverage(text, parameters, blocks)
+    _check_minimum_guidance_evidence(results, parameters, blocks)
     _check_registered_numbers(text, results, parameters, blocks)
     _check_figure_coverage(text, figures, artifact_root, blocks)
 
@@ -181,6 +183,27 @@ def _check_parameter_coverage(
         })
 
 
+def _check_minimum_guidance_evidence(
+    result_registry: dict[str, object],
+    parameter_registry: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    verified = result_registry.get("verified_results", [])
+    parameters = parameter_registry.get("parameters", [])
+    has_verified = isinstance(verified, list) and bool(verified)
+    has_parameters = isinstance(parameters, list) and bool(parameters)
+    if has_verified or has_parameters:
+        return
+
+    blocks.append({
+        "type": "no_verified_guidance_evidence",
+        "location": "guidance.md",
+        "route": "writer",
+        "severity": "high",
+        "fix": "Do not publish guidance as trusted until it contains verified results or parameter evidence.",
+    })
+
+
 def _check_registered_numbers(
     text: str,
     result_registry: dict[str, object],
@@ -222,8 +245,12 @@ def _is_probable_structure_number(text: str, start: int, end: int, value: str) -
     if line_end == -1:
         line_end = len(text)
     line = text[line_start:line_end].strip()
+    local_start = start - line_start
+    local_end = end - line_start
     suffix = text[end:end + 1]
 
+    if _is_inside_url(line, local_start, local_end):
+        return True
     if re.match(r"^#{1,6}\s+\d+(?:\.\d+)+\b", line):
         return True
     if line.startswith(("#", "-", "*")) and len(value) <= 2:
@@ -232,6 +259,13 @@ def _is_probable_structure_number(text: str, start: int, end: int, value: str) -
         return True
     if value.isdigit() and int(value) <= 25 and line.startswith("|"):
         return True
+    return False
+
+
+def _is_inside_url(line: str, start: int, end: int) -> bool:
+    for match in _URL_RE.finditer(line):
+        if start >= match.start() and end <= match.end():
+            return True
     return False
 
 

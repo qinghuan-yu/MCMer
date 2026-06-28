@@ -159,12 +159,18 @@ class GuidancePipeline:
 def _final_result(task_id: str, root: Path):
     guidance_path = root / "guidance.md"
     audit = _read_json(root / "guidance_audit_report.json")
-    yield _progress(task_id, "done", 1.0, "建模指导方案已生成", status="completed")
+    final_status = _resolve_final_status(root, audit)
+    final_message = (
+        "guidance audit blocked the generated plan"
+        if final_status == "blocked"
+        else "guidance plan generated"
+    )
+    yield _progress(task_id, "done", 1.0, final_message, status=final_status)
     yield {
         "type": "result",
         "data": TaskResult(
             task_id=task_id,
-            status="completed",
+            status=final_status,
             task_type="guidance",
             primary_artifact_type="guidance",
             markdown_path=str(guidance_path),
@@ -178,6 +184,19 @@ def _final_result(task_id: str, root: Path):
             audit_blocks=audit.get("blocks", []),
         ).model_dump(),
     }
+
+
+def _resolve_final_status(root: Path, audit: dict) -> str:
+    if str(audit.get("status") or "").upper() == "BLOCK":
+        return "blocked"
+    verification = _read_json(root / "verification_report.json")
+    if str(verification.get("status") or "").lower() == "blocked":
+        return "blocked"
+    approved = _read_json(root / "approved_model_spec.json")
+    review_status = str(approved.get("review_status") or "").lower()
+    if review_status and review_status != "approved":
+        return "blocked"
+    return "completed"
 
 
 def _progress(

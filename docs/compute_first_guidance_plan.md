@@ -55,6 +55,24 @@
 - [x] GuidanceModelReviser 结构化 JSON 两轮失败时必须复用同一 blocked guidance 收束路径，禁止修订阶段直接中断。
 - [x] ModelSpec 裸数字子问题 ID 由合同层规范为 `problemN`，避免有效建模方案被覆盖校验误阻断。
 
+- [x] GuidanceProgramGenerator 生成失败或语义校验失败必须写入 failed execution_manifest，并继续进入复核与 blocked guidance 路径，禁止六阶段链路直接中断。
+- [x] standard guidance LLM 请求预算必须使用全局超时配置，避免生成器两轮失败把前端任务拖成数分钟等待。
+- [x] StructuredContractRequester 必须对每次结构化 attempt 施加外层硬超时，禁止底层 LLM 内部重试绕过 guidance 阶段预算。
+- [x] guidance 审计必须阻断无 verified result 且无参数证据的空壳 blocked 方案，禁止把建模前失败标记为可信 PASS。
+- [x] GuidanceModeler 必须使用压缩 ProblemSpec payload，避免真实题面全文导致结构化建模超时。
+- [x] 模型审核未通过时 guidance 禁止引用未 approved 的草稿模型公式、方法与数值，只能输出阻断原因和修复清单。
+- [x] guidance 审计或模型审核阻断时 Pipeline 最终结果必须返回 blocked，禁止前端误判为 completed。
+- [x] GuidanceModeler 与 GuidanceModelReviser 必须逐子问题给出可辨识性计划，缺少 rank/Jacobian/唯一性/固定参数或额外约束检查时触发完整重生。
+- [x] CalculationStage 必须捕获求解执行器协议异常并写入 failed execution_manifest，禁止真实链路在计算阶段抛异常中断。
+- [x] 建模前合同失败时 guidance 必须输出阻断诊断报告，禁止渲染空参数表和空计算结果的伪方案。
+- [x] 模型审核阻断生成的 blocked result 必须使用唯一 ID，禁止结果注册表出现重复引用。
+- [x] GuidanceModeler 与 GuidanceModelReviser 首轮 prompt 必须明确要求逐题“可辨识性计划”和设计矩阵满秩/唯一性等检查。
+- [x] 生成程序声明根目录输出却写入子目录时必须在执行前拒绝，禁止形成 partial 后才发现注册表缺失。
+- [x] 结果复核阻断项不得泄露绝对工作目录路径，缺失合同文件只报告相对文件名。
+- [x] 模型审核自然语言正向结论如 `consistent; ...` 必须按通过处理，避免单位一致性误阻断。
+- [x] GuidanceProgramGenerator 首轮提示必须明确根目录 required output 只能写入工作目录根部，禁止默认写入 output/results 子目录。
+- [x] 计算阶段失败且无 verified evidence 时 guidance 必须渲染为计算链路阻断诊断，禁止输出空壳正式方案。
+- [x] 阻断诊断报告必须使用诊断专属审计章节清单，避免被正式方案章节误报 warning。
 ## Go / No-Go
 
 - **判断**：Go，但停止把简易公式计算器扩展为通用求解器。

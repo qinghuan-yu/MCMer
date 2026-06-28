@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from pathlib import Path
 
 from app.core.llm.llm import LLM
@@ -14,6 +15,7 @@ from app.guidance.contracts import (
     ProblemSpec,
     RevisedModelSpec,
 )
+from app.guidance.execution import validate_generated_program_source
 
 
 class LLMProblemDecomposer:
@@ -40,10 +42,11 @@ class LLMModeler:
         return await _request_model(
             llm=self.llm,
             model_type=ModelSpec,
-            system_prompt="""你是数学建模方案专家。只输出 ModelSpec JSON。比较候选方法并选择一个。subproblem_models 必须逐一覆盖 problem_spec 的全部子问题；每项完整给出 objective、selected_method、rationale、equations、parameters、constraints、solve_steps、expected_results。每个 parameter 必须给出 parameter_id、symbol、meaning、unit、source_type、source_detail、estimation_method 和非空 constraints。若不可唯一识别，必须给出显式识别约束并披露条件性。执行文件清单由系统管理，不得输出 required_outputs。图片 role 只允许 data_overview、model_explanation、result_fit、verification_diagnostic，并逐图声明 path、source_data 与 linked_result_ids。""",
-            payload=problem_spec.model_dump(mode="json"),
+            system_prompt="""你是数学建模方案专家。只输出 ModelSpec JSON。比较候选方法并选择一个。subproblem_models 必须逐一覆盖 problem_spec 的全部子问题；每项完整给出 objective、selected_method、rationale、equations、parameters、constraints、solve_steps、expected_results。每个 parameter 必须给出 parameter_id、symbol、meaning、unit、source_type、source_detail、estimation_method 和非空 constraints。每个子问题都必须在 constraints 或 solve_steps 中写明“可辨识性计划”，并至少包含 rank/Jacobian/设计矩阵满秩/唯一性检查/固定参数/额外识别约束之一；若不可唯一识别，必须给出显式识别约束并披露条件性。执行文件清单由系统管理，不得输出 required_outputs。图片 role 只允许 data_overview、model_explanation、result_fit、verification_diagnostic，并逐图声明 path、source_data 与 linked_result_ids。""",
+            payload=_compact_problem_spec_for_modeling(problem_spec),
             agent_name="GuidanceModeler",
             artifact_dir=work_dir,
+            semantic_validator=_validate_model_identifiability_plan,
         )
 
     async def revise(
@@ -58,7 +61,7 @@ class LLMModeler:
         return await _request_model(
             llm=self.llm,
             model_type=RevisedModelSpec,
-            system_prompt="""你是数学建模方案修订专家。只输出完整 RevisedModelSpec JSON。严格根据独立审核的每一条 required_revisions 修订旧模型，并在 review_resolutions 中逐条原文填写 requirement，同时说明 resolution、affected_subproblem_ids 和 changed_fields；不得遗漏或添加无关解决项。subproblem_models 必须逐一覆盖全部子问题，并为每项保留非空 equations、parameters、constraints、solve_steps、expected_results；每个参数必须保留来源和估计方法。不得回避审核项，也不得虚构数据。执行文件清单由系统管理，不得输出 required_outputs。""",
+            system_prompt="""你是数学建模方案修订专家。只输出完整 RevisedModelSpec JSON。严格根据独立审核的每一条 required_revisions 修订旧模型，并在 review_resolutions 中逐条原文填写 requirement，同时说明 resolution、affected_subproblem_ids 和 changed_fields；不得遗漏或添加无关解决项。subproblem_models 必须逐一覆盖全部子问题，并为每项保留非空 equations、parameters、constraints、solve_steps、expected_results；每项都必须写明“可辨识性计划”，并至少包含 rank/Jacobian/设计矩阵满秩/唯一性检查/固定参数/额外识别约束之一；每个参数必须保留来源和估计方法。不得回避审核项，也不得虚构数据。执行文件清单由系统管理，不得输出 required_outputs。""",
             payload={
                 "problem_spec": problem_spec.model_dump(mode="json"),
                 "previous_model": previous_model.model_dump(mode="json"),
@@ -66,6 +69,7 @@ class LLMModeler:
             },
             agent_name="GuidanceModelReviser",
             artifact_dir=work_dir,
+            semantic_validator=_validate_model_identifiability_plan,
         )
 
 
@@ -104,6 +108,7 @@ class LLMProgramGenerator:
         approved_model: ApprovedModelSpec,
         task: dict,
         work_dir: Path,
+        data_profile: dict,
     ) -> GeneratedProgram:
         data_files = sorted(
             path.relative_to(work_dir).as_posix()
@@ -113,13 +118,32 @@ class LLMProgramGenerator:
         return await _request_model(
             llm=self.llm,
             model_type=GeneratedProgram,
-            system_prompt="""你是一次性求解程序生成器。只输出 GeneratedProgram JSON，其中 source_code 是完整可运行的 Python solve.py，declared_outputs 必须按原顺序逐项等于 approved_model.required_outputs。程序必须直接读取给定数据文件，执行完整拟合或优化并写出全部 declared_outputs。四类 JSON 必须严格遵守以下协议且不得增加字段：parameter_registry.json={parameters:[{id,symbol,name,value,unit,source_type,source_ref,trust_status}],summary?}；result_registry.json={verified_results:[{id,result_type,claim_text,metrics:{数值指标},source_data:[路径]}],blocked_results:[{id,message,reason,source_data}]?,summary?}；figure_registry.json={figures:[{path,role,source_data:[路径],linked_result_ids:[结果ID]}]}，role 只能是 data_overview/model_explanation/result_fit/verification_diagnostic；solver_results.json={evidence:[...]}, 每项必须有 kind、subproblem_id、result_id。回归 evidence 使用 kind=regression、observed、predicted、residuals、constraint_values、parameter_stability={method,max_relative_change,threshold}；优化 evidence 使用 kind=optimization、objective_value、baseline_objective、constraints=[{name,value,lower_bound或upper_bound}]、sensitivity={method,max_relative_change,threshold}。solver evidence 的 result_id 必须与 verified_results 一一对应。禁止工具调用、网络、subprocess、eval/exec，也禁止运行期间补代码。""",
+            system_prompt="""你是一次性求解程序生成器。只输出 GeneratedProgram JSON，其中 source_code 是完整可运行的 Python solve.py，declared_outputs 必须按原顺序逐项等于 approved_model.required_outputs。程序必须直接读取给定数据文件，执行完整拟合或优化并写出全部 declared_outputs。四类 JSON 必须严格遵守以下协议且不得增加字段：parameter_registry.json={parameters:[{id,symbol,name,value,unit,source_type,source_ref,trust_status}],summary:{...}}；result_registry.json={verified_results:[{id,result_type,claim_text,metrics:{数值指标},source_data:[路径]}],blocked_results:[{id,message,reason,source_data}],summary:{...}}；summary 必须是 JSON object，不能是字符串；parameter_registry.summary 至少包含 total_count 和 coverage_status；result_registry.summary 至少包含 verified_count、blocked_count 和 coverage_status。result_registry 中 regression verified_result.metrics 必须包含 rmse 和 max_abs_residual，且数值必须能由 solver_results.regression evidence 复算；优化结果 metrics 必须包含 objective_value；预测结果 metrics 必须包含 forecast_value、train_rmse、holdout_rmse。figure_registry.json={figures:[{path,role,source_data:[路径],linked_result_ids:[结果ID]}]}，role 只能是 data_overview/model_explanation/result_fit/verification_diagnostic；solver_results.json={evidence:[...]}, 每项必须有 kind、subproblem_id、result_id。回归 evidence 使用 kind=regression、observed、predicted、residuals、constraint_values、parameter_stability={method,max_relative_change,threshold}；constraint_values 必须是非空数字数组，不能是 object、空数组或缺省值；优化 evidence 使用 kind=optimization、objective_value、baseline_objective、constraints=[{name,value,lower_bound或upper_bound}]、sensitivity={method,max_relative_change,threshold}。solver evidence 的 result_id 必须与 verified_results 一一对应；无法提供完整 typed solver evidence 的结果必须进入 blocked_results，不得进入 verified_results。禁止工具调用、网络、subprocess、eval/exec，也禁止运行期间补代码。""",
             payload={
                 "approved_model": approved_model.model_dump(mode="json"),
                 "data_files": data_files,
+                "data_profile": data_profile,
+                "program_generation_rules": [
+                    "Use the exact file paths, workbook sheet names, column names, sample rows, and row/column sizes from data_profile.",
+                    "Do not invent schemas, example data, placeholder data, simulated data, random data, or fallback data.",
+                    "If the profiled data is insufficient for a calculation, write the reason to blocked_results instead of fabricating numeric results.",
+                    "Required outputs whose paths are root filenames must be written exactly at the work directory root, for example solver_results.json must be written as solver_results.json.",
+                    "Do not prefix root required outputs with output/, outputs/, results/, or result/; those directories are only allowed when the declared output path itself contains that directory.",
+                    "At the start of main(), create every parent directory needed by declared_outputs before saving figures or JSON files.",
+                    "Wrap each subproblem calculation so one failed subproblem is recorded in blocked_results and does not prevent writing parameter_registry.json, result_registry.json, figure_registry.json, and solver_results.json.",
+                    "Only include a figure in figure_registry when the file is actually written; every listed figure path must exist before the program exits.",
+                    "Do not put planned-but-unwritten figures in figure_registry; omit them and explain the missing calculation in blocked_results.",
+                    "If a verified result cannot supply typed solver evidence, matching metrics, and traceable source_data, put it in blocked_results instead of verified_results.",
+                    "For constrained optimization, use scipy.optimize.minimize with a supported constrained method such as SLSQP; do not pass constraints to scipy.optimize.least_squares.",
+                    "Every numeric claim in result_registry must be traceable to the real data file, the generated code, or an explicit assumption registered in parameter_registry.",
+                ],
             },
             agent_name="GuidanceProgramGenerator",
             artifact_dir=work_dir,
+            semantic_validator=lambda program: validate_generated_program_source(
+                program.source_code,
+                program.declared_outputs,
+            ),
         )
 
 
@@ -131,6 +155,7 @@ async def _request_model(
     payload,
     agent_name: str,
     artifact_dir: Path,
+    semantic_validator=None,
 ):
     requester = StructuredContractRequester(
         llm=llm,
@@ -138,6 +163,7 @@ async def _request_model(
         system_prompt=system_prompt,
         agent_name=agent_name,
         artifact_dir=artifact_dir,
+        semantic_validator=semantic_validator,
     )
     return await requester.request(payload)
 
@@ -145,3 +171,121 @@ async def _request_model(
 def _task_artifact_dir(task: dict) -> Path | None:
     work_dir = task.get("work_dir")
     return Path(work_dir) if work_dir else None
+
+
+def _compact_problem_spec_for_modeling(problem_spec: ProblemSpec) -> dict[str, Any]:
+    payload = problem_spec.model_dump(mode="json")
+    return {
+        "schema_version": payload.get("schema_version", "1.0"),
+        "task_summary": _compact_task_summary(str(payload.get("task_summary") or "")),
+        "subproblems": [
+            _compact_subproblem(item)
+            for item in payload.get("subproblems", [])
+            if isinstance(item, dict)
+        ],
+        "data_sources": [
+            _compact_mapping(item, ("name", "description", "tables", "path", "columns"))
+            for item in payload.get("data_sources", [])
+            if isinstance(item, dict)
+        ],
+        "locked_facts": _compact_list(payload.get("locked_facts", []), limit=12),
+        "uncertainties": _compact_list(payload.get("uncertainties", []), limit=12),
+    }
+
+
+def _validate_model_identifiability_plan(model_spec: ModelSpec) -> None:
+    keywords = (
+        "identifiability",
+        "identifiable",
+        "unique",
+        "rank",
+        "jacobian",
+        "fixed",
+        "可辨识",
+        "唯一",
+        "秩",
+        "雅可比",
+        "固定",
+        "额外约束",
+        "识别约束",
+    )
+    missing: list[str] = []
+    for subproblem in model_spec.subproblem_models:
+        text = " ".join([*subproblem.constraints, *subproblem.solve_steps]).lower()
+        if not any(keyword.lower() in text for keyword in keywords):
+            missing.append(subproblem.subproblem_id)
+    if missing:
+        raise ValueError(
+            "identifiability plan missing for subproblems: "
+            + ", ".join(missing)
+            + "; add explicit rank/Jacobian/uniqueness/fixed-parameter or extra-constraint checks."
+        )
+
+
+def _compact_subproblem(item: dict[str, Any]) -> dict[str, Any]:
+    return _compact_mapping(
+        item,
+        (
+            "id",
+            "objective",
+            "description",
+            "goals",
+            "inputs",
+            "outputs",
+            "constraints",
+            "assumptions",
+            "candidate_directions",
+            "problem_type",
+        ),
+    )
+
+
+def _compact_mapping(item: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key in keys:
+        if key not in item:
+            continue
+        value = item[key]
+        if isinstance(value, str):
+            output[key] = _truncate_text(value, 240)
+        elif isinstance(value, list):
+            output[key] = _compact_list(value, limit=8)
+        elif isinstance(value, dict):
+            output[key] = {
+                str(child_key): _truncate_text(str(child_value), 160)
+                for child_key, child_value in list(value.items())[:8]
+            }
+        else:
+            output[key] = value
+    return output
+
+
+def _compact_list(value: Any, *, limit: int) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    output: list[Any] = []
+    for item in value[:limit]:
+        if isinstance(item, str):
+            output.append(_truncate_text(item, 180))
+        elif isinstance(item, dict):
+            output.append(_compact_mapping(item, tuple(str(key) for key in item.keys())))
+        else:
+            output.append(item)
+    return output
+
+
+def _compact_task_summary(text: str) -> str:
+    clean = " ".join(text.split())
+    if len(clean) <= 300:
+        return clean
+    return (
+        "Full task statement omitted from GuidanceModeler payload; "
+        "use saved problem_spec.json and compact subproblem contracts."
+    )
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    clean = " ".join(text.split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 20].rstrip() + "...[truncated]"

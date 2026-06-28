@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Generic, TypeVar
@@ -12,6 +13,17 @@ from pydantic import BaseModel, ValidationError
 
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+STRICT_JSON_RULES = (
+    "Strict JSON output rules:\n"
+    "- Return one JSON object only.\n"
+    "- Do not wrap the JSON in Markdown code fences.\n"
+    "- Do not add explanations before or after the JSON.\n"
+    "- Escape every quote inside string values.\n"
+    "- Do not use raw newline characters inside string values; use \\n when needed.\n"
+    "- Use double quotes for every JSON key and string value."
+)
 
 
 class ContractGenerationError(RuntimeError):
@@ -28,6 +40,7 @@ class StructuredContractRequester(Generic[ModelT]):
         agent_name: str,
         artifact_dir: Path | None = None,
         enrich_payload: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        semantic_validator: Callable[[ModelT], None] | None = None,
     ) -> None:
         self.llm = llm
         self.model_type = model_type
@@ -35,6 +48,7 @@ class StructuredContractRequester(Generic[ModelT]):
         self.agent_name = agent_name
         self.artifact_dir = artifact_dir
         self.enrich_payload = enrich_payload
+        self.semantic_validator = semantic_validator
 
     async def request(self, payload: Any) -> ModelT:
         attempts: list[dict[str, str | int]] = []
@@ -42,7 +56,7 @@ class StructuredContractRequester(Generic[ModelT]):
 
         for attempt_number in (1, 2):
             try:
-                response = await self.llm.chat(
+                response = await self._chat_once(
                     history=history,
                     tools=None,
                     tool_choice="none",
@@ -59,6 +73,8 @@ class StructuredContractRequester(Generic[ModelT]):
                 if self.enrich_payload is not None:
                     parsed = self.enrich_payload(parsed)
                 contract = self.model_type.model_validate(parsed)
+                if self.semantic_validator is not None:
+                    self.semantic_validator(contract)
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 attempts.append(_attempt_record(attempt_number, raw_response, exc))
                 self._write_diagnostic(attempts, status="retrying" if attempt_number == 1 else "failed")
@@ -85,12 +101,23 @@ class StructuredContractRequester(Generic[ModelT]):
 
         raise AssertionError("contract request attempt loop did not return")
 
+    async def _chat_once(self, **kwargs: Any) -> Any:
+        timeout = getattr(self.llm, "request_timeout", None)
+        if timeout is None:
+            return await self.llm.chat(**kwargs)
+        try:
+            return await asyncio.wait_for(self.llm.chat(**kwargs), timeout=float(timeout))
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(
+                f"{self.agent_name}: request timed out after {timeout}s"
+            ) from exc
+
     def _initial_history(self, payload: Any) -> list[dict[str, str]]:
         schema = json.dumps(self.model_type.model_json_schema(), ensure_ascii=False)
         return [
             {
                 "role": "system",
-                "content": f"{self.system_prompt}\n目标 JSON Schema：{schema}",
+                "content": f"{self.system_prompt}\n\n{STRICT_JSON_RULES}\n\n目标 JSON Schema：{schema}",
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
@@ -114,7 +141,8 @@ class StructuredContractRequester(Generic[ModelT]):
             {
                 "role": "system",
                 "content": (
-                    f"你正在重新生成 {self.model_type.__name__}。必须完整重新生成并严格满足 JSON Schema。"
+                    f"你正在重新生成 {self.model_type.__name__}。必须完整重新生成并严格满足 JSON Schema。\n\n"
+                    f"{STRICT_JSON_RULES}"
                 ),
             },
             {"role": "user", "content": json.dumps(correction, ensure_ascii=False)},

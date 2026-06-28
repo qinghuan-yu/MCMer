@@ -119,10 +119,31 @@ def render_verified_guidance(
     verification_report: dict[str, Any],
     parameter_registry: dict[str, Any],
     result_registry: dict[str, Any],
+    execution_manifest: dict[str, Any] | None = None,
+    calculation_failure: dict[str, Any] | None = None,
 ) -> str:
     model = approved_model.get("approved_model", {})
     model = model if isinstance(model, dict) else {}
     status = str(verification_report.get("status") or "blocked")
+    failure = model.get("failure")
+    if status == "blocked" and isinstance(failure, dict) and failure:
+        return _render_blocked_failure_diagnostic(
+            failure=failure,
+            verification_report=verification_report,
+            result_registry=result_registry,
+        )
+    if _is_calculation_failure_without_verified_evidence(
+        status=status,
+        execution_manifest=execution_manifest,
+        parameter_registry=parameter_registry,
+        result_registry=result_registry,
+    ):
+        return _render_calculation_failure_diagnostic(
+            execution_manifest=execution_manifest or {},
+            calculation_failure=calculation_failure or {},
+            verification_report=verification_report,
+            result_registry=result_registry,
+        )
     lines = [
         "# 建模指导方案",
         "",
@@ -265,6 +286,186 @@ def render_verified_guidance(
             lines.extend(f"- `{item}`" for item in ref)
         else:
             lines.append(f"- `{name}`：`{ref}`")
+    return "\n".join(lines) + "\n"
+
+
+def _is_calculation_failure_without_verified_evidence(
+    *,
+    status: str,
+    execution_manifest: dict[str, Any] | None,
+    parameter_registry: dict[str, Any],
+    result_registry: dict[str, Any],
+) -> bool:
+    if status != "blocked" or not isinstance(execution_manifest, dict):
+        return False
+    verified_results = result_registry.get("verified_results", [])
+    parameters = parameter_registry.get("parameters", [])
+    return (
+        execution_manifest.get("status") == "failed"
+        and not verified_results
+        and not parameters
+    )
+
+
+def _render_calculation_failure_diagnostic(
+    *,
+    execution_manifest: dict[str, Any],
+    calculation_failure: dict[str, Any],
+    verification_report: dict[str, Any],
+    result_registry: dict[str, Any],
+) -> str:
+    blocking_issues = verification_report.get("blocking_issues", [])
+    if not isinstance(blocking_issues, list):
+        blocking_issues = []
+    missing_outputs = execution_manifest.get("missing_required_outputs", [])
+    if not isinstance(missing_outputs, list):
+        missing_outputs = []
+    blocked_results = result_registry.get("blocked_results", [])
+    if not isinstance(blocked_results, list):
+        blocked_results = []
+
+    failed_operation = calculation_failure.get("failed_operation")
+    if not failed_operation:
+        failed_operation = (
+            "solver_execution"
+            if execution_manifest.get("execution_count", 0)
+            else "program_generation"
+        )
+    error_message = (
+        calculation_failure.get("error")
+        or execution_manifest.get("error_message")
+        or "未登记详细错误。"
+    )
+
+    lines = [
+        "# 计算链路阻断诊断",
+        "",
+        "## 可信度摘要",
+        "",
+        "本次任务未形成可发布的建模指导方案；链路在数值计算阶段被阻断。",
+        "系统没有参数注册表、结果注册表或 typed solver evidence，因此不会输出空参数表、空计算结果或未复核结论。",
+        "",
+        "## 阻断位置",
+        "",
+        "- 失败阶段：`calculation`",
+        f"- 失败操作：`{_cell(failed_operation)}`",
+        f"- 错误类型：`{_cell(calculation_failure.get('error_type') or _manifest_error_type(execution_manifest))}`",
+        f"- 求解入口：`{_cell(execution_manifest.get('entrypoint'))}`",
+        f"- 恢复入口：`{_cell(calculation_failure.get('resume_from') or 'approved_model_spec.json')}`",
+        "",
+        "## 阻断原因",
+        "",
+        f"- {error_message}",
+    ]
+    for issue in blocking_issues:
+        if issue and issue != error_message:
+            lines.append(f"- {issue}")
+
+    lines.extend(["", "## 缺失产物", ""])
+    if missing_outputs:
+        lines.extend(f"- `{_cell(item)}`" for item in missing_outputs)
+    else:
+        lines.append("- 未登记缺失产物清单；以执行清单为准。")
+
+    lines.extend(["", "## 已登记阻断结果", ""])
+    if blocked_results:
+        for item in blocked_results:
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"- `{_cell(item.get('id'))}`：{item.get('message') or item.get('reason')}")
+    else:
+        lines.append("- 暂无 verified result；本轮只保留执行失败和复核阻断记录。")
+
+    lines.extend([
+        "",
+        "## 下一步修复动作",
+        "",
+        "- 重新生成 `solve.py`，确保它只读取真实附件和题设事实，不使用占位、模拟、随机或兜底数据。",
+        "- 将 `solver_results.json`、`parameter_registry.json`、`result_registry.json` 和 `figure_registry.json` 写到 required output 指定的精确相对路径。",
+        "- 写出 typed solver evidence 后重新执行结果复核；只有复核通过的参数和结果才能进入正式指导方案。",
+        "",
+        "## 可复现附件说明",
+        "",
+    ])
+    for name, ref in verification_report.get("artifact_refs", {}).items():
+        if name == "figures":
+            continue
+        lines.append(f"- `{name}`：`{ref}`")
+    return "\n".join(lines) + "\n"
+
+
+def _manifest_error_type(execution_manifest: dict[str, Any]) -> str:
+    message = str(execution_manifest.get("error_message") or "")
+    if ":" in message:
+        return message.split(":", 1)[0]
+    return "ExecutionFailure"
+
+
+def _render_blocked_failure_diagnostic(
+    *,
+    failure: dict[str, Any],
+    verification_report: dict[str, Any],
+    result_registry: dict[str, Any],
+) -> str:
+    blocking_issues = verification_report.get("blocking_issues", [])
+    if not isinstance(blocking_issues, list):
+        blocking_issues = []
+    blocked_results = result_registry.get("blocked_results", [])
+    if not isinstance(blocked_results, list):
+        blocked_results = []
+
+    lines = [
+        "# 建模链路阻断诊断",
+        "",
+        "## 可信度摘要",
+        "",
+        "本次任务未形成可发布的建模指导方案；链路在模型审核前被合同校验阻断。",
+        "系统没有审核通过的模型、参数表或数值计算结果，因此不会输出空参数表或伪计算结论。",
+        "",
+        "## 阻断位置",
+        "",
+        f"- 失败阶段：`{_cell(failure.get('failed_stage'))}`",
+        f"- 失败操作：`{_cell(failure.get('failed_operation'))}`",
+        f"- 错误类型：`{_cell(failure.get('error_type'))}`",
+        f"- 输入文件：`{_cell(failure.get('input_ref'))}`",
+        f"- 恢复入口：`{_cell(failure.get('resume_from'))}`",
+        "",
+        "## 阻断原因",
+        "",
+        f"- {failure.get('error') or '未登记详细错误。'}",
+    ]
+    for issue in blocking_issues:
+        if issue and issue != failure.get("error"):
+            lines.append(f"- {issue}")
+
+    lines.extend([
+        "",
+        "## 已登记阻断结果",
+        "",
+    ])
+    if blocked_results:
+        for item in blocked_results:
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"- `{_cell(item.get('id'))}`：{item.get('message') or item.get('reason')}")
+    else:
+        lines.append("- 暂无额外 blocked result；以建模合同失败记录为准。")
+
+    lines.extend([
+        "",
+        "## 下一步修复动作",
+        "",
+        "- 重新生成 `ModelSpec`，并逐个子问题补齐可辨识性计划。",
+        "- 每个子问题至少写明 rank/Jacobian/唯一性检查、固定参数、额外识别约束或设计矩阵满秩条件之一。",
+        "- 修复后从恢复入口重新进入建模阶段，再由独立模型审核决定是否允许进入计算。",
+        "",
+        "## 可复现附件说明",
+        "",
+    ])
+    for name, ref in verification_report.get("artifact_refs", {}).items():
+        if name == "figures":
+            continue
+        lines.append(f"- `{name}`：`{ref}`")
     return "\n".join(lines) + "\n"
 
 

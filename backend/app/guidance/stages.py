@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import csv
 from pathlib import Path
 from typing import Protocol
 
@@ -81,6 +82,7 @@ class ProgramGenerator(Protocol):
         approved_model: ApprovedModelSpec,
         task: dict,
         work_dir: Path,
+        data_profile: dict,
     ) -> GeneratedProgram: ...
 
 
@@ -198,6 +200,55 @@ class CalculationStage:
         self.program_generator = program_generator
         self.executor = executor
 
+    @staticmethod
+    def _write_failure_artifacts(
+        *,
+        task_id: str,
+        approved_model: ApprovedModelSpec,
+        input_path: Path,
+        output_path: Path,
+        failed_operation: str,
+        exc: Exception,
+    ) -> Path:
+        error_message = f"{type(exc).__name__}: {exc}"
+        work_dir = output_path.parent
+        (work_dir / "calculation_failure.json").write_text(
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "model_id": approved_model.model_id,
+                    "failed_operation": failed_operation,
+                    "resume_from": input_path.name,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        output_path.write_text(
+            json.dumps(
+                ExecutionManifest(
+                    task_id=task_id,
+                    model_id=approved_model.model_id,
+                    status="failed",
+                    entrypoint="solve.py",
+                    program_sha256="",
+                    execution_count=0,
+                    elapsed_seconds=0.0,
+                    stdout="",
+                    error_message=error_message,
+                    generated_files=[],
+                    missing_required_outputs=list(approved_model.required_outputs),
+                ).model_dump(),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return output_path
+
     async def run(
         self,
         *,
@@ -213,35 +264,43 @@ class CalculationStage:
             input_path.read_text(encoding="utf-8")
         )
         work_dir = output_path.parent
+        data_profile = _build_data_profile(work_dir)
+        (work_dir / "data_profile.json").write_text(
+            json.dumps(data_profile, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         try:
             program = await self.program_generator.generate(
                 approved_model=approved_model,
                 task=task,
                 work_dir=work_dir,
+                data_profile=data_profile,
             )
         except Exception as exc:
-            (work_dir / "calculation_failure.json").write_text(
-                json.dumps(
-                    {
-                        "task_id": task_id,
-                        "model_id": approved_model.model_id,
-                        "failed_operation": "program_generation",
-                        "resume_from": input_path.name,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
+            return self._write_failure_artifacts(
+                task_id=task_id,
+                approved_model=approved_model,
+                input_path=input_path,
+                output_path=output_path,
+                failed_operation="program_generation",
+                exc=exc,
             )
-            raise
-        await self.executor.execute(
-            task_id=task_id,
-            work_dir=work_dir,
-            approved_model=approved_model,
-            program=program,
-        )
+        try:
+            await self.executor.execute(
+                task_id=task_id,
+                work_dir=work_dir,
+                approved_model=approved_model,
+                program=program,
+            )
+        except Exception as exc:
+            return self._write_failure_artifacts(
+                task_id=task_id,
+                approved_model=approved_model,
+                input_path=input_path,
+                output_path=output_path,
+                failed_operation="solver_execution",
+                exc=exc,
+            )
         return output_path
 
 
@@ -279,7 +338,7 @@ class ResultVerificationStage:
         )
         result_ids = {item.id for item in results.verified_results} if results else set()
         figures, figure_issues = _verify_typed_figures(
-            manifest, figure_registry, result_ids
+            root, manifest, figure_registry, result_ids
         )
         numerical_checks = (
             verify_solver_results(solver_results, results)
@@ -293,12 +352,7 @@ class ResultVerificationStage:
             }
         )
         review = _read_json(root / "model_review.json")
-        units_passed = str(review.get("dimensional_consistency") or "").lower() in {
-            "passed",
-            "consistent",
-            "dimensionless",
-            "not_applicable",
-        }
+        units_passed = _is_positive_review_value(review.get("dimensional_consistency"))
 
         blocking_issues: list[str] = []
         if manifest.status != "passed":
@@ -371,33 +425,30 @@ class GuidanceStage:
             approved = _read_json(root / str(refs["approved_model"]))
             parameters = _read_json_if_exists(root / str(refs["parameter_registry"]))
             results = _read_json_if_exists(root / str(refs["result_registry"]))
+            execution_manifest = _read_json_if_exists(
+                root / str(refs.get("execution_manifest", "execution_manifest.json"))
+            )
+            calculation_failure = _read_json_if_exists(root / "calculation_failure.json")
             report = _enforce_verified_guidance_evidence(
                 report,
                 approved_model=approved,
                 parameter_registry=parameters,
                 result_registry=results,
             )
+        if source_path.name == "approved_model_spec.json":
+            execution_manifest = {}
+            calculation_failure = {}
         guidance = render_verified_guidance(
             approved_model=approved,
             verification_report=report.model_dump(mode="json"),
             parameter_registry=parameters,
             result_registry=results,
+            execution_manifest=execution_manifest,
+            calculation_failure=calculation_failure,
         )
         context = {
             "artifact_type": "guidance",
-            "required_sections": [
-                "可信度摘要",
-                "问题理解",
-                "数据与来源",
-                "参数与来源表",
-                "模型选择理由",
-                "分问题建模步骤",
-                "必要计算结果",
-                "复核与稳健性",
-                "阻断项与待确认项",
-                "论文转化建议",
-                "可复现附件说明",
-            ],
+            "required_sections": _required_guidance_sections(guidance),
         }
         audit = build_guidance_audit_report(
             guidance_markdown=guidance,
@@ -420,6 +471,30 @@ class GuidanceStage:
         return output_path
 
 
+def _required_guidance_sections(guidance: str) -> list[str]:
+    if guidance.startswith("# 计算链路阻断诊断") or guidance.startswith("# 建模链路阻断诊断"):
+        return [
+            "可信度摘要",
+            "阻断位置",
+            "阻断原因",
+            "下一步修复动作",
+            "可复现附件说明",
+        ]
+    return [
+        "可信度摘要",
+        "问题理解",
+        "数据与来源",
+        "参数与来源表",
+        "模型选择理由",
+        "分问题建模步骤",
+        "必要计算结果",
+        "复核与稳健性",
+        "阻断项与待确认项",
+        "论文转化建议",
+        "可复现附件说明",
+    ]
+
+
 def _required_input(input_path: Path | None) -> Path:
     if input_path is None:
         raise ValueError("stage requires the previous saved contract")
@@ -431,6 +506,98 @@ def _list_data_files(root: Path) -> list[str]:
     if not data_dir.is_dir():
         return []
     return sorted(path.relative_to(root).as_posix() for path in data_dir.rglob("*") if path.is_file())
+
+
+def _build_data_profile(root: Path) -> dict:
+    files: list[dict] = []
+    for path in (root / "data").rglob("*") if (root / "data").is_dir() else []:
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        profile: dict = {
+            "path": relative,
+            "suffix": path.suffix.lower(),
+            "size_bytes": path.stat().st_size,
+        }
+        if path.suffix.lower() in {".xlsx", ".xlsm"}:
+            profile["workbook"] = _profile_workbook(path)
+        elif path.suffix.lower() == ".csv":
+            profile["table"] = _profile_csv(path)
+        files.append(profile)
+    return {"files": files}
+
+
+def _profile_workbook(path: Path) -> dict:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheets: list[dict] = []
+        for sheet in workbook.worksheets:
+            rows = list(
+                sheet.iter_rows(
+                    min_row=1,
+                    max_row=min(sheet.max_row or 0, 6),
+                    values_only=True,
+                )
+            )
+            non_empty_rows = [
+                [_json_safe_cell(value) for value in row]
+                for row in rows
+                if any(value is not None for value in row)
+            ]
+            columns = [str(value) for value in non_empty_rows[0]] if non_empty_rows else []
+            sheets.append(
+                {
+                    "name": sheet.title,
+                    "max_row": sheet.max_row,
+                    "max_column": sheet.max_column,
+                    "columns": columns,
+                    "sample_rows": non_empty_rows[1:5],
+                }
+            )
+        return {"sheets": sheets}
+    finally:
+        workbook.close()
+
+
+def _profile_csv(path: Path) -> dict:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle)
+        rows = []
+        for index, row in enumerate(reader):
+            if index >= 6:
+                break
+            rows.append(row)
+    return {
+        "columns": rows[0] if rows else [],
+        "sample_rows": rows[1:5],
+    }
+
+
+def _json_safe_cell(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _is_positive_review_value(value) -> bool:
+    text = str(value or "").strip().lower()
+    positives = {
+        "passed",
+        "pass",
+        "yes",
+        "true",
+        "consistent",
+        "dimensionless",
+        "not_applicable",
+        "not applicable",
+        "n/a",
+    }
+    return text in positives or any(
+        text.startswith(f"{positive};") or text.startswith(f"{positive}:")
+        for positive in positives
+    )
 
 
 def _write_model(path: Path, model) -> None:
@@ -515,12 +682,19 @@ def _load_artifact_contract(
 ) -> BaseModel | None:
     try:
         return contract_type.model_validate_json(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except FileNotFoundError:
+        issues.append(f"{path.name} contract missing")
+        return None
+    except OSError as exc:
+        issues.append(f"{path.name} contract invalid: {type(exc).__name__}")
+        return None
+    except ValueError as exc:
         issues.append(f"{path.name} contract invalid: {exc}")
         return None
 
 
 def _verify_typed_figures(
+    root: Path,
     manifest: ExecutionManifest,
     registry: FigureRegistry | None,
     result_ids: set[str],
@@ -534,7 +708,9 @@ def _verify_typed_figures(
 
     for path in sorted(generated_figures - registered_paths):
         issues.append(f"generated figure is not registered: {path}")
-    for path in sorted(registered_paths - generated_figures):
+    for path in sorted(
+        path for path in registered_paths if not (root / path).is_file()
+    ):
         issues.append(f"registered figure was not generated: {path}")
     for figure in figures:
         unknown_ids = set(figure.linked_result_ids) - result_ids
@@ -568,12 +744,12 @@ def _build_blocked_guidance_artifacts(
         "verified_results": [],
         "blocked_results": [
             {
-                "id": "result_model_review_blocked",
+                "id": f"result_model_review_blocked_{index}",
                 "message": issue,
                 "reason": "model_review_failed",
                 "source_data": [approved_model.model_spec_ref, approved_model.review_ref],
             }
-            for issue in issues
+            for index, issue in enumerate(issues, start=1)
         ],
         "summary": {
             "coverage_status": "blocked",
@@ -602,4 +778,18 @@ def _build_blocked_guidance_artifacts(
         json.dumps(results, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return report, approved_model.model_dump(mode="json"), parameters, results
+    return report, _blocked_approved_model_payload(root, approved_model), parameters, results
+
+
+def _blocked_approved_model_payload(root: Path, approved_model: ApprovedModelSpec) -> dict:
+    payload = approved_model.model_dump(mode="json")
+    modeling_failure = _read_json_if_exists(root / "modeling_failure.json")
+    payload["approved_model"] = {
+        "model_id": approved_model.model_id,
+        "selected_method": "blocked_before_model_review",
+        "candidate_methods": [],
+        "assumptions": [],
+        "subproblem_models": [],
+        "failure": modeling_failure,
+    }
+    return payload

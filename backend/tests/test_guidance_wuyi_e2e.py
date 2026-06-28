@@ -196,7 +196,7 @@ class WuyiRevisionReviewer:
 
 
 class WuyiProblemOneProgramGenerator:
-    async def generate(self, *, approved_model, task: dict, work_dir: Path):
+    async def generate(self, *, approved_model, task: dict, work_dir: Path, **kwargs):
         from app.guidance.contracts import GeneratedProgram
 
         return GeneratedProgram(
@@ -521,7 +521,7 @@ class ProductMixOptimizationReviewer:
 
 
 class ProductMixOptimizationProgramGenerator:
-    async def generate(self, *, approved_model, task: dict, work_dir: Path):
+    async def generate(self, *, approved_model, task: dict, work_dir: Path, **kwargs):
         from app.guidance.contracts import GeneratedProgram
 
         return GeneratedProgram(
@@ -843,7 +843,7 @@ class DemandForecastReviewer:
 
 
 class DemandForecastProgramGenerator:
-    async def generate(self, *, approved_model, task: dict, work_dir: Path):
+    async def generate(self, *, approved_model, task: dict, work_dir: Path, **kwargs):
         from app.guidance.contracts import GeneratedProgram
 
         return GeneratedProgram(

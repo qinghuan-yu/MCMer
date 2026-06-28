@@ -81,6 +81,29 @@ def test_guidance_audit_accepts_registered_numbers() -> None:
     assert report["blocks"] == []
 
 
+def test_guidance_audit_blocks_empty_pre_model_guidance() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 建模指导方案\n\n"
+            "## 可信度摘要\n\n"
+            "结果复核状态为 `blocked`。\n\n"
+            "## 参数与来源表\n\n"
+            "| parameter_id | 符号 | 含义 |\n| --- | --- | --- |\n\n"
+            "## 必要计算结果\n\n"
+            "当前没有通过注册表验证的数值结果。\n"
+        ),
+        guidance_context={"required_sections": ["参数与来源表", "必要计算结果"]},
+        result_registry={
+            "verified_results": [],
+            "blocked_results": [{"id": "blocked_before_model_review", "reason": "model timeout"}],
+        },
+        parameter_registry={"parameters": []},
+    )
+
+    assert report["status"] == "BLOCK"
+    assert any(block["type"] == "no_verified_guidance_evidence" for block in report["blocks"])
+
+
 def test_guidance_audit_ignores_decimal_section_numbers() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(
@@ -222,3 +245,30 @@ def test_guidance_audit_blocks_undisclosed_blocked_results() -> None:
 
     assert report["status"] == "BLOCK"
     assert any(block["type"] == "blocked_items_not_disclosed" for block in report["blocks"])
+
+
+def test_guidance_audit_ignores_numbers_inside_urls() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# Guidance\n\n"
+            "## Parameters\n\n"
+            "| parameter | source |\n| --- | --- |\n| alpha = 0.12 | param_alpha |\n\n"
+            "blocked: Schema validation failed. See "
+            "https://errors.pydantic.dev/2.13/v/dict_type for parser details.\n"
+        ),
+        guidance_context={"required_sections": ["Parameters"]},
+        result_registry={
+            "verified_results": [],
+            "blocked_results": [
+                {"id": "blocked_schema", "reason": "Schema validation failed"},
+            ],
+        },
+        parameter_registry={
+            "parameters": [
+                {"id": "param_alpha", "symbol": "alpha", "value": 0.12, "trust_status": "source_locked"},
+            ]
+        },
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocks"] == []

@@ -109,6 +109,41 @@ def test_program_executor_expands_required_output_glob(tmp_path: Path) -> None:
     assert manifest.missing_required_outputs == []
 
 
+def test_program_executor_precreates_parent_dirs_for_required_outputs(tmp_path: Path) -> None:
+    from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
+    from app.guidance.execution import LocalProgramExecutor
+
+    class FigureOnlyInterpreter(FakeInterpreter):
+        async def execute_code(self, code: str):
+            self.execute_calls += 1
+            assert (self.work_dir / "figures").is_dir()
+            (self.work_dir / "figures" / "fit.png").write_bytes(b"png")
+            return "figure written", False, ""
+
+    interpreter = FigureOnlyInterpreter(tmp_path)
+
+    async def run():
+        executor = LocalProgramExecutor(interpreter_factory=lambda work_dir: interpreter)
+        return await executor.execute(
+            task_id="task-precreate-output-dirs",
+            work_dir=tmp_path,
+            approved_model=ApprovedModelSpec(
+                review_status="approved",
+                model_id="figure-output",
+                required_outputs=["figures/fit.png"],
+            ),
+            program=GeneratedProgram(
+                source_code="print('write figure')",
+                declared_outputs=["figures/fit.png"],
+            ),
+        )
+
+    manifest = asyncio.run(run())
+
+    assert manifest.status == "passed"
+    assert manifest.generated_files == ["figures/fit.png", "notebook.ipynb"]
+
+
 def test_program_executor_rejects_incomplete_declared_outputs_before_execution(
     tmp_path: Path,
 ) -> None:
@@ -203,6 +238,119 @@ def test_program_executor_rejects_unsafe_generated_code_before_execution(tmp_pat
         )
 
     with pytest.raises(UnsafeGeneratedProgramError):
+        asyncio.run(run())
+
+    assert interpreter.execute_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("source_code", "expected"),
+    [
+        (
+            "import numpy as np\nvalues = np.random.normal(0, 1, 10)\nprint(values)",
+            "np.random",
+        ),
+        (
+            "from scipy.optimize import least_squares\n"
+            "least_squares(lambda x: x, [1.0], constraints=[{'type': 'eq', 'fun': lambda x: x[0]}])",
+            "least_squares",
+        ),
+        (
+            "# 使用示例数据作为兜底\nprint('示例数据')",
+            "示例",
+        ),
+        (
+            "constraint_values = []\nprint('bad regression evidence')",
+            "constraint_values",
+        ),
+        (
+            "evidence = {'constraint_values': []}\nprint(evidence)",
+            "constraint_values",
+        ),
+    ],
+)
+def test_program_executor_rejects_untrustworthy_solver_patterns_before_execution(
+    tmp_path: Path,
+    source_code: str,
+    expected: str,
+) -> None:
+    from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
+    from app.guidance.execution import LocalProgramExecutor, UnsafeGeneratedProgramError
+
+    interpreter = FakeInterpreter(tmp_path)
+
+    async def run():
+        executor = LocalProgramExecutor(interpreter_factory=lambda work_dir: interpreter)
+        return await executor.execute(
+            task_id="task-untrusted-solver",
+            work_dir=tmp_path,
+            approved_model=ApprovedModelSpec(
+                review_status="approved",
+                model_id="untrusted-solver",
+                required_outputs=["solver_results.json"],
+            ),
+            program=GeneratedProgram(
+                source_code=source_code,
+                declared_outputs=["solver_results.json"],
+            ),
+        )
+
+    with pytest.raises(UnsafeGeneratedProgramError, match=expected):
+        asyncio.run(run())
+
+    assert interpreter.execute_calls == 0
+
+
+def test_program_executor_rejects_declared_root_outputs_written_under_subdirectory(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.contracts import ApprovedModelSpec, GeneratedProgram
+    from app.guidance.execution import LocalProgramExecutor, UnsafeGeneratedProgramError
+
+    interpreter = FakeInterpreter(tmp_path)
+    source_code = """
+import json
+
+with open('results/parameter_registry.json', 'w') as f:
+    json.dump({'parameters': [], 'summary': {}}, f)
+with open('results/result_registry.json', 'w') as f:
+    json.dump({'verified_results': [], 'blocked_results': [], 'summary': {}}, f)
+with open('results/figure_registry.json', 'w') as f:
+    json.dump({'figures': []}, f)
+with open('results/solver_results.json', 'w') as f:
+    json.dump({'evidence': []}, f)
+""".strip()
+
+    async def run():
+        executor = LocalProgramExecutor(interpreter_factory=lambda work_dir: interpreter)
+        return await executor.execute(
+            task_id="task-misplaced-output",
+            work_dir=tmp_path,
+            approved_model=ApprovedModelSpec(
+                review_status="approved",
+                model_id="misplaced-output",
+                required_outputs=[
+                    "solver_results.json",
+                    "parameter_registry.json",
+                    "result_registry.json",
+                    "figure_registry.json",
+                ],
+            ),
+            program=GeneratedProgram(
+                source_code=source_code,
+                declared_outputs=[
+                    "solver_results.json",
+                    "parameter_registry.json",
+                    "result_registry.json",
+                    "figure_registry.json",
+                ],
+            ),
+        )
+
+    with pytest.raises(
+        UnsafeGeneratedProgramError,
+        match="solver_results.json|parameter_registry.json",
+    ):
         asyncio.run(run())
 
     assert interpreter.execute_calls == 0

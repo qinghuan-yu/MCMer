@@ -53,6 +53,15 @@ class ResultRegistry(BaseModel):
     blocked_results: list[BlockedResult] = Field(default_factory=list)
     summary: dict = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def require_unique_result_ids(self):
+        verified_ids = [item.id for item in self.verified_results]
+        blocked_ids = [item.id for item in self.blocked_results]
+        duplicates = _duplicates([*verified_ids, *blocked_ids])
+        if duplicates:
+            raise ValueError(f"duplicate result id: {duplicates[0]}")
+        return self
+
 
 class FigureRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -148,3 +157,13 @@ class SolverResults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     evidence: list[SolverEvidence] = Field(min_length=1)
+
+
+def _duplicates(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for value in values:
+        if value in seen and value not in duplicates:
+            duplicates.append(value)
+        seen.add(value)
+    return duplicates

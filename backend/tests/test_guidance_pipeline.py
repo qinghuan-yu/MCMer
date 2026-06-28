@@ -177,7 +177,7 @@ def test_guidance_pipeline_never_runs_calculation_for_unapproved_model(tmp_path:
         "model_review",
         "guidance",
     ]
-    assert messages[-1]["data"]["status"] == "completed"
+    assert messages[-1]["data"]["status"] == "blocked"
 
 
 def test_guidance_pipeline_writes_blocked_guidance_after_modeling_contract_failure(
@@ -231,7 +231,7 @@ def test_guidance_pipeline_writes_blocked_guidance_after_modeling_contract_failu
     assert (tmp_path / "guidance.md").is_file()
     guidance = (tmp_path / "guidance.md").read_text(encoding="utf-8")
     assert "GuidanceModeler failed to generate valid ModelSpec" in guidance
-    assert messages[-1]["data"]["status"] == "completed"
+    assert messages[-1]["data"]["status"] == "blocked"
 
 
 def test_guidance_pipeline_returns_to_modeling_once_then_runs_approved_model(tmp_path: Path) -> None:
@@ -324,7 +324,7 @@ def test_guidance_pipeline_writes_blocked_guidance_after_revision_contract_failu
     assert "GuidanceModelReviser failed to generate valid RevisedModelSpec" in failure["error"]
     guidance = (tmp_path / "guidance.md").read_text(encoding="utf-8")
     assert "GuidanceModelReviser failed to generate valid RevisedModelSpec" in guidance
-    assert messages[-1]["data"]["status"] == "completed"
+    assert messages[-1]["data"]["status"] == "blocked"
 
 
 def test_guidance_pipeline_writes_blocked_guidance_after_second_review_failure(tmp_path: Path) -> None:
@@ -367,7 +367,7 @@ def test_guidance_pipeline_writes_blocked_guidance_after_second_review_failure(t
     assert not (tmp_path / "solve.py").exists()
     assert not (tmp_path / "execution_manifest.json").exists()
     assert (tmp_path / "guidance.md").is_file()
-    assert messages[-1]["data"]["status"] == "completed"
+    assert messages[-1]["data"]["status"] == "blocked"
 
 
 def test_default_guidance_pipeline_uses_only_the_six_new_business_stages() -> None:
@@ -399,7 +399,7 @@ def test_default_guidance_pipeline_applies_standard_llm_timeout_budget() -> None
         pipeline._stages["model_review"].reviewer.llm,
         pipeline._stages["calculation"].program_generator.llm,
     ]
-    assert {llm.request_timeout for llm in llms} == {240}
+    assert {llm.request_timeout for llm in llms} == {120}
 
 
 def test_guidance_package_does_not_depend_on_legacy_workflow() -> None:

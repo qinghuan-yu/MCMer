@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -29,7 +30,7 @@ class ProblemSpec(BaseModel):
         for index, subproblem in enumerate(self.subproblems, start=1):
             item = dict(subproblem)
             subproblem_id = str(item.get("id") or "").strip()
-            item["id"] = subproblem_id or f"problem{index}"
+            item["id"] = canonical_subproblem_id(subproblem_id) or f"problem{index}"
             normalized.append(item)
         self.subproblems = normalized
         return self
@@ -71,10 +72,7 @@ class SubproblemModelSpec(BaseModel):
 
     @model_validator(mode="after")
     def canonicalize_subproblem_id(self) -> SubproblemModelSpec:
-        subproblem_id = self.subproblem_id.strip()
-        if subproblem_id.isdigit():
-            subproblem_id = f"problem{int(subproblem_id)}"
-        self.subproblem_id = subproblem_id
+        self.subproblem_id = canonical_subproblem_id(self.subproblem_id)
         return self
 
 
@@ -107,8 +105,15 @@ class RevisedModelSpec(ModelSpec):
 
 
 def execution_required_outputs(model_spec: ModelSpec) -> list[str]:
-    figure_paths = [str(request["path"]) for request in model_spec.figure_requests]
-    return [*CORE_EXECUTION_OUTPUTS, *figure_paths]
+    return list(CORE_EXECUTION_OUTPUTS)
+
+
+def canonical_subproblem_id(value: Any) -> str:
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(?i)(?:problem|prob|p|subproblem|subproblem_)?\s*[_-]?\s*(\d+)", text)
+    if match:
+        return f"problem{int(match.group(1))}"
+    return text
 
 
 def validate_review_resolutions(model_spec: ModelSpec, review: ModelReview) -> None:

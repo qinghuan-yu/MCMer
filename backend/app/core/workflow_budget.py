@@ -89,7 +89,7 @@ def resolve_workflow_budget(mode: str) -> WorkflowBudget:
 
     return WorkflowBudget(
         mode="standard",
-        llm_timeout=max(240, settings.LLM_REQUEST_TIMEOUT),
+        llm_timeout=settings.LLM_REQUEST_TIMEOUT,
         coder=CoderStageBudget(
             max_chat_turns=max(36, settings.MAX_CHAT_TURNS),
             max_retries=max(6, settings.MAX_RETRIES),
