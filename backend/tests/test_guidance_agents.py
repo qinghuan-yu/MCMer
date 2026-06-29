@@ -1093,3 +1093,16 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "问题5候选观测时刻" in guidance
     assert "0, 1, 3, 7, 10, 12, 16, 21, 24, 25, 30, 34, 37, 39, 43, 45, 48, 52, 57, 59" in guidance
     assert "result_problem5_minimum_monitoring" in guidance
+    assert "问题2-4拟合模型填表" in guidance
+    assert "问题2" in guidance
+    assert "延迟基函数回归：F_2(k)=X_2(k) theta_2" in guidance
+    assert "theta_2_0..theta_2_6" in guidance
+    assert "result_problem2_traffic_fit" in guidance
+    assert "问题3" in guidance
+    assert "信号相位基函数回归：F_3(k)=X_3(k; g_3) theta_3" in guidance
+    assert "result_problem3_signal_fit" in guidance
+    assert "问题4" in guidance
+    assert "含噪信号相位基函数回归：F_4(k)=X_4(k; g_4) theta_4" in guidance
+    assert "result_problem4_noisy_signal_fit" in guidance
+    assert "evidence_verified" in guidance
+    assert "模型形式不确定，不能解释为唯一支路恢复" in guidance

@@ -574,6 +574,38 @@ def main():
                         "该集合覆盖主要断点和相位边界，但未证明全局最少；正式最小性仍需 rank(A_S)=dim(theta) 证明。",
                     ],
                 },
+                {
+                    "id": "final_problem2_to_4_fitted_models",
+                    "title": "问题2-4拟合模型填表",
+                    "columns": ["题号", "应填项", "答案", "结论状态", "证据"],
+                    "rows": [
+                        {
+                            "题号": "问题2",
+                            "应填项": "主路聚合拟合模型",
+                            "答案": "延迟基函数回归：F_2(k)=X_2(k) theta_2；参数组 theta_2_0..theta_2_6；delay=1 sample",
+                            "结论状态": "evidence_verified",
+                            "证据": "result_problem2_traffic_fit, param_problem2_coef_0..param_problem2_coef_6, param_problem2_delay",
+                        },
+                        {
+                            "题号": "问题3",
+                            "应填项": "交通灯相位拟合模型",
+                            "答案": "信号相位基函数回归：F_3(k)=X_3(k; g_3) theta_3；参数组 theta_3_0..theta_3_8",
+                            "结论状态": "evidence_verified",
+                            "证据": "result_problem3_signal_fit, param_problem3_green_start, param_problem3_coef_0..param_problem3_coef_8",
+                        },
+                        {
+                            "题号": "问题4",
+                            "应填项": "含噪交通灯相位拟合模型",
+                            "答案": "含噪信号相位基函数回归：F_4(k)=X_4(k; g_4) theta_4；参数组 theta_4_0..theta_4_8",
+                            "结论状态": "evidence_verified",
+                            "证据": "result_problem4_noisy_signal_fit, param_problem4_green_start, param_problem4_coef_0..param_problem4_coef_8",
+                        },
+                    ],
+                    "notes": [
+                        "问题2-4的表格给出的是给定基函数下的拟合模型摘要；模型形式不确定，不能解释为唯一支路恢复。",
+                        "若赛题要求填写具体支路流量，需要进一步把 theta 参数代回各支路基函数并在指定时刻复算。",
+                    ],
+                },
             ],
         },
     }
