@@ -23,6 +23,7 @@ class TaskStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     PAUSED = "paused"
+    BLOCKED = "blocked"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

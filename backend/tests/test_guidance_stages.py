@@ -393,6 +393,44 @@ def test_calculation_stage_generates_and_executes_one_complete_solver(tmp_path: 
     assert manifest["execution_count"] == 1
 
 
+def test_calculation_stage_removes_stale_failure_checkpoint_after_success(tmp_path: Path) -> None:
+    from app.guidance.execution import LocalProgramExecutor
+    from app.guidance.stages import CalculationStage
+
+    (tmp_path / "calculation_failure.json").write_text(
+        json.dumps({"failed_operation": "program_generation"}),
+        encoding="utf-8",
+    )
+    approved_path = tmp_path / "approved_model_spec.json"
+    approved_path.write_text(
+        json.dumps(
+            {
+                "review_status": "approved",
+                "model_id": "branch-flow-fit",
+                "required_outputs": ["solver_results.json"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    stage = CalculationStage(
+        program_generator=FakeProgramGenerator(),
+        executor=LocalProgramExecutor(
+            interpreter_factory=lambda work_dir: CountingInterpreter(tmp_path)
+        ),
+    )
+
+    asyncio.run(
+        stage.run(
+            task_id="task-success-after-failure",
+            task={"work_dir": str(tmp_path)},
+            input_path=approved_path,
+            output_path=tmp_path / "execution_manifest.json",
+        )
+    )
+
+    assert not (tmp_path / "calculation_failure.json").exists()
+
+
 def test_calculation_stage_profiles_uploaded_workbook_before_program_generation(
     tmp_path: Path,
 ) -> None:

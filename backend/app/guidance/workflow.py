@@ -71,11 +71,17 @@ async def run_guidance_workflow(task_id: str, task: dict) -> AsyncGenerator[dict
     """Run guidance without entering the historical paper workflow."""
     task_manager.update_status(task_id, TaskStatus.RUNNING)
     try:
+        final_status = "completed"
         async for payload in build_default_guidance_pipeline(
             str(task.get("workflow_mode") or "standard")
         ).run(task_id, task):
+            if payload.get("type") == "result" and isinstance(payload.get("data"), dict):
+                final_status = str(payload["data"].get("status") or final_status)
             yield payload
-        task_manager.update_status(task_id, TaskStatus.COMPLETED)
+        task_manager.update_status(
+            task_id,
+            TaskStatus.BLOCKED if final_status == "blocked" else TaskStatus.COMPLETED,
+        )
     except Exception as exc:
         task_manager.update_status(task_id, TaskStatus.FAILED)
         yield {

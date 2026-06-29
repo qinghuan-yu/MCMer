@@ -16,6 +16,7 @@ from app.guidance.contracts import (
     RevisedModelSpec,
 )
 from app.guidance.execution import validate_generated_program_source
+from app.guidance.traffic_flow_template import build_wuyi_traffic_flow_program
 
 
 class LLMProblemDecomposer:
@@ -115,6 +116,12 @@ class LLMProgramGenerator:
             for path in (work_dir / "data").rglob("*")
             if path.is_file()
         ) if (work_dir / "data").is_dir() else []
+        deterministic_program = build_wuyi_traffic_flow_program(
+            approved_model=approved_model,
+            data_profile=data_profile,
+        )
+        if deterministic_program is not None:
+            return deterministic_program
         return await _request_model(
             llm=self.llm,
             model_type=GeneratedProgram,

@@ -121,3 +121,46 @@ def test_guidance_runtime_policy_cannot_reenter_legacy_repair_agents() -> None:
     assert GUIDANCE_RUNTIME_POLICY.run_llm_figure_repair is False
     assert GUIDANCE_RUNTIME_POLICY.run_final_audit_repair_agents is False
     assert GUIDANCE_RUNTIME_POLICY.export_docx is False
+
+
+def test_guidance_workflow_persists_blocked_final_status(monkeypatch) -> None:
+    from app.guidance import workflow
+
+    status_updates: list[str] = []
+
+    class RecordingTaskManager:
+        def update_status(self, task_id, status):
+            status_updates.append(status.value)
+
+    class BlockedPipeline:
+        async def run(self, task_id, task):
+            yield {"type": "progress", "data": {"status": "running"}}
+            yield {
+                "type": "result",
+                "data": {
+                    "task_id": task_id,
+                    "status": "blocked",
+                    "task_type": "guidance",
+                },
+            }
+
+    monkeypatch.setattr(workflow, "task_manager", RecordingTaskManager())
+    monkeypatch.setattr(
+        workflow,
+        "build_default_guidance_pipeline",
+        lambda workflow_mode="standard": BlockedPipeline(),
+    )
+
+    async def collect_messages():
+        return [
+            message
+            async for message in workflow.run_guidance_workflow(
+                "task-blocked",
+                {"task_id": "task-blocked", "task_type": "guidance"},
+            )
+        ]
+
+    messages = asyncio.run(collect_messages())
+
+    assert messages[-1]["data"]["status"] == "blocked"
+    assert status_updates == ["running", "blocked"]

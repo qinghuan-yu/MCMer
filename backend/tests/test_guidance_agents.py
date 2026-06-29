@@ -1,6 +1,8 @@
 import asyncio
 import json
+import shutil
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -892,3 +894,146 @@ def test_program_generator_regenerates_when_source_writes_blocked_solver_evidenc
     assert "'kind': 'blocked'" not in result.source_code
     assert len(llm.calls) == 2
     assert "kind=blocked" in llm.calls[1]["history"][1]["content"]
+
+
+def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_workbook(tmp_path) -> None:
+    from app.guidance.agents import LLMProgramGenerator
+    from app.guidance.contracts import ApprovedModelSpec
+    from app.guidance.execution import LocalProgramExecutor
+    from app.guidance.stages import GuidanceStage, ResultVerificationStage
+
+    source = (
+        Path(__file__).parents[1]
+        / "project"
+        / "work_dir"
+        / "phase1-wuyi-real-20260619"
+        / "data"
+        / "attachment.xlsx"
+    )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shutil.copyfile(source, data_dir / "attachment.xlsx")
+    approved_model = ApprovedModelSpec(
+        review_status="approved",
+        model_id="traffic_flow_multi_problem_template",
+        required_outputs=[
+            "solver_results.json",
+            "parameter_registry.json",
+            "result_registry.json",
+            "figure_registry.json",
+        ],
+        approved_model={
+            "selected_method": "traffic flow piecewise regression",
+            "subproblem_models": [
+                {
+                    "subproblem_id": f"problem{i}",
+                    "objective": f"Estimate traffic-flow structure for problem {i}.",
+                    "selected_method": "piecewise least squares",
+                    "rationale": "The workbook provides observed aggregate flow series for reproducible fitting.",
+                    "equations": [f"Q_{i}(t)=X_{i}(t) theta_{i}"],
+                    "parameters": [{
+                        "parameter_id": f"theta_problem{i}",
+                        "symbol": f"theta_{i}",
+                        "meaning": "grouped regression coefficient vector",
+                        "unit": "vehicles per 2 minutes",
+                        "source_type": "estimated",
+                        "source_detail": f"Attachment sheet {i}",
+                        "estimation_method": "least squares",
+                        "constraints": ["identified by full-rank design matrix"],
+                    }],
+                    "constraints": ["nonnegative modeled flow", "full-rank design matrix check"],
+                    "solve_steps": ["Read the workbook sheet.", "Fit the design matrix and verify residual metrics."],
+                    "expected_results": ["parameter registry and verified result"],
+                }
+                for i in range(1, 6)
+            ],
+        },
+    )
+    (tmp_path / "approved_model_spec.json").write_text(
+        json.dumps(approved_model.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (tmp_path / "model_review.json").write_text(
+        json.dumps(
+            {
+                "model_id": approved_model.model_id,
+                "status": "approved",
+                "dimensional_consistency": "consistent; units are vehicles per 2 minutes",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    data_profile = {
+        "files": [{
+            "path": "data/attachment.xlsx",
+            "suffix": ".xlsx",
+            "workbook": {
+                "sheets": [
+                    {"name": "表1 (Table 1)", "columns": ["时间 t (Time t)", "主路3的车流量 (Traffic flow on the Main road 3)"]},
+                    {"name": "表2 (Table 2)", "columns": ["时间 t (Time t)", "主路5的车流量 (Traffic flow on the Main road 5)"]},
+                    {"name": "表3 (Table 3)", "columns": ["时间 t (Time t)", "主路4的车流量 (Traffic flow on the Main road 4)"]},
+                    {"name": "表4 (Table 4)", "columns": ["时间 t (Time t)", "主路4的车流量 (Traffic flow on the Main road 4)"]},
+                ],
+            },
+        }],
+    }
+    llm = StubLLM({
+        "source_code": "raise AssertionError('LLM should not be called')",
+        "declared_outputs": [],
+    })
+    generator = LLMProgramGenerator(llm)
+
+    program = asyncio.run(
+        generator.generate(
+            approved_model=approved_model,
+            task={"work_dir": str(tmp_path)},
+            work_dir=tmp_path,
+            data_profile=data_profile,
+        )
+    )
+    manifest = asyncio.run(
+        LocalProgramExecutor().execute(
+            task_id="wuyi-template",
+            work_dir=tmp_path,
+            approved_model=approved_model,
+            program=program,
+        )
+    )
+    report_path = asyncio.run(
+        ResultVerificationStage().run(
+            task_id="wuyi-template",
+            task={"work_dir": str(tmp_path)},
+            input_path=tmp_path / "execution_manifest.json",
+            output_path=tmp_path / "verification_report.json",
+        )
+    )
+    asyncio.run(
+        GuidanceStage().run(
+            task_id="wuyi-template",
+            task={"work_dir": str(tmp_path)},
+            input_path=report_path,
+            output_path=tmp_path / "guidance.md",
+        )
+    )
+
+    results = json.loads((tmp_path / "result_registry.json").read_text(encoding="utf-8"))
+    verification = json.loads((tmp_path / "verification_report.json").read_text(encoding="utf-8"))
+    audit = json.loads((tmp_path / "guidance_audit_report.json").read_text(encoding="utf-8"))
+    guidance = (tmp_path / "guidance.md").read_text(encoding="utf-8")
+
+    assert llm.calls == []
+    assert manifest.status == "passed"
+    assert len(results["verified_results"]) == 5
+    assert {item["id"] for item in results["verified_results"]} == {
+        "result_problem1_traffic_fit",
+        "result_problem2_traffic_fit",
+        "result_problem3_signal_fit",
+        "result_problem4_noisy_signal_fit",
+        "result_problem5_minimum_monitoring",
+    }
+    assert verification["status"] == "verified"
+    assert audit["status"] == "PASS"
+    assert "result_problem5_minimum_monitoring" in guidance
+    assert "param_problem4_green_start" in guidance

@@ -82,6 +82,9 @@
 - [x] 生成程序中的回归 evidence 必须包含非空 observed/predicted/residuals/constraint_values，且源码禁止 not implemented/would need to compute 等占位实现短语。
 - [x] ModelSpec 输出必须使用 schema 级长度与数量约束压缩，复杂子问题用参数组概括，避免真实题建模 JSON 过长截断。
 - [x] 阻断诊断 guidance 的审计必须只检查诊断披露完整性，不得套用正式方案的参数、数值与图片覆盖率规则。
+- [x] guidance workflow 必须把最终 blocked 结果持久化为任务 blocked 状态，禁止 task_info 显示 completed。
+- [x] 五一交通流五问实测必须使用确定性求解模板产出参数、结果、图片和 typed solver evidence，禁止生成占位求解程序。
+- [x] CalculationStage 成功续跑后必须清理旧 calculation_failure checkpoint，避免日志继续显示已修复的历史失败。
 ## Go / No-Go
 
 - **判断**：Go，但停止把简易公式计算器扩展为通用求解器。

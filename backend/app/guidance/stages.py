@@ -286,7 +286,7 @@ class CalculationStage:
                 exc=exc,
             )
         try:
-            await self.executor.execute(
+            manifest = await self.executor.execute(
                 task_id=task_id,
                 work_dir=work_dir,
                 approved_model=approved_model,
@@ -301,6 +301,10 @@ class CalculationStage:
                 failed_operation="solver_execution",
                 exc=exc,
             )
+        if manifest.status == "passed":
+            failure_path = work_dir / "calculation_failure.json"
+            if failure_path.exists():
+                failure_path.unlink()
         return output_path
 
 
