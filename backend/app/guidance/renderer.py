@@ -199,6 +199,28 @@ def render_verified_guidance(
         lines.extend(["", "## 关键可信度边界", ""])
         lines.extend(f"- {note}" for note in guidance_notes)
 
+    identifiability_analysis = _identifiability_analysis(result_registry)
+    if identifiability_analysis:
+        lines.extend(["", "## 可辨识性分析", ""])
+        for item in identifiability_analysis:
+            subproblem_id = _cell(item.get("subproblem_id") or item.get("id"))
+            lines.append(f"### {subproblem_id}")
+            lines.append("")
+            for label, key in (
+                ("观测量", "observed"),
+                ("未知量", "unknowns"),
+                ("方程结构", "equation"),
+                ("秩/自由度结论", "rank_condition"),
+                ("解族或规范化", "solution_family"),
+                ("采用的代表解规则", "selection_rule"),
+                ("论文写法提醒", "guidance"),
+            ):
+                value = item.get(key)
+                if value in {None, ""}:
+                    continue
+                lines.append(f"- {label}：{_guidance_text(_join_claim_items(value))}")
+            lines.append("")
+
     claim_registry = _claim_registry(result_registry)
     if claim_registry:
         lines.extend(["", "## 结论状态登记", ""])
@@ -227,7 +249,7 @@ def render_verified_guidance(
         lines.append(f"- 方法：{_guidance_text(subproblem.get('selected_method'))}")
         lines.append(f"- 选择理由：{_guidance_text(subproblem.get('rationale'))}")
         for equation in subproblem.get("equations", []):
-            lines.append(f"- 公式：`{equation}`")
+            lines.append(f"- 公式：`{_guidance_text(equation)}`")
         for parameter in subproblem.get("parameters", []):
             if not isinstance(parameter, dict):
                 continue
@@ -527,6 +549,15 @@ def _claim_registry(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _identifiability_analysis(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = result_registry.get("summary", {})
+    if isinstance(summary, dict):
+        analysis = summary.get("identifiability_analysis", [])
+        if isinstance(analysis, list):
+            return [item for item in analysis if isinstance(item, dict)]
+    return []
+
+
 def _join_claim_items(value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(item) for item in value)
@@ -548,6 +579,24 @@ def _guidance_text(value: Any) -> str:
         "为增强可辨识性固定为0": "人为固定为 0 作为规范化约束",
         "为增强可辨识性": "作为规范化约束",
         "增强可辨识性": "作为规范化约束选择代表解",
+        "固定b1=0或b2=0以确保参数唯一识别": (
+            "固定 b1=0 或 b2=0 只能作为规范化约束，不能作为数据唯一识别证据"
+        ),
+        "F(t) = f1(t-2) + f2(t-2) + f3(t) + f4(t) (延迟补偿)": (
+            "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)+f_4(k)（样本序号 k；2 分钟延迟 = 1 个采样步）"
+        ),
+        "F(t) = f1(t-2) + f2(t-2) + f3(t) + f4(t)": (
+            "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)+f_4(k)"
+        ),
+        "F(t) = f1(t-2) + f2(t-2) + f3(t) (延迟补偿)": (
+            "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)（样本序号 k；2 分钟延迟 = 1 个采样步）"
+        ),
+        "F(t) = f1(t-2) + f2(t-2) + f3(t)": (
+            "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)"
+        ),
+        "F_obs(t) = F_true(t) + ε(t), where F_true(t) = f1(t-2) + f2(t-2) + f3(t)": (
+            "F_obs(k)=F_true(k)+epsilon(k)，其中 F_true(k)=f_1(k-1)+f_2(k-1)+f_3(k)"
+        ),
     }
     for old, new in replacements.items():
         text = text.replace(old, new)

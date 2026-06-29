@@ -216,6 +216,7 @@ def solve_problem1(source_path, parameters, verified_results, evidence, figures)
     break_point = best["break_point"]
     coefficients = best["coefficients"]
     add_parameter(parameters, "param_problem1_break_t", "tau_1", "turning point for branch 2", break_point, "sample index", source_ref)
+    add_parameter(parameters, "param_problem1_main_rise_slope", "s_1", "main-road rising segment slope used in the branch-split solution family", 1.5, "vehicles per 2 minutes per sample", source_ref)
     add_parameter(parameters, "param_problem1_intercept", "b_1", "main-road intercept", coefficients[0], "vehicles per 2 minutes", source_ref)
     add_parameter(parameters, "param_problem1_direct_slope", "a_1", "direct branch slope", coefficients[1], "vehicles per 2 minutes per sample", source_ref)
     add_parameter(parameters, "param_problem1_triangular_slope", "a_2", "triangular branch slope", coefficients[2], "vehicles per 2 minutes per sample", source_ref)
@@ -462,6 +463,28 @@ def main():
                 "本文统一使用样本序号 k 作为时间坐标；附件每一步代表两分钟，因此 2 分钟延迟 = 1 个采样步，模型中使用 k-1 处理延迟。",
                 "问题2到问题4的 verified 只表示给定基函数、约束和注册 evidence 自洽；较大残差需要在论文中作为模型误差披露，不能把低残差以外的支路拆分解释为唯一恢复。",
                 "问题5给出的是覆盖主要变化点的观测时刻集合，不证明全局最优；若要证明观测次数下界，需要构建设计矩阵 A_S 并验证 rank(A_S)=dim(theta)。",
+            ],
+            "identifiability_analysis": [
+                {
+                    "subproblem_id": "problem1",
+                    "observed": "主路总流量 F(k)",
+                    "unknowns": "支路流量 f_1(k), f_2(k) 及其分段参数",
+                    "equation": "F(k)=f_1(k)+f_2(k)",
+                    "rank_condition": "仅凭主路总量约束只能确定总和，支路参数设计矩阵存在一维自由度，rank(A)<dim(theta)。",
+                    "solution_family": "设 a_1=lambda, a_2=1.5-lambda；在非负和趋势约束允许范围内得到一族完全复原 F(k) 的支路分解。",
+                    "selection_rule": "本轮选择的是满足连续性、非负性和趋势约束的规范化代表解，不是数据唯一推出的真实支路。",
+                    "guidance": "论文中必须先写不可唯一识别，再说明额外规范化假设；不能把规范化估计写成唯一反推结论。",
+                },
+                {
+                    "subproblem_id": "problem5",
+                    "observed": "从主路设备选择的样本时刻集合 S。",
+                    "unknowns": "各分段函数参数向量 theta 及交通灯相位相关参数。",
+                    "equation": "y_S=A_S theta",
+                    "rank_condition": "若要证明最少观测次数，必须给出 rank(A_S)=dim(theta)；当前结果只提供可复现实测候选集合。",
+                    "solution_family": "如果任意 S 下 A_S 仍列相关，则仅靠主路设备不能唯一恢复支路函数。",
+                    "selection_rule": "本轮选择覆盖断点、相位边界和趋势变化点的候选采样集合。",
+                    "guidance": "正式答案应把参数个数作为下界、满秩采样集合作为上界；未完成秩证明前只能称候选设计。",
+                },
             ],
             "claim_registry": [
                 {

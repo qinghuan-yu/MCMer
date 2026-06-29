@@ -935,7 +935,15 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
                         if i == 1
                         else "The workbook provides observed aggregate flow series for reproducible fitting."
                     ),
-                    "equations": [f"Q_{i}(t)=X_{i}(t) theta_{i}"],
+                    "equations": (
+                        ["F(t) = f1(t-2) + f2(t-2) + f3(t) + f4(t) (延迟补偿)"]
+                        if i == 2
+                        else ["F(t) = f1(t-2) + f2(t-2) + f3(t) (延迟补偿)"]
+                        if i == 3
+                        else ["F_obs(t) = F_true(t) + ε(t), where F_true(t) = f1(t-2) + f2(t-2) + f3(t)"]
+                        if i == 4
+                        else [f"Q_{i}(t)=X_{i}(t) theta_{i}"]
+                    ),
                     "parameters": [{
                         "parameter_id": f"theta_problem{i}",
                         "symbol": f"theta_{i}",
@@ -946,7 +954,11 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
                         "estimation_method": "least squares",
                         "constraints": ["identified by full-rank design matrix"],
                     }],
-                    "constraints": ["nonnegative modeled flow", "full-rank design matrix check"],
+                    "constraints": (
+                        ["固定b1=0或b2=0以确保参数唯一识别（若数据不足）"]
+                        if i == 1
+                        else ["nonnegative modeled flow", "full-rank design matrix check"]
+                    ),
                     "solve_steps": ["Read the workbook sheet.", "Fit the design matrix and verify residual metrics."],
                     "expected_results": ["parameter registry and verified result"],
                 }
@@ -1056,3 +1068,20 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "chosen_under_prior" in guidance
     assert "not_uniquely_identifiable" in guidance
     assert "result_problem1_traffic_fit" in guidance
+    assert "## 可辨识性分析" in guidance
+    assert "观测量：主路总流量 F(k)" in guidance
+    assert "未知量：支路流量 f_1(k), f_2(k)" in guidance
+    assert "F(k)=f_1(k)+f_2(k)" in guidance
+    assert "rank(A)<dim(theta)" in guidance
+    assert "lambda" in guidance
+    assert "a_1=lambda" in guidance
+    assert "a_2=1.5-lambda" in guidance
+    assert "rank(A_S)=dim(theta)" in guidance
+    assert "固定b1=0或b2=0以确保参数唯一识别" not in guidance
+    assert "只能作为规范化约束，不能作为数据唯一识别证据" in guidance
+    assert "F(t) = f1(t-2) + f2(t-2) + f3(t) + f4(t)" not in guidance
+    assert "F(t) = f1(t-2) + f2(t-2) + f3(t)" not in guidance
+    assert "F_true(t) = f1(t-2) + f2(t-2) + f3(t)" not in guidance
+    assert "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)+f_4(k)" in guidance
+    assert "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)" in guidance
+    assert "F_obs(k)=F_true(k)+epsilon(k)" in guidance
