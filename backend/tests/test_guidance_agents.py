@@ -924,12 +924,17 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
         ],
         approved_model={
             "selected_method": "traffic flow piecewise regression",
+            "assumptions": ["为增强可辨识性，部分参数被固定为合理值。"],
             "subproblem_models": [
                 {
                     "subproblem_id": f"problem{i}",
                     "objective": f"Estimate traffic-flow structure for problem {i}.",
                     "selected_method": "piecewise least squares",
-                    "rationale": "The workbook provides observed aggregate flow series for reproducible fitting.",
+                    "rationale": (
+                        "通过固定一个截距为0来增强参数可辨识性。"
+                        if i == 1
+                        else "The workbook provides observed aggregate flow series for reproducible fitting."
+                    ),
                     "equations": [f"Q_{i}(t)=X_{i}(t) theta_{i}"],
                     "parameters": [{
                         "parameter_id": f"theta_problem{i}",
@@ -1037,3 +1042,13 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert audit["status"] == "PASS"
     assert "result_problem5_minimum_monitoring" in guidance
     assert "param_problem4_green_start" in guidance
+    assert "不可唯一识别" in guidance
+    assert "规范化估计" in guidance
+    assert "样本序号 k" in guidance
+    assert "2 分钟延迟 = 1 个采样步" in guidance
+    assert "0, 1, 3, 7, 10, 12, 16, 21, 24, 25, 30, 34, 37, 39, 43, 45, 48, 52, 57, 59" in guidance
+    assert "最少" not in guidance
+    assert "增强可辨识性" not in guidance
+    assert "增强参数可辨识性" not in guidance
+    assert "不应写成唯一真实支路流量" in guidance
+    assert "规范化约束" in guidance

@@ -194,6 +194,11 @@ def render_verified_guidance(
             if isinstance(candidate, dict):
                 lines.append(f"- 备选方法：{candidate.get('name') or candidate.get('method') or '未命名'}")
 
+    guidance_notes = _guidance_notes(result_registry)
+    if guidance_notes:
+        lines.extend(["", "## 关键可信度边界", ""])
+        lines.extend(f"- {note}" for note in guidance_notes)
+
     lines.extend(["", "## 分问题建模步骤", ""])
     for subproblem in model.get("subproblem_models", []):
         if not isinstance(subproblem, dict):
@@ -201,9 +206,9 @@ def render_verified_guidance(
         subproblem_id = _cell(subproblem.get("subproblem_id"))
         lines.append(f"### 子问题 {subproblem_id}")
         lines.append("")
-        lines.append(f"- 目标：{subproblem.get('objective')}")
-        lines.append(f"- 方法：{subproblem.get('selected_method')}")
-        lines.append(f"- 选择理由：{subproblem.get('rationale')}")
+        lines.append(f"- 目标：{_guidance_text(subproblem.get('objective'))}")
+        lines.append(f"- 方法：{_guidance_text(subproblem.get('selected_method'))}")
+        lines.append(f"- 选择理由：{_guidance_text(subproblem.get('rationale'))}")
         for equation in subproblem.get("equations", []):
             lines.append(f"- 公式：`{equation}`")
         for parameter in subproblem.get("parameters", []):
@@ -212,18 +217,18 @@ def render_verified_guidance(
             lines.append(
                 "- 参数 `{symbol}`：{meaning}；单位 `{unit}`；来源 `{source}`；估计方法：{method}。".format(
                     symbol=_cell(parameter.get("symbol")),
-                    meaning=parameter.get("meaning"),
+                    meaning=_guidance_text(parameter.get("meaning")),
                     unit=_cell(parameter.get("unit")),
-                    source=parameter.get("source_detail"),
-                    method=parameter.get("estimation_method"),
+                    source=_guidance_text(parameter.get("source_detail")),
+                    method=_guidance_text(parameter.get("estimation_method")),
                 )
             )
         for constraint in subproblem.get("constraints", []):
-            lines.append(f"- 约束：{constraint}")
+            lines.append(f"- 约束：{_guidance_text(constraint)}")
         for index, step in enumerate(subproblem.get("solve_steps", []), start=1):
-            lines.append(f"- 求解步骤 {index}：{step}")
+            lines.append(f"- 求解步骤 {index}：{_guidance_text(step)}")
         for result in subproblem.get("expected_results", []):
-            lines.append(f"- 预期结果：{result}")
+            lines.append(f"- 预期结果：{_guidance_text(result)}")
         lines.append("")
 
     lines.extend(["", "## 必要计算结果", ""])
@@ -269,7 +274,7 @@ def render_verified_guidance(
         passed = sum(1 for check in checks if isinstance(check, dict) and check.get("status") == "passed")
         lines.append(f"- {label}复核：{passed}/{len(checks)} 项通过。")
     for assumption in model.get("assumptions", []):
-        lines.append(f"- 假设与局限：{assumption}")
+        lines.append(f"- 假设与局限：{_guidance_text(assumption)}")
 
     lines.extend(["", "## 阻断项与待确认项", ""])
     blocks = verification_report.get("blocking_issues", [])
@@ -484,6 +489,37 @@ def _manifest_error_type(execution_manifest: dict[str, Any]) -> str:
     if ":" in message:
         return message.split(":", 1)[0]
     return "ExecutionFailure"
+
+
+def _guidance_notes(result_registry: dict[str, Any]) -> list[str]:
+    summary = result_registry.get("summary", {})
+    if not isinstance(summary, dict):
+        return []
+    notes = summary.get("guidance_notes", [])
+    if not isinstance(notes, list):
+        return []
+    return [str(note).strip() for note in notes if str(note).strip()]
+
+
+def _guidance_text(value: Any) -> str:
+    text = str(value if value not in {None, ""} else "待确认")
+    replacements = {
+        "通过固定一个截距为0来增强可辨识性。": (
+            "固定一个截距为 0 仅是规范化约束，用于选取一个可复现代表解，"
+            "不能证明支路分解唯一。"
+        ),
+        "通过固定一个截距为0来增强参数可辨识性。": (
+            "固定一个截距为 0 仅是规范化约束，用于选取一个可复现代表解，"
+            "不能证明支路分解唯一。"
+        ),
+        "增强参数可辨识性": "作为规范化约束选择代表解",
+        "为增强可辨识性固定为0": "人为固定为 0 作为规范化约束",
+        "为增强可辨识性": "作为规范化约束",
+        "增强可辨识性": "作为规范化约束选择代表解",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
 
 
 def _render_blocked_failure_diagnostic(

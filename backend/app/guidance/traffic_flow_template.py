@@ -382,11 +382,12 @@ def solve_problem5(source_path, parameters, verified_results, evidence, figures)
     count = len(key_times)
     baseline = 60.0
     add_parameter(parameters, "param_problem5_monitoring_count", "m_5", "number of monitoring moments", count, "sample count", source_ref)
+    add_parameter(parameters, "param_problem5_monitoring_times", "S_5", "selected monitoring sample indices", ", ".join(str(int(value)) for value in key_times), "sample index set", source_ref)
     add_parameter(parameters, "param_problem5_time_span", "T_5", "available sample span", 60, "samples", source_ref)
     verified_results.append({
         "id": "result_problem5_minimum_monitoring",
         "result_type": "optimization",
-        "claim_text": f"Problem 5 selects {count} monitoring moments from 60 samples",
+        "claim_text": f"Problem 5 selects {count} monitoring sample indices: {', '.join(str(int(value)) for value in key_times)}",
         "metrics": {
             "objective_value": float(count),
             "monitoring_count": float(count),
@@ -456,6 +457,12 @@ def main():
             "verified_count": len(verified_results),
             "blocked_count": 0,
             "coverage_status": "verified",
+            "guidance_notes": [
+                "问题1只从主路总量观测反推支路流量，支路分解不可唯一识别；本轮结果是满足题设趋势和非负约束的规范化估计，不应写成唯一真实支路流量。",
+                "本文统一使用样本序号 k 作为时间坐标；附件每一步代表两分钟，因此 2 分钟延迟 = 1 个采样步，模型中使用 k-1 处理延迟。",
+                "问题2到问题4的 verified 只表示给定基函数、约束和注册 evidence 自洽；较大残差需要在论文中作为模型误差披露，不能把低残差以外的支路拆分解释为唯一恢复。",
+                "问题5给出的是覆盖主要变化点的观测时刻集合，不证明全局最优；若要证明观测次数下界，需要构建设计矩阵 A_S 并验证 rank(A_S)=dim(theta)。",
+            ],
         },
     }
     solver_results = {"evidence": evidence}

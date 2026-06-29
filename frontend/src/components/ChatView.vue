@@ -51,6 +51,14 @@
             <a v-if="result.notebook_path" :href="getFileUrl(result.notebook_path)" target="_blank" class="file-link">
               📓 查看 Notebook
             </a>
+            <a
+              v-if="result.work_dir"
+              :href="workspaceDownloadUrl"
+              download
+              class="file-link"
+            >
+              🗜️ 下载工作区 ZIP
+            </a>
             <span v-if="result && result.work_dir" class="file-path">结果文件已保存到项目工作区</span>
           </div>
           <div v-if="result.error_message" class="result-error">❌ 错误: {{ result.error_message }}</div>
@@ -227,6 +235,7 @@ const guidanceDownloadUrl = computed(() => {
   }
   return getFileUrl(primaryMarkdownPath.value)
 })
+const workspaceDownloadUrl = computed(() => `/api/tasks/${encodeURIComponent(props.taskId)}/workspace.zip`)
 const isGuidanceBlocked = computed(() => isGuidanceResult.value && String(props.result?.audit_status || '').toUpperCase() === 'BLOCK')
 const resultIcon = computed(() => {
   if (isGuidanceBlocked.value) return '!'

@@ -85,6 +85,8 @@
 - [x] guidance workflow 必须把最终 blocked 结果持久化为任务 blocked 状态，禁止 task_info 显示 completed。
 - [x] 五一交通流五问实测必须使用确定性求解模板产出参数、结果、图片和 typed solver evidence，禁止生成占位求解程序。
 - [x] CalculationStage 成功续跑后必须清理旧 calculation_failure checkpoint，避免日志继续显示已修复的历史失败。
+- [x] 五一交通流 guidance 必须披露总量分解不可唯一识别、统一样本序号时间坐标，并把固定参数降级为规范化估计而非真实反推。
+- [x] 前后端必须提供任务工作区 ZIP 下载入口，部署到服务器后仍可导出 `guidance.md`、注册表、notebook、图片和诊断附件。
 ## Go / No-Go
 
 - **判断**：Go，但停止把简易公式计算器扩展为通用求解器。

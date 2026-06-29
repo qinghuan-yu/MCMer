@@ -1,9 +1,12 @@
 """REST API 路由"""
 import os
 import asyncio
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Optional
 
+from starlette.background import BackgroundTask
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -321,6 +324,49 @@ async def download_guidance(task_id: str):
         media_type="text/markdown",
         filename="guidance.md",
     )
+
+
+@router.get("/tasks/{task_id}/workspace.zip")
+async def download_workspace(task_id: str):
+    """Download the complete task workspace as a zip archive."""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    work_dir = Path(str(task.get("work_dir") or ""))
+    if not work_dir.is_dir():
+        raise HTTPException(status_code=404, detail="项目工作区不存在")
+
+    archive_path = _build_workspace_archive(task_id, work_dir)
+    return FileResponse(
+        path=archive_path,
+        media_type="application/zip",
+        filename=f"{task_id}-workspace.zip",
+        background=BackgroundTask(lambda: archive_path.unlink(missing_ok=True)),
+    )
+
+
+def _build_workspace_archive(task_id: str, work_dir: Path) -> Path:
+    handle = tempfile.NamedTemporaryFile(
+        prefix=f"{task_id}-workspace-",
+        suffix=".zip",
+        delete=False,
+    )
+    archive_path = Path(handle.name)
+    handle.close()
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(work_dir.rglob("*")):
+            if not path.is_file() or _is_generated_workspace_archive(work_dir, path):
+                continue
+            archive.write(path, path.relative_to(work_dir).as_posix())
+    return archive_path
+
+
+def _is_generated_workspace_archive(work_dir: Path, path: Path) -> bool:
+    if path.parent != work_dir or path.suffix.lower() != ".zip":
+        return False
+    name = path.name.lower()
+    return name == "workspace.zip" or name.endswith("-workspace.zip")
 
 
 # ============================================================

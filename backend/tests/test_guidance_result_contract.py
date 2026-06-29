@@ -1,4 +1,5 @@
 import asyncio
+import zipfile
 from pathlib import Path
 
 from app.core.workflow import _build_completed_task_result
@@ -59,6 +60,29 @@ def test_guidance_download_returns_markdown_attachment(tmp_path: Path, monkeypat
     assert Path(response.path) == guidance_path
     assert response.media_type == "text/markdown"
     assert response.filename == "guidance.md"
+
+
+def test_workspace_download_returns_zip_with_task_artifacts(tmp_path: Path, monkeypatch) -> None:
+    from app.api import routes
+
+    (tmp_path / "guidance.md").write_text("# trusted guidance\n", encoding="utf-8")
+    (tmp_path / "parameter_registry.json").write_text('{"parameters":[]}', encoding="utf-8")
+    (tmp_path / "workspace.zip").write_text("old bundle", encoding="utf-8")
+    monkeypatch.setattr(
+        routes.task_manager,
+        "get_task",
+        lambda task_id: {"task_id": task_id, "work_dir": str(tmp_path)},
+    )
+
+    response = asyncio.run(routes.download_workspace("task-zip"))
+
+    assert response.media_type == "application/zip"
+    assert response.filename == "task-zip-workspace.zip"
+    with zipfile.ZipFile(response.path) as archive:
+        names = set(archive.namelist())
+        assert "guidance.md" in names
+        assert "parameter_registry.json" in names
+        assert "workspace.zip" not in names
 
 
 def test_workflow_dispatches_guidance_without_legacy_writing_runner(monkeypatch) -> None:
