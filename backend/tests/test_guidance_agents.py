@@ -1047,8 +1047,12 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "样本序号 k" in guidance
     assert "2 分钟延迟 = 1 个采样步" in guidance
     assert "0, 1, 3, 7, 10, 12, 16, 21, 24, 25, 30, 34, 37, 39, 43, 45, 48, 52, 57, 59" in guidance
-    assert "最少" not in guidance
+    assert "未证明全局最少" in guidance
     assert "增强可辨识性" not in guidance
     assert "增强参数可辨识性" not in guidance
     assert "不应写成唯一真实支路流量" in guidance
     assert "规范化约束" in guidance
+    assert "## 结论状态登记" in guidance
+    assert "chosen_under_prior" in guidance
+    assert "not_uniquely_identifiable" in guidance
+    assert "result_problem1_traffic_fit" in guidance

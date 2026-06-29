@@ -463,6 +463,44 @@ def main():
                 "问题2到问题4的 verified 只表示给定基函数、约束和注册 evidence 自洽；较大残差需要在论文中作为模型误差披露，不能把低残差以外的支路拆分解释为唯一恢复。",
                 "问题5给出的是覆盖主要变化点的观测时刻集合，不证明全局最优；若要证明观测次数下界，需要构建设计矩阵 A_S 并验证 rank(A_S)=dim(theta)。",
             ],
+            "claim_registry": [
+                {
+                    "id": "claim_problem1_branch_split",
+                    "status": "chosen_under_prior",
+                    "claim_text": "问题1支路流量函数是满足趋势约束的规范化代表解，不是唯一真实恢复。",
+                    "evidence": ["result_problem1_traffic_fit", "param_problem1_break_t"],
+                    "assumptions": ["branch split normalization", "nonnegative branch-flow representative"],
+                    "risk": "not_uniquely_identifiable",
+                },
+                {
+                    "id": "claim_global_time_coordinate",
+                    "status": "source_locked",
+                    "claim_text": "模型统一使用样本序号 k，题设两分钟延迟在代码中写为 k-1。",
+                    "evidence": ["param_problem2_delay"],
+                    "assumptions": ["attachment sampling interval is two minutes"],
+                    "risk": "time-unit mismatch if rewritten in minutes without conversion",
+                },
+                {
+                    "id": "claim_problem2_to_4_fit",
+                    "status": "evidence_verified",
+                    "claim_text": "问题2到问题4的数值结果只证明给定基函数下的拟合与约束证据自洽。",
+                    "evidence": [
+                        "result_problem2_traffic_fit",
+                        "result_problem3_signal_fit",
+                        "result_problem4_noisy_signal_fit",
+                    ],
+                    "assumptions": ["selected basis functions and phase candidates"],
+                    "risk": "model-form uncertainty remains",
+                },
+                {
+                    "id": "claim_problem5_monitoring_set",
+                    "status": "candidate_design",
+                    "claim_text": "问题5给出可复现实测采样集合，但未证明全局最少。",
+                    "evidence": ["result_problem5_minimum_monitoring", "param_problem5_monitoring_times"],
+                    "assumptions": ["selected key change points and signal phase boundary coverage"],
+                    "risk": "minimality requires rank proof",
+                },
+            ],
         },
     }
     solver_results = {"evidence": evidence}

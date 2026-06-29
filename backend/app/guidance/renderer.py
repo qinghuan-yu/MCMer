@@ -199,6 +199,23 @@ def render_verified_guidance(
         lines.extend(["", "## 关键可信度边界", ""])
         lines.extend(f"- {note}" for note in guidance_notes)
 
+    claim_registry = _claim_registry(result_registry)
+    if claim_registry:
+        lines.extend(["", "## 结论状态登记", ""])
+        lines.append("| claim_id | 状态 | 结论 | 证据 | 依赖假设 | 风险 |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for claim in claim_registry:
+            lines.append(
+                "| {id} | {status} | {claim_text} | {evidence} | {assumptions} | {risk} |".format(
+                    id=_cell(claim.get("id") or claim.get("claim_id")),
+                    status=_cell(claim.get("status")),
+                    claim_text=_cell(claim.get("claim_text")),
+                    evidence=_cell(_join_claim_items(claim.get("evidence") or claim.get("evidence_ids"))),
+                    assumptions=_cell(_join_claim_items(claim.get("assumptions"))),
+                    risk=_cell(claim.get("risk") or claim.get("risk_note")),
+                )
+            )
+
     lines.extend(["", "## 分问题建模步骤", ""])
     for subproblem in model.get("subproblem_models", []):
         if not isinstance(subproblem, dict):
@@ -499,6 +516,21 @@ def _guidance_notes(result_registry: dict[str, Any]) -> list[str]:
     if not isinstance(notes, list):
         return []
     return [str(note).strip() for note in notes if str(note).strip()]
+
+
+def _claim_registry(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = result_registry.get("summary", {})
+    if isinstance(summary, dict):
+        claims = summary.get("claim_registry", [])
+        if isinstance(claims, list):
+            return [claim for claim in claims if isinstance(claim, dict)]
+    return []
+
+
+def _join_claim_items(value: Any) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    return str(value if value not in {None, ""} else "待确认")
 
 
 def _guidance_text(value: Any) -> str:
