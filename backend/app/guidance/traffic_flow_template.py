@@ -524,6 +524,57 @@ def main():
                     "risk": "minimality requires rank proof",
                 },
             ],
+            "final_answer_tables": [
+                {
+                    "id": "final_problem1_representative_functions",
+                    "title": "问题1规范化代表解",
+                    "columns": ["题号", "应填项", "答案", "结论状态", "证据"],
+                    "rows": [
+                        {
+                            "题号": "问题1",
+                            "应填项": "支路1车流量函数",
+                            "答案": "f_1(k)=7+0.5k",
+                            "结论状态": "chosen_under_prior",
+                            "证据": "param_problem1_intercept, param_problem1_direct_slope",
+                        },
+                        {
+                            "题号": "问题1",
+                            "应填项": "支路2车流量函数",
+                            "答案": "f_2(k)=k, 0<=k<=30; f_2(k)=60-k, 30<k<=59",
+                            "结论状态": "chosen_under_prior",
+                            "证据": "param_problem1_triangular_slope, param_problem1_break_t",
+                        },
+                    ],
+                    "notes": [
+                        "该表是规范化代表解，不能写成主路总量唯一反推出的真实支路流量。",
+                        "时间变量 k 为样本序号，每个采样步代表 2 分钟。",
+                    ],
+                },
+                {
+                    "id": "final_problem5_candidate_monitoring_times",
+                    "title": "问题5候选观测时刻",
+                    "columns": ["题号", "应填项", "答案", "结论状态", "证据"],
+                    "rows": [
+                        {
+                            "题号": "问题5",
+                            "应填项": "观测次数",
+                            "答案": "20",
+                            "结论状态": "candidate_design",
+                            "证据": "result_problem5_minimum_monitoring, param_problem5_monitoring_count",
+                        },
+                        {
+                            "题号": "问题5",
+                            "应填项": "样本序号集合",
+                            "答案": "0, 1, 3, 7, 10, 12, 16, 21, 24, 25, 30, 34, 37, 39, 43, 45, 48, 52, 57, 59",
+                            "结论状态": "candidate_design",
+                            "证据": "result_problem5_minimum_monitoring, param_problem5_monitoring_times",
+                        },
+                    ],
+                    "notes": [
+                        "该集合覆盖主要断点和相位边界，但未证明全局最少；正式最小性仍需 rank(A_S)=dim(theta) 证明。",
+                    ],
+                },
+            ],
         },
     }
     solver_results = {"evidence": evidence}

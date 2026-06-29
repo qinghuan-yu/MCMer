@@ -238,6 +238,33 @@ def render_verified_guidance(
                 )
             )
 
+    final_answer_tables = _final_answer_tables(result_registry)
+    if final_answer_tables:
+        lines.extend(["", "## 最终答案与应填表格", ""])
+        for table in final_answer_tables:
+            title = _cell(table.get("title") or table.get("id") or "应填表格")
+            lines.append(f"### {title}")
+            lines.append("")
+            columns = table.get("columns", [])
+            rows = table.get("rows", [])
+            if isinstance(columns, list) and columns and isinstance(rows, list):
+                headers = [_cell(column) for column in columns]
+                lines.append("| " + " | ".join(headers) + " |")
+                lines.append("| " + " | ".join("---" for _ in headers) + " |")
+                for row in rows:
+                    if isinstance(row, dict):
+                        values = [_guidance_text(row.get(column)) for column in columns]
+                    elif isinstance(row, list):
+                        values = [_guidance_text(value) for value in row[: len(headers)]]
+                        values.extend("待确认" for _ in range(len(headers) - len(values)))
+                    else:
+                        values = [_guidance_text(row), *("待确认" for _ in range(max(len(headers) - 1, 0)))]
+                    lines.append("| " + " | ".join(_cell(value) for value in values) + " |")
+            notes = table.get("notes", [])
+            if isinstance(notes, list):
+                lines.extend(f"- 说明：{_guidance_text(note)}" for note in notes if str(note).strip())
+            lines.append("")
+
     lines.extend(["", "## 分问题建模步骤", ""])
     for subproblem in model.get("subproblem_models", []):
         if not isinstance(subproblem, dict):
@@ -555,6 +582,15 @@ def _identifiability_analysis(result_registry: dict[str, Any]) -> list[dict[str,
         analysis = summary.get("identifiability_analysis", [])
         if isinstance(analysis, list):
             return [item for item in analysis if isinstance(item, dict)]
+    return []
+
+
+def _final_answer_tables(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = result_registry.get("summary", {})
+    if isinstance(summary, dict):
+        tables = summary.get("final_answer_tables", [])
+        if isinstance(tables, list):
+            return [table for table in tables if isinstance(table, dict)]
     return []
 
 

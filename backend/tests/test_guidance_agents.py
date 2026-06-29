@@ -1085,3 +1085,11 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)+f_4(k)" in guidance
     assert "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)" in guidance
     assert "F_obs(k)=F_true(k)+epsilon(k)" in guidance
+    assert "## 最终答案与应填表格" in guidance
+    assert "问题1规范化代表解" in guidance
+    assert "f_1(k)=7+0.5k" in guidance
+    assert "f_2(k)=k, 0<=k<=30; f_2(k)=60-k, 30<k<=59" in guidance
+    assert "chosen_under_prior" in guidance
+    assert "问题5候选观测时刻" in guidance
+    assert "0, 1, 3, 7, 10, 12, 16, 21, 24, 25, 30, 34, 37, 39, 43, 45, 48, 52, 57, 59" in guidance
+    assert "result_problem5_minimum_monitoring" in guidance
