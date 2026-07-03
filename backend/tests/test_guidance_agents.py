@@ -1127,3 +1127,8 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "param_problem5_design_rank" in guidance
     assert "param_problem5_parameter_dimension" in guidance
     assert "若 A_S 列相关，仅靠主路设备无法唯一恢复" in guidance
+    assert "问题2-4基函数与参数字典" in guidance
+    assert "theta_2_0 * 1 + theta_2_1 * max(k-1,0)" in guidance
+    assert "theta_3_5 * I_green(k; g_3)" in guidance
+    assert "theta_4_5 * I_green(k; g_4)" in guidance
+    assert "I_green(k; g)=1 当 (k-g) mod 9 落在 [0,5)" in guidance

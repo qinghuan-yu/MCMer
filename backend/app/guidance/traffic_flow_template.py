@@ -262,6 +262,10 @@ def solve_problem2(source_path, parameters, verified_results, evidence, figures)
     for index, value in enumerate(coefficients):
         add_parameter(parameters, f"param_problem2_coef_{index}", f"theta_2_{index}", f"Problem 2 regression coefficient {index}", value, "vehicles per 2 minutes", source_ref)
     add_parameter(parameters, "param_problem2_delay", "delta_2", "upstream observation delay", 1.0, "sample index", source_ref)
+    add_parameter(parameters, "param_problem2_delayed_cap", "c_2", "Problem 2 delayed ramp cap", 24.0, "sample index", source_ref)
+    add_parameter(parameters, "param_problem2_delayed_hinge", "h_2", "Problem 2 delayed hinge after upstream delay", 37.0, "sample index", source_ref)
+    add_parameter(parameters, "param_problem2_direct_cap", "d_2", "Problem 2 direct branch cap", 25.0, "sample index", source_ref)
+    add_parameter(parameters, "param_problem2_cycle_period", "p_2", "Problem 2 periodic basis period", 9.0, "samples", source_ref)
     stability = prediction_stability(problem2_columns, t_values, observed, predicted)
     add_regression_artifacts(
         parameters=parameters,
@@ -314,6 +318,11 @@ def solve_problem3(source_path, parameters, verified_results, evidence, figures)
     columns_factory = lambda t: problem3_columns(t, start)
     coefficients, predicted, residuals, rmse, max_abs, rank = fit_lstsq(columns_factory(t_values), observed)
     add_parameter(parameters, "param_problem3_green_start", "g_3", "first green-light sample", start, "sample index", source_ref)
+    add_parameter(parameters, "param_problem3_green_duration", "q_3", "green-light duration in each cycle", 5.0, "samples", source_ref)
+    add_parameter(parameters, "param_problem3_cycle_period", "p_3", "traffic-light cycle period", 9.0, "samples", source_ref)
+    add_parameter(parameters, "param_problem3_hinge_10", "h_3_1", "Problem 3 first piecewise hinge", 10.0, "sample index", source_ref)
+    add_parameter(parameters, "param_problem3_hinge_30", "h_3_2", "Problem 3 second piecewise hinge", 30.0, "sample index", source_ref)
+    add_parameter(parameters, "param_problem3_hinge_45", "h_3_3", "Problem 3 third piecewise hinge", 45.0, "sample index", source_ref)
     for index, value in enumerate(coefficients):
         add_parameter(parameters, f"param_problem3_coef_{index}", f"theta_3_{index}", f"Problem 3 signal regression coefficient {index}", value, "vehicles per 2 minutes", source_ref)
     stability = prediction_stability(columns_factory, t_values, observed, predicted)
@@ -364,6 +373,11 @@ def solve_problem4(source_path, parameters, verified_results, evidence, figures)
                 "columns_factory": columns_factory,
             }
     add_parameter(parameters, "param_problem4_green_start", "g_4", "estimated first green-light sample", best["start"], "sample index", source_ref)
+    add_parameter(parameters, "param_problem4_green_duration", "q_4", "green-light duration in each cycle", 5.0, "samples", source_ref)
+    add_parameter(parameters, "param_problem4_cycle_period", "p_4", "traffic-light cycle period", 9.0, "samples", source_ref)
+    add_parameter(parameters, "param_problem4_hinge_10", "h_4_1", "Problem 4 first piecewise hinge", 10.0, "sample index", source_ref)
+    add_parameter(parameters, "param_problem4_hinge_30", "h_4_2", "Problem 4 second piecewise hinge", 30.0, "sample index", source_ref)
+    add_parameter(parameters, "param_problem4_hinge_45", "h_4_3", "Problem 4 third piecewise hinge", 45.0, "sample index", source_ref)
     for index, value in enumerate(best["coefficients"]):
         add_parameter(parameters, f"param_problem4_coef_{index}", f"theta_4_{index}", f"Problem 4 noisy signal coefficient {index}", value, "vehicles per 2 minutes", source_ref)
     stability = prediction_stability(best["columns_factory"], t_values, observed, best["predicted"])
@@ -436,6 +450,41 @@ def build_specified_time_table(parameters, fits):
         "notes": [
             "这些数值是给定基函数和相位/延迟设定下的主路聚合拟合值，不能作为唯一支路流量。",
             "时间变量 k 为样本序号；7:30 对应 k=16，8:30 对应 k=46。",
+        ],
+    }
+
+
+def build_basis_dictionary_table():
+    return {
+        "id": "final_problem2_to_4_basis_dictionary",
+        "title": "问题2-4基函数与参数字典",
+        "columns": ["题号", "模型口径", "基函数与参数对应", "结论状态", "证据"],
+        "rows": [
+            {
+                "题号": "问题2",
+                "模型口径": "F_2(k)=X_2(k) theta_2，delta_2=1 sample",
+                "基函数与参数对应": "theta_2_0 * 1 + theta_2_1 * max(k-1,0) + theta_2_2 * min(max(k-1,0),c_2) + theta_2_3 * max(max(k-1,0)-h_2,0) + theta_2_4 * min(k,d_2) + theta_2_5 * sin(2*pi*k/p_2) + theta_2_6 * cos(2*pi*k/p_2)",
+                "结论状态": "evidence_verified",
+                "证据": "param_problem2_coef_0..param_problem2_coef_6, param_problem2_delay, param_problem2_delayed_cap, param_problem2_delayed_hinge, param_problem2_direct_cap, param_problem2_cycle_period",
+            },
+            {
+                "题号": "问题3",
+                "模型口径": "F_3(k)=X_3(k; g_3) theta_3，g_3=3",
+                "基函数与参数对应": "theta_3_0 * 1 + theta_3_1 * k + theta_3_2 * max(k-h_3_1,0) + theta_3_3 * max(k-h_3_2,0) + theta_3_4 * max(k-h_3_3,0) + theta_3_5 * I_green(k; g_3) + theta_3_6 * k * I_green(k; g_3) + theta_3_7 * sin(2*pi*k/p_3) + theta_3_8 * cos(2*pi*k/p_3)",
+                "结论状态": "evidence_verified",
+                "证据": "param_problem3_coef_0..param_problem3_coef_8, param_problem3_green_start, param_problem3_green_duration, param_problem3_cycle_period, param_problem3_hinge_10, param_problem3_hinge_30, param_problem3_hinge_45",
+            },
+            {
+                "题号": "问题4",
+                "模型口径": "F_4(k)=X_4(k; g_4) theta_4，g_4 由候选相位最小残差选择",
+                "基函数与参数对应": "theta_4_0 * 1 + theta_4_1 * k + theta_4_2 * max(k-h_4_1,0) + theta_4_3 * max(k-h_4_2,0) + theta_4_4 * max(k-h_4_3,0) + theta_4_5 * I_green(k; g_4) + theta_4_6 * k * I_green(k; g_4) + theta_4_7 * sin(2*pi*k/p_4) + theta_4_8 * cos(2*pi*k/p_4)",
+                "结论状态": "evidence_verified",
+                "证据": "param_problem4_coef_0..param_problem4_coef_8, param_problem4_green_start, param_problem4_green_duration, param_problem4_cycle_period, param_problem4_hinge_10, param_problem4_hinge_30, param_problem4_hinge_45",
+            },
+        ],
+        "notes": [
+            "I_green(k; g)=1 当 (k-g) mod 9 落在 [0,5)，否则为 0。",
+            "这些基函数定义的是主路聚合拟合模型；未增加支路传感器或额外先验前，不能把 theta 唯一解释成各支路真实流量。",
         ],
     }
 
@@ -583,6 +632,7 @@ def main():
         figures,
         problem4_fit["green_start"],
     )
+    basis_dictionary_table = build_basis_dictionary_table()
 
     parameter_registry = {
         "parameters": parameters,
@@ -774,6 +824,7 @@ def main():
                         "若赛题要求填写具体支路流量，需要进一步把 theta 参数代回各支路基函数并在指定时刻复算。",
                     ],
                 },
+                basis_dictionary_table,
                 specified_time_table,
             ],
         },
