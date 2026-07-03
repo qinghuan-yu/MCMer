@@ -1120,3 +1120,10 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "规范化代表解而非唯一真值" in guidance
     assert "给定基函数回归与残差披露" in guidance
     assert "结论来源分层" in guidance
+    assert "问题5秩诊断与最小性边界" in guidance
+    assert "设计矩阵 A_S" in guidance
+    assert "dim(theta)" in guidance
+    assert "rank(A_S)" in guidance
+    assert "param_problem5_design_rank" in guidance
+    assert "param_problem5_parameter_dimension" in guidance
+    assert "若 A_S 列相关，仅靠主路设备无法唯一恢复" in guidance

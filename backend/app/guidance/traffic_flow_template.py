@@ -392,6 +392,7 @@ def solve_problem4(source_path, parameters, verified_results, evidence, figures)
         "title": "问题4",
         "t_values": t_values,
         "predicted": best["predicted"],
+        "green_start": best["start"],
         "source_ref": source_ref,
     }
 
@@ -439,7 +440,66 @@ def build_specified_time_table(parameters, fits):
     }
 
 
-def solve_problem5(source_path, parameters, verified_results, evidence, figures):
+def problem5_design_columns(t_values, problem4_start):
+    columns = []
+    columns.extend(problem1_columns(t_values, 30.0))
+    columns.extend(problem2_columns(t_values))
+    columns.extend(problem3_columns(t_values, 3.0))
+    columns.extend(problem3_columns(t_values, problem4_start))
+    return columns
+
+
+def build_problem5_rank_diagnostic(parameters, key_times, source_ref, problem4_start):
+    t_values = np.array(key_times, dtype=float)
+    matrix = np.column_stack(problem5_design_columns(t_values, problem4_start))
+    design_rank = int(np.linalg.matrix_rank(matrix))
+    parameter_dimension = int(matrix.shape[1])
+    rank_gap = int(parameter_dimension - design_rank)
+    add_parameter(parameters, "param_problem5_design_rank", "rank(A_S)", "rank of the candidate monitoring design matrix", design_rank, "rank", source_ref)
+    add_parameter(parameters, "param_problem5_parameter_dimension", "dim(theta)", "dimension of the selected basis-parameter vector", parameter_dimension, "parameter count", source_ref)
+    add_parameter(parameters, "param_problem5_rank_gap", "dim(theta)-rank(A_S)", "remaining rank gap for the candidate monitoring design", rank_gap, "parameter count", source_ref)
+    return {
+        "id": "final_problem5_rank_diagnostic",
+        "title": "问题5秩诊断与最小性边界",
+        "columns": ["题号", "检查项", "结论", "结论状态", "证据"],
+        "rows": [
+            {
+                "题号": "问题5",
+                "检查项": "设计矩阵 A_S",
+                "结论": "用当前选定的分段、相位和延迟基函数，在候选观测集合 S 上构造设计矩阵 A_S。",
+                "结论状态": "candidate_design",
+                "证据": "param_problem5_monitoring_times",
+            },
+            {
+                "题号": "问题5",
+                "检查项": "rank(A_S)",
+                "结论": f"rank(A_S)={design_rank}",
+                "结论状态": "candidate_design",
+                "证据": "param_problem5_design_rank",
+            },
+            {
+                "题号": "问题5",
+                "检查项": "dim(theta)",
+                "结论": f"dim(theta)={parameter_dimension}",
+                "结论状态": "candidate_design",
+                "证据": "param_problem5_parameter_dimension",
+            },
+            {
+                "题号": "问题5",
+                "检查项": "最小性边界",
+                "结论": f"rank(A_S)<dim(theta)，rank gap={rank_gap}；因此当前观测时刻只能称候选设计，未证明全局最少。",
+                "结论状态": "candidate_design",
+                "证据": "param_problem5_rank_gap",
+            },
+        ],
+        "notes": [
+            "若 A_S 列相关，仅靠主路设备无法唯一恢复支路函数，必须增加支路传感器、边界流量或额外先验。",
+            "真正证明最少观测次数时，应先用 dim(theta) 给下界，再给出满足 rank(A_S)=dim(theta) 的观测集合；本轮诊断显示当前候选集合还不能完成该证明。",
+        ],
+    }
+
+
+def solve_problem5(source_path, parameters, verified_results, evidence, figures, problem4_start):
     source_ref = f"{source_path.as_posix()}#all_sheets"
     candidate_times = {0, 1, 3, 10, 24, 30, 37, 45, 59}
     for start in (3,):
@@ -452,6 +512,7 @@ def solve_problem5(source_path, parameters, verified_results, evidence, figures)
     add_parameter(parameters, "param_problem5_monitoring_count", "m_5", "number of monitoring moments", count, "sample count", source_ref)
     add_parameter(parameters, "param_problem5_monitoring_times", "S_5", "selected monitoring sample indices", ", ".join(str(int(value)) for value in key_times), "sample index set", source_ref)
     add_parameter(parameters, "param_problem5_time_span", "T_5", "available sample span", 60, "samples", source_ref)
+    rank_diagnostic_table = build_problem5_rank_diagnostic(parameters, key_times, source_ref, problem4_start)
     verified_results.append({
         "id": "result_problem5_minimum_monitoring",
         "result_type": "optimization",
@@ -492,6 +553,7 @@ def solve_problem5(source_path, parameters, verified_results, evidence, figures)
         "source_data": [source_ref],
         "linked_result_ids": ["result_problem5_minimum_monitoring"],
     })
+    return rank_diagnostic_table
 
 
 def main():
@@ -513,7 +575,14 @@ def main():
         parameters,
         [problem2_fit, problem3_fit, problem4_fit],
     )
-    solve_problem5(source_path, parameters, verified_results, evidence, figures)
+    problem5_rank_table = solve_problem5(
+        source_path,
+        parameters,
+        verified_results,
+        evidence,
+        figures,
+        problem4_fit["green_start"],
+    )
 
     parameter_registry = {
         "parameters": parameters,
@@ -578,7 +647,7 @@ def main():
                     "observed": "从主路设备选择的样本时刻集合 S。",
                     "unknowns": "各分段函数参数向量 theta 及交通灯相位相关参数。",
                     "equation": "y_S=A_S theta",
-                    "rank_condition": "若要证明最少观测次数，必须给出 rank(A_S)=dim(theta)；当前结果只提供可复现实测候选集合。",
+                    "rank_condition": "当前候选集合已登记 rank(A_S) 与 dim(theta)；若 rank(A_S)<dim(theta)，只能说明候选设计未完成唯一恢复证明。",
                     "solution_family": "如果任意 S 下 A_S 仍列相关，则仅靠主路设备不能唯一恢复支路函数。",
                     "selection_rule": "本轮选择覆盖断点、相位边界和趋势变化点的候选采样集合。",
                     "guidance": "正式答案应把参数个数作为下界、满秩采样集合作为上界；未完成秩证明前只能称候选设计。",
@@ -672,6 +741,7 @@ def main():
                         "该集合覆盖主要断点和相位边界，但未证明全局最少；正式最小性仍需 rank(A_S)=dim(theta) 证明。",
                     ],
                 },
+                problem5_rank_table,
                 {
                     "id": "final_problem2_to_4_fitted_models",
                     "title": "问题2-4拟合模型填表",
