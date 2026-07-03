@@ -41,7 +41,7 @@ def build_guidance_audit_report(
     blocks: list[dict[str, object]] = []
     warnings: list[dict[str, object]] = []
 
-    _check_required_sections(text, context, warnings)
+    _check_required_sections(text, context, blocks)
     _check_blocked_disclosure(text, results, blocks)
     if not _is_blocking_diagnostic(text):
         _check_parameter_coverage(text, parameters, blocks)
@@ -120,7 +120,7 @@ def _check_figure_coverage(
 def _check_required_sections(
     text: str,
     guidance_context: dict[str, object],
-    warnings: list[dict[str, object]],
+    blocks: list[dict[str, object]],
 ) -> None:
     required_sections = guidance_context.get("required_sections", [])
     if not isinstance(required_sections, list):
@@ -129,11 +129,11 @@ def _check_required_sections(
     for section in required_sections:
         section_text = str(section).strip()
         if section_text and section_text not in text:
-            warnings.append({
+            blocks.append({
                 "type": "missing_expected_section",
                 "location": section_text,
                 "route": "writer",
-                "severity": "medium",
+                "severity": "high",
                 "fix": f"Add or clearly label the section: {section_text}",
             })
 

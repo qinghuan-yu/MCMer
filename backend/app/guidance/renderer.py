@@ -199,7 +199,9 @@ def render_verified_guidance(
         lines.extend(["", "## 关键可信度边界", ""])
         lines.extend(f"- {note}" for note in guidance_notes)
 
-    reader_decision_guide = _reader_decision_guide(result_registry)
+    reader_decision_guide = _reader_decision_guide(result_registry) or _default_reader_decision_guide(
+        result_registry
+    )
     if reader_decision_guide:
         lines.extend(["", "## 建模路线与读者决策", ""])
         lines.append("| 读者问题 | 本题判断 | 建模/写作动作 |")
@@ -213,7 +215,9 @@ def render_verified_guidance(
                 )
             )
 
-    method_route_comparison = _method_route_comparison(result_registry)
+    method_route_comparison = _method_route_comparison(result_registry) or _default_method_route_comparison(
+        result_registry
+    )
     if method_route_comparison:
         lines.extend(["", "## 建模路线取舍", ""])
         lines.append("| 建模路线 | 处理结论 | 取舍理由 | 适用边界 | 证据 |")
@@ -229,7 +233,10 @@ def render_verified_guidance(
                 )
             )
 
-    identifiability_analysis = _identifiability_analysis(result_registry)
+    identifiability_analysis = _identifiability_analysis(result_registry) or _default_identifiability_analysis(
+        approved_model,
+        result_registry,
+    )
     if identifiability_analysis:
         lines.extend(["", "## 可辨识性分析", ""])
         for item in identifiability_analysis:
@@ -251,7 +258,7 @@ def render_verified_guidance(
                 lines.append(f"- {label}：{_guidance_text(_join_claim_items(value))}")
             lines.append("")
 
-    claim_registry = _claim_registry(result_registry)
+    claim_registry = _claim_registry(result_registry) or _default_claim_registry(result_registry)
     if claim_registry:
         lines.extend(["", "## 结论状态登记", ""])
         lines.append("| claim_id | 状态 | 结论 | 证据 | 依赖假设 | 风险 |")
@@ -268,7 +275,7 @@ def render_verified_guidance(
                 )
             )
 
-    final_answer_tables = _final_answer_tables(result_registry)
+    final_answer_tables = _final_answer_tables(result_registry) or _default_final_answer_tables(result_registry)
     if final_answer_tables:
         lines.extend(["", "## 最终答案与应填表格", ""])
         for table in final_answer_tables:
@@ -615,6 +622,27 @@ def _reader_decision_guide(result_registry: dict[str, Any]) -> list[dict[str, An
     return []
 
 
+def _default_reader_decision_guide(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence = _join_claim_items(_verified_result_ids(result_registry))
+    return [
+        {
+            "question": "观测量/未知量/时间口径",
+            "judgment": "以数据与来源、参数表和已审核模型为准；未直接观测的目标不得写成题设事实。",
+            "action": "论文开头先分清观测量、未知量、时间单位和数据口径。",
+        },
+        {
+            "question": "能否唯一推出目标",
+            "judgment": "仅当模型审核和结果证据给出唯一性或满秩依据时，才可写成唯一推出。",
+            "action": "若证据不足，应写成条件性估计、代表解或待补充信息。",
+        },
+        {
+            "question": "最终可填内容",
+            "judgment": "当前可填内容仅限已登记 verified result 和参数来源表支持的结论。",
+            "action": f"引用最终答案表并绑定证据：{evidence}。",
+        },
+    ]
+
+
 def _method_route_comparison(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
     summary = result_registry.get("summary", {})
     if isinstance(summary, dict):
@@ -622,6 +650,26 @@ def _method_route_comparison(result_registry: dict[str, Any]) -> list[dict[str, 
         if isinstance(routes, list):
             return [item for item in routes if isinstance(item, dict)]
     return []
+
+
+def _default_method_route_comparison(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence = _verified_result_ids(result_registry)
+    return [
+        {
+            "route": "直接把拟合结果写成真实机理",
+            "decision": "被排除：缺少独立可辨识性证据时不能这样写",
+            "reason": "低残差或程序成功运行只说明登记结果自洽，不自动证明未知对象被唯一恢复。",
+            "boundary": "可作为计算结果使用，但论文必须保留条件、假设和局限。",
+            "evidence": evidence,
+        },
+        {
+            "route": "审核通过模型 + 已登记结果 + 局限披露",
+            "decision": "推荐：按模型审核、参数来源和结果复核组织答案",
+            "reason": "这一路线能把公式、参数、结果和可信状态逐项追踪到注册表。",
+            "boundary": "只覆盖已登记证据支持的结论，未登记内容仍需补算或人工确认。",
+            "evidence": evidence,
+        },
+    ]
 
 
 def _identifiability_analysis(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -633,6 +681,35 @@ def _identifiability_analysis(result_registry: dict[str, Any]) -> list[dict[str,
     return []
 
 
+def _default_identifiability_analysis(
+    approved_model: dict[str, Any],
+    result_registry: dict[str, Any],
+) -> list[dict[str, Any]]:
+    model = approved_model.get("approved_model", {})
+    model = model if isinstance(model, dict) else {}
+    subproblems = model.get("subproblem_models", [])
+    if not isinstance(subproblems, list) or not subproblems:
+        subproblems = [{"subproblem_id": "overall", "equations": []}]
+
+    evidence = _join_claim_items(_verified_result_ids(result_registry))
+    analysis: list[dict[str, Any]] = []
+    for subproblem in subproblems:
+        if not isinstance(subproblem, dict):
+            continue
+        equations = subproblem.get("equations", [])
+        analysis.append({
+            "subproblem_id": subproblem.get("subproblem_id") or "overall",
+            "observed": "以数据与来源章节和参数表登记的输入为准。",
+            "unknowns": "以已审核模型中的参数、状态变量和待求输出为准。",
+            "equation": _join_claim_items(equations) if isinstance(equations, list) and equations else "见分问题建模步骤。",
+            "rank_condition": "若没有登记满秩、唯一性或独立观测证据，结论只能写成条件性估计。",
+            "solution_family": "存在未直接观测变量时，必须披露额外假设或代表解规则。",
+            "selection_rule": "采用已审核模型和已登记结果支持的保守代表答案。",
+            "guidance": f"证据来源：{evidence}。",
+        })
+    return analysis
+
+
 def _final_answer_tables(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
     summary = result_registry.get("summary", {})
     if isinstance(summary, dict):
@@ -640,6 +717,63 @@ def _final_answer_tables(result_registry: dict[str, Any]) -> list[dict[str, Any]
         if isinstance(tables, list):
             return [table for table in tables if isinstance(table, dict)]
     return []
+
+
+def _default_claim_registry(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    verified_ids = _verified_result_ids(result_registry)
+    if not verified_ids:
+        return []
+    return [
+        {
+            "id": "claim_verified_results_are_registered",
+            "status": "evidence_verified",
+            "claim_text": "当前结论只引用已登记 verified result，不扩展为未证明的真实机理。",
+            "evidence": verified_ids,
+            "assumptions": ["approved model contract", "verification report passed"],
+            "risk": "model-form and identifiability limits must still be disclosed",
+        }
+    ]
+
+
+def _default_final_answer_tables(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    verified = result_registry.get("verified_results", [])
+    if not isinstance(verified, list) or not verified:
+        return []
+    rows = []
+    for result in verified:
+        if not isinstance(result, dict):
+            continue
+        result_id = str(result.get("id") or "").strip()
+        if not result_id:
+            continue
+        rows.append({
+            "应填项": result_id,
+            "当前可填内容": result.get("claim_text") or "已登记结果，需按模型公式代回写入答案。",
+            "结论状态": "evidence_verified",
+            "证据": result_id,
+        })
+    return [
+        {
+            "id": "final_registered_answers",
+            "title": "已登记结果可填表",
+            "columns": ["应填项", "当前可填内容", "结论状态", "证据"],
+            "rows": rows,
+            "notes": ["该表只汇总已登记结果；未登记或不可辨识内容不得写成确定答案。"],
+        }
+    ]
+
+
+def _verified_result_ids(result_registry: dict[str, Any]) -> list[str]:
+    verified = result_registry.get("verified_results", [])
+    if not isinstance(verified, list):
+        return []
+    result_ids: list[str] = []
+    for result in verified:
+        if isinstance(result, dict):
+            result_id = str(result.get("id") or "").strip()
+            if result_id:
+                result_ids.append(result_id)
+    return result_ids
 
 
 def _join_claim_items(value: Any) -> str:

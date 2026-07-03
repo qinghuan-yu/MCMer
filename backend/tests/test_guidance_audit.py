@@ -104,6 +104,42 @@ def test_guidance_audit_blocks_empty_pre_model_guidance() -> None:
     assert any(block["type"] == "no_verified_guidance_evidence" for block in report["blocks"])
 
 
+def test_guidance_audit_blocks_formal_guidance_missing_reader_facing_sections() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 建模指导方案\n\n"
+            "## 可信度摘要\n\n"
+            "结果复核状态为 `verified`。\n\n"
+            "## 参数与来源表\n\n"
+            "| 参数 | 来源 |\n| --- | --- |\n| alpha = 0.12 | param_alpha |\n\n"
+            "## 必要计算结果\n\n"
+            "预测值为 0.37。\n"
+        ),
+        guidance_context={
+            "required_sections": [
+                "参数与来源表",
+                "建模路线与读者决策",
+                "建模路线取舍",
+                "可辨识性分析",
+                "结论状态登记",
+                "最终答案与应填表格",
+            ]
+        },
+        result_registry={
+            "verified_results": [{"id": "result_prediction", "value": 0.37}],
+            "blocked_results": [],
+        },
+        parameter_registry={
+            "parameters": [
+                {"id": "param_alpha", "symbol": "alpha", "value": 0.12},
+            ]
+        },
+    )
+
+    assert report["status"] == "BLOCK"
+    assert any(block["type"] == "missing_expected_section" for block in report["blocks"])
+
+
 def test_guidance_audit_treats_blocking_diagnostic_as_diagnostic_artifact() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(
