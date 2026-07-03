@@ -1112,3 +1112,11 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "param_problem2_k16_fitted_main_flow" in guidance
     assert "param_problem4_k46_fitted_main_flow" in guidance
     assert "不能作为唯一支路流量" in guidance
+    assert "## 建模路线与读者决策" in guidance
+    assert "观测量/未知量/时间口径" in guidance
+    assert "只观测主路聚合流量" in guidance
+    assert "缺少支路传感器、边界流量或额外先验" in guidance
+    assert "先做可辨识性分析" in guidance
+    assert "规范化代表解而非唯一真值" in guidance
+    assert "给定基函数回归与残差披露" in guidance
+    assert "结论来源分层" in guidance

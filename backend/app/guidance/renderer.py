@@ -199,6 +199,20 @@ def render_verified_guidance(
         lines.extend(["", "## 关键可信度边界", ""])
         lines.extend(f"- {note}" for note in guidance_notes)
 
+    reader_decision_guide = _reader_decision_guide(result_registry)
+    if reader_decision_guide:
+        lines.extend(["", "## 建模路线与读者决策", ""])
+        lines.append("| 读者问题 | 本题判断 | 建模/写作动作 |")
+        lines.append("| --- | --- | --- |")
+        for item in reader_decision_guide:
+            lines.append(
+                "| {question} | {judgment} | {action} |".format(
+                    question=_cell(item.get("question") or item.get("topic")),
+                    judgment=_cell(_guidance_text(item.get("judgment") or item.get("answer"))),
+                    action=_cell(_guidance_text(item.get("action") or item.get("guidance"))),
+                )
+            )
+
     identifiability_analysis = _identifiability_analysis(result_registry)
     if identifiability_analysis:
         lines.extend(["", "## 可辨识性分析", ""])
@@ -573,6 +587,15 @@ def _claim_registry(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
         claims = summary.get("claim_registry", [])
         if isinstance(claims, list):
             return [claim for claim in claims if isinstance(claim, dict)]
+    return []
+
+
+def _reader_decision_guide(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = result_registry.get("summary", {})
+    if isinstance(summary, dict):
+        guide = summary.get("reader_decision_guide", [])
+        if isinstance(guide, list):
+            return [item for item in guide if isinstance(item, dict)]
     return []
 
 
