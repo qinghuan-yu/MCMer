@@ -681,6 +681,40 @@ def main():
                     "action": "论文中按结论来源分层写：数据结论、额外假设、竞赛导向的合理选解分别标注。",
                 },
             ],
+            "method_route_comparison": [
+                {
+                    "route": "直接唯一反推各支路",
+                    "decision": "被排除：主路总量分解存在自由度",
+                    "reason": "主路观测只给出 F(k)，不能单独约束每条支路；问题1已经构造出满足同一 F(k) 的解族。",
+                    "boundary": "除非增加支路传感器、边界流量或额外先验，否则不能把支路函数写成唯一真值。",
+                    "evidence": ["claim_problem1_branch_split"],
+                },
+                {
+                    "route": "黑箱曲线拟合",
+                    "decision": "被排除：无法解释支路趋势与题设约束",
+                    "reason": "只追求低残差会掩盖时间延迟、交通灯相位和不可辨识自由度，不能支撑论文中的机理说明。",
+                    "boundary": "可作为残差基线，但不能替代带参数来源、约束和可辨识性披露的建模方案。",
+                    "evidence": ["claim_problem2_to_4_fit"],
+                },
+                {
+                    "route": "EM/MCMC 噪声模型",
+                    "decision": "被排除：题设未提供随机机制",
+                    "reason": "问题4只说明记录数据存在误差；在没有噪声分布、先验和重复观测时，引入复杂概率推断会制造伪精度。",
+                    "boundary": "若后续给出重复测量或明确误差分布，才重新考虑统计噪声模型。",
+                    "evidence": ["claim_problem2_to_4_fit"],
+                },
+                {
+                    "route": "可辨识性分析 + 规范化代表解 + 基函数回归 + 秩诊断",
+                    "decision": "推荐：可辨识性分析 + 规范化代表解 + 基函数回归 + 秩诊断",
+                    "reason": "先承认不可唯一，再给可复现代表解、基函数字典、指定时刻结果和问题5秩诊断，能同时服务计算和论文写作。",
+                    "boundary": "推荐路线输出的是证据自洽的竞赛导向解，不把不可观测支路伪装成数据唯一恢复。",
+                    "evidence": [
+                        "claim_problem1_branch_split",
+                        "claim_problem2_to_4_fit",
+                        "claim_problem5_monitoring_set",
+                    ],
+                },
+            ],
             "identifiability_analysis": [
                 {
                     "subproblem_id": "problem1",

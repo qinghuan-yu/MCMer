@@ -1132,3 +1132,11 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "theta_3_5 * I_green(k; g_3)" in guidance
     assert "theta_4_5 * I_green(k; g_4)" in guidance
     assert "I_green(k; g)=1 当 (k-g) mod 9 落在 [0,5)" in guidance
+    assert "## 建模路线取舍" in guidance
+    assert "直接唯一反推各支路" in guidance
+    assert "被排除：主路总量分解存在自由度" in guidance
+    assert "黑箱曲线拟合" in guidance
+    assert "被排除：无法解释支路趋势与题设约束" in guidance
+    assert "EM/MCMC 噪声模型" in guidance
+    assert "被排除：题设未提供随机机制" in guidance
+    assert "推荐：可辨识性分析 + 规范化代表解 + 基函数回归 + 秩诊断" in guidance

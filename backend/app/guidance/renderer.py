@@ -213,6 +213,22 @@ def render_verified_guidance(
                 )
             )
 
+    method_route_comparison = _method_route_comparison(result_registry)
+    if method_route_comparison:
+        lines.extend(["", "## 建模路线取舍", ""])
+        lines.append("| 建模路线 | 处理结论 | 取舍理由 | 适用边界 | 证据 |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for item in method_route_comparison:
+            lines.append(
+                "| {route} | {decision} | {reason} | {boundary} | {evidence} |".format(
+                    route=_cell(item.get("route") or item.get("name")),
+                    decision=_cell(_guidance_text(item.get("decision") or item.get("status"))),
+                    reason=_cell(_guidance_text(item.get("reason") or item.get("rationale"))),
+                    boundary=_cell(_guidance_text(item.get("boundary") or item.get("scope"))),
+                    evidence=_cell(_join_claim_items(item.get("evidence") or item.get("evidence_ids"))),
+                )
+            )
+
     identifiability_analysis = _identifiability_analysis(result_registry)
     if identifiability_analysis:
         lines.extend(["", "## 可辨识性分析", ""])
@@ -596,6 +612,15 @@ def _reader_decision_guide(result_registry: dict[str, Any]) -> list[dict[str, An
         guide = summary.get("reader_decision_guide", [])
         if isinstance(guide, list):
             return [item for item in guide if isinstance(item, dict)]
+    return []
+
+
+def _method_route_comparison(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = result_registry.get("summary", {})
+    if isinstance(summary, dict):
+        routes = summary.get("method_route_comparison", [])
+        if isinstance(routes, list):
+            return [item for item in routes if isinstance(item, dict)]
     return []
 
 
