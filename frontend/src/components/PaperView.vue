@@ -10,6 +10,9 @@
         </span>
       </div>
       <div class="header-actions">
+        <a class="btn-download" :href="workspaceDownloadUrl" download>
+          下载工作区 ZIP
+        </a>
         <button class="btn-revise" @click="showRevisePanel = !showRevisePanel">
           ✏️ 修订方案
         </button>
@@ -136,6 +139,7 @@ const versions = computed(() => {
   return v
 })
 const selectedVersion = ref(1)
+const workspaceDownloadUrl = computed(() => `/api/tasks/${encodeURIComponent(props.taskId)}/workspace.zip`)
 const markdownRenderer = new Marked(
   markedKatex({
     nonStandard: true,
@@ -262,10 +266,15 @@ onMounted(() => {
   font-weight: 600;
 }
 
+.header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.btn-download,
 .btn-revise {
   padding: 8px 20px;
-  background: linear-gradient(135deg, var(--primary), #a855f7);
-  color: white;
   border: none;
   border-radius: 8px;
   font-size: 0.9rem;
@@ -273,6 +282,19 @@ onMounted(() => {
   transition: all 0.2s;
 }
 
+.btn-download {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  text-decoration: none;
+}
+
+.btn-revise {
+  background: linear-gradient(135deg, var(--primary), #a855f7);
+  color: white;
+}
+
+.btn-download:hover,
 .btn-revise:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
@@ -559,6 +581,7 @@ onMounted(() => {
   }
 
   .back-btn,
+  .btn-download,
   .btn-revise {
     min-height: 42px;
     border-radius: 10px;

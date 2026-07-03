@@ -282,6 +282,14 @@ def solve_problem2(source_path, parameters, verified_results, evidence, figures)
         stability=stability,
         figure_path="figures/problem2_fit.png",
     )
+    return {
+        "subproblem_id": "problem2",
+        "result_id": "result_problem2_traffic_fit",
+        "title": "问题2",
+        "t_values": t_values,
+        "predicted": predicted,
+        "source_ref": source_ref,
+    }
 
 
 def problem3_columns(t_values, start):
@@ -328,6 +336,14 @@ def solve_problem3(source_path, parameters, verified_results, evidence, figures)
         stability=stability,
         figure_path="figures/problem3_fit.png",
     )
+    return {
+        "subproblem_id": "problem3",
+        "result_id": "result_problem3_signal_fit",
+        "title": "问题3",
+        "t_values": t_values,
+        "predicted": predicted,
+        "source_ref": source_ref,
+    }
 
 
 def solve_problem4(source_path, parameters, verified_results, evidence, figures):
@@ -370,6 +386,57 @@ def solve_problem4(source_path, parameters, verified_results, evidence, figures)
         stability=stability,
         figure_path="figures/problem4_fit.png",
     )
+    return {
+        "subproblem_id": "problem4",
+        "result_id": "result_problem4_noisy_signal_fit",
+        "title": "问题4",
+        "t_values": t_values,
+        "predicted": best["predicted"],
+        "source_ref": source_ref,
+    }
+
+
+def fitted_value_at_sample(t_values, predicted, sample_index):
+    matches = np.where(np.isclose(t_values, float(sample_index)))[0]
+    if len(matches):
+        return float(predicted[int(matches[0])])
+    return float(np.interp(float(sample_index), t_values, predicted))
+
+
+def build_specified_time_table(parameters, fits):
+    sample_labels = [(16, "7:30 (k=16)"), (46, "8:30 (k=46)")]
+    rows = []
+    for fit in fits:
+        for sample_index, label in sample_labels:
+            value = round(fitted_value_at_sample(fit["t_values"], fit["predicted"], sample_index), 6)
+            parameter_id = f"param_{fit['subproblem_id']}_k{sample_index}_fitted_main_flow"
+            add_parameter(
+                parameters,
+                parameter_id,
+                f"F_{{{fit['subproblem_id'][-1]}}}({sample_index})",
+                f"{fit['title']} fitted aggregate main-road flow at {label}",
+                value,
+                "vehicles per 2 minutes",
+                fit["source_ref"],
+            )
+            rows.append({
+                "题号": fit["title"],
+                "时刻": label,
+                "应填项": "主路聚合拟合值（给定基函数）",
+                "答案": f"{value:.6g}",
+                "结论状态": "evidence_verified",
+                "证据": f"{fit['result_id']}, {parameter_id}",
+            })
+    return {
+        "id": "final_problem2_to_4_specified_time_values",
+        "title": "问题2-4指定时刻拟合值",
+        "columns": ["题号", "时刻", "应填项", "答案", "结论状态", "证据"],
+        "rows": rows,
+        "notes": [
+            "这些数值是给定基函数和相位/延迟设定下的主路聚合拟合值，不能作为唯一支路流量。",
+            "时间变量 k 为样本序号；7:30 对应 k=16，8:30 对应 k=46。",
+        ],
+    }
 
 
 def solve_problem5(source_path, parameters, verified_results, evidence, figures):
@@ -439,9 +506,13 @@ def main():
     figures = []
 
     solve_problem1(source_path, parameters, verified_results, evidence, figures)
-    solve_problem2(source_path, parameters, verified_results, evidence, figures)
-    solve_problem3(source_path, parameters, verified_results, evidence, figures)
-    solve_problem4(source_path, parameters, verified_results, evidence, figures)
+    problem2_fit = solve_problem2(source_path, parameters, verified_results, evidence, figures)
+    problem3_fit = solve_problem3(source_path, parameters, verified_results, evidence, figures)
+    problem4_fit = solve_problem4(source_path, parameters, verified_results, evidence, figures)
+    specified_time_table = build_specified_time_table(
+        parameters,
+        [problem2_fit, problem3_fit, problem4_fit],
+    )
     solve_problem5(source_path, parameters, verified_results, evidence, figures)
 
     parameter_registry = {
@@ -606,6 +677,7 @@ def main():
                         "若赛题要求填写具体支路流量，需要进一步把 theta 参数代回各支路基函数并在指定时刻复算。",
                     ],
                 },
+                specified_time_table,
             ],
         },
     }

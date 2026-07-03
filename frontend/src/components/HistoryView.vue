@@ -90,6 +90,15 @@
           >
             修订方案
           </button>
+          <a
+            v-if="task.has_paper"
+            class="btn-download"
+            :href="workspaceDownloadUrl(task)"
+            download
+            @click.stop
+          >
+            下载工作区
+          </a>
           <button
             v-if="task.can_delete !== false"
             class="btn-delete"
@@ -227,6 +236,10 @@ function getProjectTitle(task: HistoryTask) {
 
 function openTask(task: HistoryTask) {
   emit('openProject', task)
+}
+
+function workspaceDownloadUrl(task: HistoryTask) {
+  return `/api/tasks/${encodeURIComponent(task.task_id)}/workspace.zip`
 }
 
 function closeReviseDialog() {
@@ -495,6 +508,7 @@ onMounted(async () => {
 .btn-stop,
 .btn-view,
 .btn-revise,
+.btn-download,
 .btn-delete {
   padding: 6px 16px;
   border: 1px solid transparent;
@@ -541,6 +555,16 @@ onMounted(async () => {
 
 .btn-revise:hover {
   background: rgba(245, 158, 11, 0.18);
+}
+
+.btn-download {
+  background: rgba(36, 78, 168, 0.1);
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.btn-download:hover {
+  background: rgba(36, 78, 168, 0.16);
 }
 
 .btn-delete {
@@ -758,6 +782,7 @@ onMounted(async () => {
   .btn-stop,
   .btn-view,
   .btn-revise,
+  .btn-download,
   .btn-delete {
     width: 100%;
     min-height: 40px;

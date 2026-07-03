@@ -85,6 +85,17 @@ def test_workspace_download_returns_zip_with_task_artifacts(tmp_path: Path, monk
         assert "workspace.zip" not in names
 
 
+def test_frontend_history_and_paper_views_expose_workspace_zip_download() -> None:
+    repo_root = Path(__file__).parents[2]
+    paper_view = (repo_root / "frontend" / "src" / "components" / "PaperView.vue").read_text(encoding="utf-8")
+    history_view = (repo_root / "frontend" / "src" / "components" / "HistoryView.vue").read_text(encoding="utf-8")
+
+    assert "/api/tasks/${encodeURIComponent(props.taskId)}/workspace.zip" in paper_view
+    assert "下载工作区 ZIP" in paper_view
+    assert "/api/tasks/${encodeURIComponent(task.task_id)}/workspace.zip" in history_view
+    assert "下载工作区" in history_view
+
+
 def test_workflow_dispatches_guidance_without_legacy_writing_runner(monkeypatch) -> None:
     from app.core import workflow
 

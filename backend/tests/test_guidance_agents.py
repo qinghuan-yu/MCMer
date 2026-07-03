@@ -1106,3 +1106,9 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "result_problem4_noisy_signal_fit" in guidance
     assert "evidence_verified" in guidance
     assert "模型形式不确定，不能解释为唯一支路恢复" in guidance
+    assert "问题2-4指定时刻拟合值" in guidance
+    assert "7:30 (k=16)" in guidance
+    assert "8:30 (k=46)" in guidance
+    assert "param_problem2_k16_fitted_main_flow" in guidance
+    assert "param_problem4_k46_fitted_main_flow" in guidance
+    assert "不能作为唯一支路流量" in guidance
