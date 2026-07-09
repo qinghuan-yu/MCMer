@@ -81,6 +81,7 @@ def build_guidance_audit_report(
     _check_blocked_disclosure(text, results, blocks)
     if not _is_blocking_diagnostic(text):
         _check_reader_guidance_value(text, context, blocks)
+        _check_route_tradeoff_section_structure(text, context, blocks)
         _check_identifiability_section_structure(text, context, blocks)
         _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
         _check_parameter_coverage(text, parameters, blocks)
@@ -284,6 +285,51 @@ def _check_identifiability_section_structure(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite the identifiability section to state observations/equations, unknown parameters or dimensions, rank/degrees of freedom, and the uniqueness or missing-information conclusion.",
+            "missing_items": missing,
+        })
+
+
+def _check_route_tradeoff_section_structure(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    if "建模路线取舍" not in "\n".join(str(section) for section in required_sections):
+        return
+
+    section = _markdown_section(text, "建模路线取舍")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(lowered, ("recommended", "recommend", "chosen", "采用", "推荐", "选择")):
+        missing.append("recommended_route")
+    if not _contains_any(lowered, ("rejected", "excluded", "not recommended", "排除", "不推荐", "放弃")):
+        missing.append("rejected_or_excluded_route")
+    if not _contains_any(
+        lowered,
+        ("because", "reason", "criteria", "criterion", "tradeoff", "why", "原因", "理由", "准则", "取舍", "因为"),
+    ):
+        missing.append("reason_or_selection_criterion")
+    if not _contains_any(
+        lowered,
+        ("boundary", "applicable", "applicability", "condition", "limit", "scope", "适用", "边界", "条件", "局限", "范围"),
+    ):
+        missing.append("applicability_boundary")
+    if not _contains_any(lowered, ("evidence", "source", "result_", "data", "证据", "来源", "数据")):
+        missing.append("evidence_source")
+
+    if missing:
+        blocks.append({
+            "type": "route_tradeoff_section_missing_structure",
+            "location": "建模路线取舍",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the route tradeoff section to include recommended routes, rejected routes, reasons or criteria, applicability boundaries, and evidence sources.",
             "missing_items": missing,
         })
 
