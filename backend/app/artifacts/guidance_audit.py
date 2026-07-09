@@ -44,6 +44,7 @@ def build_guidance_audit_report(
     _check_required_sections(text, context, blocks)
     _check_blocked_disclosure(text, results, blocks)
     if not _is_blocking_diagnostic(text):
+        _check_reader_guidance_value(text, context, blocks)
         _check_parameter_coverage(text, parameters, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
         _check_registered_numbers(text, results, parameters, blocks)
@@ -136,6 +137,68 @@ def _check_required_sections(
                 "severity": "high",
                 "fix": f"Add or clearly label the section: {section_text}",
             })
+
+
+def _check_reader_guidance_value(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    required_text = "\n".join(str(section) for section in required_sections)
+    formal_markers = (
+        "建模路线与读者决策",
+        "建模路线取舍",
+        "可辨识性分析",
+        "结论状态登记",
+        "最终答案与应填表格",
+    )
+    if not all(marker in required_text for marker in formal_markers):
+        return
+
+    lowered = text.lower()
+    missing: list[str] = []
+    if not (
+        _contains_any(lowered, ("observed", "observation", "观测", "数据", "输入"))
+        and _contains_any(lowered, ("unknown", "未知", "待求", "决策变量", "目标"))
+        and _contains_any(lowered, ("time", "period", "sample", "coordinate", "时间", "时刻", "样本", "口径", "not applicable"))
+    ):
+        missing.append("observed_unknown_time_context")
+    if not _contains_any(
+        lowered,
+        ("unique", "identifi", "rank", "missing information", "可辨识", "唯一", "不可", "秩", "缺少"),
+    ):
+        missing.append("identifiability_or_missing_information")
+    if not (
+        _contains_any(lowered, ("recommended", "recommend", "推荐"))
+        and _contains_any(lowered, ("rejected", "excluded", "not recommended", "被排除", "排除", "不推荐"))
+    ):
+        missing.append("recommended_and_rejected_routes")
+    if not (
+        _contains_any(lowered, ("formula", "equation", "function", "公式", "方程", "函数", "模型"))
+        and _contains_any(lowered, ("parameter", "param_", "参数"))
+        and _contains_any(lowered, ("solve", "solver", "fit", "optimiz", "求解", "拟合", "优化"))
+        and _contains_any(lowered, ("final answer", "answer table", "最终答案", "应填", "答案", "result_"))
+    ):
+        missing.append("formula_parameter_solver_final_answer")
+    if not (
+        _contains_any(lowered, ("data", "evidence", "result_", "数据", "证据"))
+        and _contains_any(lowered, ("assumption", "prior", "假设", "先验", "规范化"))
+        and _contains_any(lowered, ("candidate", "representative", "contest", "chosen", "候选", "代表", "竞赛"))
+    ):
+        missing.append("claim_source_layers")
+
+    if missing:
+        blocks.append({
+            "type": "vague_reader_guidance",
+            "location": "guidance.md",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite formal guidance so it directly answers observation/unknown/time, identifiability, route choice, formulas/results, and claim source layers.",
+            "missing_items": missing,
+        })
 
 
 def _check_blocked_disclosure(
@@ -276,6 +339,10 @@ def _is_inside_url(line: str, start: int, end: int) -> bool:
         if start >= match.start() and end <= match.end():
             return True
     return False
+
+
+def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
+    return any(needle.lower() in text for needle in needles)
 
 
 def _registered_numbers(

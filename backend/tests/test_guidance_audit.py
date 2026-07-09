@@ -140,6 +140,56 @@ def test_guidance_audit_blocks_formal_guidance_missing_reader_facing_sections() 
     assert any(block["type"] == "missing_expected_section" for block in report["blocks"])
 
 
+def test_guidance_audit_blocks_formal_guidance_with_vague_reader_sections() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 建模指导方案\n\n"
+            "## 可信度摘要\n\n"
+            "结果复核状态为 `verified`。\n\n"
+            "## 问题理解\n\n"
+            "系统已完成建模。\n\n"
+            "## 建模路线与读者决策\n\n"
+            "本方案已经完成，可参考注册表。\n\n"
+            "## 建模路线取舍\n\n"
+            "推荐当前方法，效果较好。\n\n"
+            "## 可辨识性分析\n\n"
+            "模型通过复核。\n\n"
+            "## 结论状态登记\n\n"
+            "结论可信。\n\n"
+            "## 参数与来源表\n\n"
+            "| 参数 | 来源 |\n| --- | --- |\n| alpha | param_alpha |\n\n"
+            "## 必要计算结果\n\n"
+            "result_prediction 已登记。\n\n"
+            "## 最终答案与应填表格\n\n"
+            "答案见 result_prediction。\n"
+        ),
+        guidance_context={
+            "required_sections": [
+                "问题理解",
+                "建模路线与读者决策",
+                "建模路线取舍",
+                "可辨识性分析",
+                "结论状态登记",
+                "参数与来源表",
+                "必要计算结果",
+                "最终答案与应填表格",
+            ]
+        },
+        result_registry={
+            "verified_results": [{"id": "result_prediction", "claim_text": "registered result"}],
+            "blocked_results": [],
+        },
+        parameter_registry={
+            "parameters": [
+                {"id": "param_alpha", "symbol": "alpha", "value": "source-locked"},
+            ]
+        },
+    )
+
+    assert report["status"] == "BLOCK"
+    assert any(block["type"] == "vague_reader_guidance" for block in report["blocks"])
+
+
 def test_guidance_audit_treats_blocking_diagnostic_as_diagnostic_artifact() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(
