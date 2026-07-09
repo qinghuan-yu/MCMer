@@ -45,6 +45,7 @@ def build_guidance_audit_report(
     _check_blocked_disclosure(text, results, blocks)
     if not _is_blocking_diagnostic(text):
         _check_reader_guidance_value(text, context, blocks)
+        _check_final_answer_evidence_binding(text, context, blocks)
         _check_parameter_coverage(text, parameters, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
         _check_registered_numbers(text, results, parameters, blocks)
@@ -201,6 +202,34 @@ def _check_reader_guidance_value(
         })
 
 
+def _check_final_answer_evidence_binding(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    if "最终答案与应填表格" not in "\n".join(str(section) for section in required_sections):
+        return
+
+    section = _markdown_section(text, "最终答案与应填表格")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    if _contains_any(lowered, ("result_", "param_", "blocked", "阻断")):
+        return
+
+    blocks.append({
+        "type": "final_answer_missing_evidence_binding",
+        "location": "最终答案与应填表格",
+        "route": "writer",
+        "severity": "high",
+        "fix": "Bind final-answer rows to result_registry or parameter_registry IDs, or mark the row as blocked.",
+    })
+
+
 def _check_blocked_disclosure(
     text: str,
     result_registry: dict[str, object],
@@ -343,6 +372,18 @@ def _is_inside_url(line: str, start: int, end: int) -> bool:
 
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle.lower() in text for needle in needles)
+
+
+def _markdown_section(text: str, heading: str) -> str:
+    match = re.search(rf"^##+\s+{re.escape(heading)}\s*$", text, re.MULTILINE)
+    if not match:
+        return ""
+
+    rest = text[match.end():]
+    next_heading = re.search(r"^##+\s+", rest, re.MULTILINE)
+    if not next_heading:
+        return rest
+    return rest[:next_heading.start()]
 
 
 def _registered_numbers(

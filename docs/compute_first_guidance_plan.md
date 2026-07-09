@@ -103,6 +103,7 @@
 - [x] ResultVerificationStage 必须阻断缺少读者决策、路线取舍、可辨识性、结论状态或最终答案表的 verified result registry，禁止弱 summary 进入正式 guidance。
 - [x] ResultVerificationStage 必须阻断字段齐全但内容空泛的读者向 summary，至少检查观测/未知/时间口径、推荐与排除路线、可辨识性、结论来源和最终答案证据绑定。
 - [x] guidance 审计必须阻断章节齐全但正文空泛的正式方案，确保 `guidance.md` 直接回答观测/未知/时间、唯一性、路线取舍、公式参数结果和结论来源分层。
+- [x] guidance 审计必须要求“最终答案与应填表格”章节内部绑定 result/param 证据或阻断原因，禁止答案表与注册证据脱节。
 ## Go / No-Go
 
 - **判断**：Go，但停止把简易公式计算器扩展为通用求解器。
