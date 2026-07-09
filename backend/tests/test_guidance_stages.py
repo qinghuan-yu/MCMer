@@ -643,7 +643,44 @@ def _write_verified_fit_artifacts(tmp_path: Path) -> Path:
                     }
                 ],
                 "blocked_results": [],
-                "summary": {"coverage_status": "verified"},
+                "summary": {
+                    "verified_count": 1,
+                    "blocked_count": 0,
+                    "coverage_status": "verified",
+                    "reader_decision_guide": [
+                        "Observed variable is the main-road aggregate flow; branch flows are unknown.",
+                        "The split is conditional on an explicit identifiability constraint.",
+                    ],
+                    "method_route_comparison": [
+                        {
+                            "route": "constrained piecewise least squares",
+                            "status": "recommended",
+                            "reason": "matches the stated piecewise trend and exposes residuals",
+                            "boundary": "conditional branch-flow estimate",
+                            "evidence": ["result_piecewise_fit"],
+                        }
+                    ],
+                    "identifiability_analysis": {
+                        "observed": "q_main(t)",
+                        "unknown": "q_1(t), q_2(t)",
+                        "rank_check": "full rank after explicit constraint",
+                        "conclusion": "conditional estimate, not an unconstrained unique recovery",
+                    },
+                    "claim_registry": [
+                        {
+                            "claim": "The fitted aggregate flow reproduces the observations.",
+                            "status": "evidence_verified",
+                            "evidence": ["result_piecewise_fit"],
+                        }
+                    ],
+                    "final_answer_tables": [
+                        {
+                            "table": "piecewise fit",
+                            "status": "evidence_verified",
+                            "result_id": "result_piecewise_fit",
+                        }
+                    ],
+                },
             }
         ),
         encoding="utf-8",
@@ -833,6 +870,30 @@ def test_result_verification_blocks_verified_result_without_parameter_evidence(t
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["status"] == "blocked"
     assert any("parameter evidence" in issue for issue in report["blocking_issues"])
+
+
+def test_result_verification_blocks_missing_reader_facing_result_summary(tmp_path: Path) -> None:
+    from app.guidance.stages import ResultVerificationStage
+
+    manifest_path = _write_verified_fit_artifacts(tmp_path)
+    registry_path = tmp_path / "result_registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["summary"] = {"coverage_status": "verified"}
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    output = asyncio.run(
+        ResultVerificationStage().run(
+            task_id="task-missing-reader-summary",
+            task={"work_dir": str(tmp_path)},
+            input_path=manifest_path,
+            output_path=tmp_path / "verification_report.json",
+        )
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["status"] == "blocked"
+    assert any("reader_decision_guide" in issue for issue in report["blocking_issues"])
+    assert any("final_answer_tables" in issue for issue in report["blocking_issues"])
 
 
 def test_result_verification_blocks_parameter_registry_with_missing_source_ref(tmp_path: Path) -> None:

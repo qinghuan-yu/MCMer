@@ -275,9 +275,47 @@ result = {
     "metrics": {"rmse": rmse, "max_abs_residual": max_abs_residual},
     "source_data": [source_ref],
 }
+summary = {
+    "verified_count": 1,
+    "blocked_count": 0,
+    "coverage_status": "verified",
+    "reader_decision_guide": [
+        "Observed variable is the main-road aggregate flow; branch flows are unknown.",
+        "The branch split is conditional on the explicit identifiability constraint and must not be written as an unconstrained unique recovery.",
+    ],
+    "method_route_comparison": [
+        {
+            "route": "constrained piecewise least squares",
+            "decision": "recommended",
+            "reason": "matches the stated trend and exposes residuals",
+            "boundary": "conditional branch-flow estimate",
+            "evidence": [result["id"]],
+        }
+    ],
+    "identifiability_analysis": {
+        "observed": "main-road aggregate flow",
+        "unknowns": "branch 1 and branch 2 flows",
+        "rank_check": "conditional on explicit split constraint",
+        "conclusion": "representative estimate, not unconstrained unique recovery",
+    },
+    "claim_registry": [
+        {
+            "claim": result["claim_text"],
+            "status": "evidence_verified",
+            "evidence": [result["id"]],
+        }
+    ],
+    "final_answer_tables": [
+        {
+            "table": "problem 1 branch-flow functions",
+            "status": "conditional_estimate",
+            "result_id": result["id"],
+        }
+    ],
+}
 
 Path("parameter_registry.json").write_text(json.dumps({"parameters": parameters}, ensure_ascii=False, indent=2), encoding="utf-8")
-Path("result_registry.json").write_text(json.dumps({"verified_results": [result], "blocked_results": [], "summary": {"coverage_status": "verified"}}, ensure_ascii=False, indent=2), encoding="utf-8")
+Path("result_registry.json").write_text(json.dumps({"verified_results": [result], "blocked_results": [], "summary": summary}, ensure_ascii=False, indent=2), encoding="utf-8")
 solver_results = {"evidence": [{
     "kind": "regression",
     "subproblem_id": "problem_1",
@@ -601,6 +639,44 @@ result = {
     },
     "source_data": [source_ref],
 }
+summary = {
+    "verified_count": 1,
+    "blocked_count": 0,
+    "coverage_status": "verified",
+    "reader_decision_guide": [
+        "Observed data are product profits, resource usage, capacities, and demand limits.",
+        "Unknowns are product quantities; the linear program directly identifies the optimal mix under listed constraints.",
+    ],
+    "method_route_comparison": [
+        {
+            "route": "linear programming",
+            "decision": "recommended",
+            "reason": "objective and constraints are linear",
+            "boundary": "valid for the listed deterministic capacities and profits",
+            "evidence": [result["id"]],
+        }
+    ],
+    "identifiability_analysis": {
+        "observed": "profit coefficients and constraint matrix",
+        "unknowns": "product quantities",
+        "rank_check": "constraint set yields a bounded optimum",
+        "conclusion": "optimization answer is determined by the registered fixture data",
+    },
+    "claim_registry": [
+        {
+            "claim": result["claim_text"],
+            "status": "evidence_verified",
+            "evidence": [result["id"]],
+        }
+    ],
+    "final_answer_tables": [
+        {
+            "table": "optimal product mix",
+            "status": "evidence_verified",
+            "result_id": result["id"],
+        }
+    ],
+}
 
 constraint_values = [
     {"name": "material_a_capacity", "value": float(usage[0]), "upper_bound": float(capacity[0])},
@@ -625,7 +701,7 @@ solver_results = {"evidence": [{
 }]}
 
 Path("parameter_registry.json").write_text(json.dumps({"parameters": parameters}, ensure_ascii=False, indent=2), encoding="utf-8")
-Path("result_registry.json").write_text(json.dumps({"verified_results": [result], "blocked_results": [], "summary": {"coverage_status": "verified"}}, ensure_ascii=False, indent=2), encoding="utf-8")
+Path("result_registry.json").write_text(json.dumps({"verified_results": [result], "blocked_results": [], "summary": summary}, ensure_ascii=False, indent=2), encoding="utf-8")
 Path("solver_results.json").write_text(json.dumps(solver_results, ensure_ascii=False, indent=2), encoding="utf-8")
 pd.DataFrame(parameters).to_csv("parameter_table.csv", index=False)
 
@@ -902,6 +978,44 @@ result = {
     },
     "source_data": [source_ref],
 }
+summary = {
+    "verified_count": 1,
+    "blocked_count": 0,
+    "coverage_status": "verified",
+    "reader_decision_guide": [
+        "Observed data are historical demand by period; the unknown is next-period demand.",
+        "The forecast is a trend extrapolation supported by holdout error, not a guaranteed future observation.",
+    ],
+    "method_route_comparison": [
+        {
+            "route": "linear trend with holdout verification",
+            "decision": "recommended",
+            "reason": "fixture data follow a linear trend and holdout error is disclosed",
+            "boundary": "valid only while the trend assumption remains plausible",
+            "evidence": [result["id"]],
+        }
+    ],
+    "identifiability_analysis": {
+        "observed": "period-demand pairs",
+        "unknowns": "trend intercept, trend slope, next demand",
+        "rank_check": "linear design matrix has two independent columns",
+        "conclusion": "trend parameters are identifiable from the fixture series",
+    },
+    "claim_registry": [
+        {
+            "claim": result["claim_text"],
+            "status": "evidence_verified",
+            "evidence": [result["id"]],
+        }
+    ],
+    "final_answer_tables": [
+        {
+            "table": "next-period forecast",
+            "status": "evidence_verified",
+            "result_id": result["id"],
+        }
+    ],
+}
 
 solver_results = {"evidence": [{
     "kind": "forecast",
@@ -922,7 +1036,7 @@ solver_results = {"evidence": [{
 }]}
 
 Path("parameter_registry.json").write_text(json.dumps({"parameters": parameters}, ensure_ascii=False, indent=2), encoding="utf-8")
-Path("result_registry.json").write_text(json.dumps({"verified_results": [result], "blocked_results": [], "summary": {"coverage_status": "verified"}}, ensure_ascii=False, indent=2), encoding="utf-8")
+Path("result_registry.json").write_text(json.dumps({"verified_results": [result], "blocked_results": [], "summary": summary}, ensure_ascii=False, indent=2), encoding="utf-8")
 Path("solver_results.json").write_text(json.dumps(solver_results, ensure_ascii=False, indent=2), encoding="utf-8")
 pd.DataFrame(parameters).to_csv("parameter_table.csv", index=False)
 

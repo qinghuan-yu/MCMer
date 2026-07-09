@@ -368,6 +368,8 @@ class ResultVerificationStage:
             blocking_issues.append("parameter_registry has no parameter evidence")
         if results is not None and not results.verified_results:
             blocking_issues.append("result_registry has no verified results")
+        if results is not None and results.verified_results:
+            blocking_issues.extend(_verify_reader_facing_result_summary(results.summary))
         blocking_issues.extend(numerical_checks["issues"])
         blocking_issues.extend(figure_issues)
         if not units_passed:
@@ -612,6 +614,40 @@ def _is_positive_review_value(value) -> bool:
         text.startswith(f"{positive};") or text.startswith(f"{positive}:")
         for positive in positives
     )
+
+
+def _verify_reader_facing_result_summary(summary: dict) -> list[str]:
+    required_fields = [
+        "verified_count",
+        "blocked_count",
+        "coverage_status",
+        "reader_decision_guide",
+        "method_route_comparison",
+        "identifiability_analysis",
+        "claim_registry",
+        "final_answer_tables",
+    ]
+    missing = [
+        field
+        for field in required_fields
+        if field not in summary or _is_empty_summary_value(summary.get(field))
+    ]
+    if not missing:
+        return []
+    return [
+        "result_registry.summary missing reader-facing guidance fields: "
+        + ", ".join(missing)
+    ]
+
+
+def _is_empty_summary_value(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) == 0
+    return False
 
 
 def _write_model(path: Path, model) -> None:

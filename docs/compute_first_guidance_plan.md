@@ -100,6 +100,7 @@
 - [x] guidance 必须提供建模路线取舍表，说明推荐路线、被排除路线、排除原因、适用边界和证据来源。
 - [x] guidance 审计必须把读者决策、路线取舍、可辨识性、结论状态和最终答案章节作为正式方案硬门槛，缺失时阻断而非降级为 warning。
 - [x] GuidanceProgramGenerator 必须要求 `result_registry.summary` 写入读者决策、路线取舍、可辨识性、结论状态和最终答案表，避免新题只依赖 renderer 兜底。
+- [x] ResultVerificationStage 必须阻断缺少读者决策、路线取舍、可辨识性、结论状态或最终答案表的 verified result registry，禁止弱 summary 进入正式 guidance。
 ## Go / No-Go
 
 - **判断**：Go，但停止把简易公式计算器扩展为通用求解器。
