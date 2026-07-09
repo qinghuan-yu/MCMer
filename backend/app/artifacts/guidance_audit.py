@@ -46,6 +46,16 @@ _FINAL_ANSWER_STATUS_TOKENS = (
     "阻断",
 )
 _EVIDENCE_ID_RE = re.compile(r"\b(?:result|param)_[A-Za-z0-9_.:-]+\b")
+_FINAL_ANSWER_VALUE_HEADERS = (
+    "答案",
+    "当前可填内容",
+    "可填内容",
+    "函数",
+    "数值",
+    "观测时刻",
+    "answer",
+    "value",
+)
 
 
 def build_guidance_audit_report(
@@ -290,6 +300,17 @@ def _check_final_answer_evidence_binding(
             "missing_rows": missing_status_rows[:5],
         })
 
+    missing_concrete_rows = _final_answer_table_rows_missing_concrete_answer(section)
+    if missing_concrete_rows:
+        blocks.append({
+            "type": "final_answer_missing_concrete_answer",
+            "location": "最终答案与应填表格",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Write the formula, value, observation times, or blocked reason directly in each final-answer row instead of only pointing to registry IDs.",
+            "missing_rows": missing_concrete_rows[:5],
+        })
+
 
 def _check_blocked_disclosure(
     text: str,
@@ -495,6 +516,75 @@ def _final_answer_table_rows_missing_claim_status(section: str) -> list[str]:
             missing_rows.append(line)
 
     return missing_rows
+
+
+def _final_answer_table_rows_missing_concrete_answer(section: str) -> list[str]:
+    missing_rows: list[str] = []
+
+    for header, row in _markdown_table_rows(section):
+        answer_indices = [
+            index
+            for index, cell in enumerate(header)
+            if _contains_any(cell.lower(), _FINAL_ANSWER_VALUE_HEADERS)
+        ]
+        for index in answer_indices:
+            value = row[index] if index < len(row) else ""
+            if _is_vague_registry_pointer(value):
+                missing_rows.append(_markdown_row(row))
+                break
+
+    return missing_rows
+
+
+def _is_vague_registry_pointer(value: str) -> bool:
+    text = value.strip().lower().strip("`")
+    if not text:
+        return True
+
+    text = _EVIDENCE_ID_RE.sub("", text)
+    vague_words = (
+        "见",
+        "参考",
+        "详见",
+        "查看",
+        "see",
+        "refer",
+        "registry",
+        "注册表",
+        "证据",
+        "结果",
+        "result",
+        "parameter",
+        "param",
+    )
+    for word in vague_words:
+        text = text.replace(word, "")
+    text = re.sub(r"[\s`'\"：:，,。.;；|/\\()[\]{}<>_-]+", "", text)
+    return not text
+
+
+def _markdown_table_rows(section: str) -> list[tuple[list[str], list[str]]]:
+    rows: list[tuple[list[str], list[str]]] = []
+    header: list[str] | None = None
+
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            header = None
+            continue
+        if _is_markdown_table_separator(line):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if header is None:
+            header = cells
+            continue
+        rows.append((header, cells))
+
+    return rows
+
+
+def _markdown_row(cells: list[str]) -> str:
+    return "| " + " | ".join(cells) + " |"
 
 
 def _registered_result_ids(result_registry: dict[str, object]) -> set[str]:
