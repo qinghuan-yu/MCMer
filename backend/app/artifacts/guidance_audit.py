@@ -21,6 +21,30 @@ _DISCLOSURE_TOKENS = (
     "部分",
 )
 _FINAL_ANSWER_EVIDENCE_TOKENS = ("result_", "param_", "blocked", "阻断")
+_FINAL_ANSWER_STATUS_TOKENS = (
+    "source_locked",
+    "evidence_verified",
+    "chosen_under_prior",
+    "candidate_design",
+    "blocked",
+    "partial",
+    "unverified",
+    "assumption",
+    "prior",
+    "representative",
+    "contest",
+    "candidate",
+    "题设锁定",
+    "数据锁定",
+    "证据自洽",
+    "依赖先验",
+    "依赖假设",
+    "代表",
+    "候选",
+    "竞赛",
+    "规范化",
+    "阻断",
+)
 _EVIDENCE_ID_RE = re.compile(r"\b(?:result|param)_[A-Za-z0-9_.:-]+\b")
 
 
@@ -255,6 +279,17 @@ def _check_final_answer_evidence_binding(
             "unknown_refs": unknown_refs[:10],
         })
 
+    missing_status_rows = _final_answer_table_rows_missing_claim_status(section)
+    if missing_status_rows:
+        blocks.append({
+            "type": "final_answer_missing_claim_status",
+            "location": "最终答案与应填表格",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Add a claim status to every final-answer row: source-locked, evidence-verified, chosen-under-prior, candidate-design, or blocked.",
+            "missing_rows": missing_status_rows[:5],
+        })
+
 
 def _check_blocked_disclosure(
     text: str,
@@ -440,6 +475,26 @@ def _unknown_final_answer_evidence_refs(
     known_refs = _registered_result_ids(result_registry) | _registered_parameter_ids(parameter_registry)
     refs = sorted(set(_EVIDENCE_ID_RE.findall(section)))
     return [ref for ref in refs if ref not in known_refs]
+
+
+def _final_answer_table_rows_missing_claim_status(section: str) -> list[str]:
+    missing_rows: list[str] = []
+    seen_header = False
+
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            seen_header = False
+            continue
+        if _is_markdown_table_separator(line):
+            continue
+        if not seen_header:
+            seen_header = True
+            continue
+        if not _contains_any(line.lower(), _FINAL_ANSWER_STATUS_TOKENS):
+            missing_rows.append(line)
+
+    return missing_rows
 
 
 def _registered_result_ids(result_registry: dict[str, object]) -> set[str]:
