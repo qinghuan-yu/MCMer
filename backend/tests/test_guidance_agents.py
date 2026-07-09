@@ -635,6 +635,11 @@ def test_program_generator_prompts_for_typed_registries_and_verification_metrics
     assert "constraint_values 不能使用 residuals" in system_prompt
     assert "solver_results.evidence 不允许 kind=blocked" in system_prompt
     assert "placeholder/not implemented/would need to compute" in system_prompt
+    assert "reader_decision_guide" in system_prompt
+    assert "method_route_comparison" in system_prompt
+    assert "identifiability_analysis" in system_prompt
+    assert "claim_registry" in system_prompt
+    assert "final_answer_tables" in system_prompt
     assert "root filenames must be written exactly at the work directory root" in rules
     assert "Do not prefix root required outputs with output/, outputs/, results/, or result/" in rules
     assert "Figures may only link to verified_results IDs" in rules
