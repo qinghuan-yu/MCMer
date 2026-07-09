@@ -281,6 +281,7 @@ summary = {
     "coverage_status": "verified",
     "reader_decision_guide": [
         "Observed variable is the main-road aggregate flow; branch flows are unknown.",
+        "Time context uses sample index t from the worksheet rows.",
         "The branch split is conditional on the explicit identifiability constraint and must not be written as an unconstrained unique recovery.",
     ],
     "method_route_comparison": [
@@ -289,6 +290,13 @@ summary = {
             "decision": "recommended",
             "reason": "matches the stated trend and exposes residuals",
             "boundary": "conditional branch-flow estimate",
+            "evidence": [result["id"]],
+        },
+        {
+            "route": "unconstrained unique branch recovery",
+            "decision": "rejected",
+            "reason": "aggregate observations alone leave branch-flow degrees of freedom",
+            "boundary": "requires branch sensors or additional prior constraints",
             "evidence": [result["id"]],
         }
     ],
@@ -646,6 +654,7 @@ summary = {
     "reader_decision_guide": [
         "Observed data are product profits, resource usage, capacities, and demand limits.",
         "Unknowns are product quantities; the linear program directly identifies the optimal mix under listed constraints.",
+        "Time context is not applicable because this fixture is a static product-mix decision.",
     ],
     "method_route_comparison": [
         {
@@ -653,6 +662,13 @@ summary = {
             "decision": "recommended",
             "reason": "objective and constraints are linear",
             "boundary": "valid for the listed deterministic capacities and profits",
+            "evidence": [result["id"]],
+        },
+        {
+            "route": "nonlinear heuristic search",
+            "decision": "rejected",
+            "reason": "the objective and constraints are already linear and exactly solvable",
+            "boundary": "unnecessary unless the problem introduces nonlinear costs or uncertainty",
             "evidence": [result["id"]],
         }
     ],
@@ -984,6 +1000,7 @@ summary = {
     "coverage_status": "verified",
     "reader_decision_guide": [
         "Observed data are historical demand by period; the unknown is next-period demand.",
+        "Time context is the period index in the worksheet.",
         "The forecast is a trend extrapolation supported by holdout error, not a guaranteed future observation.",
     ],
     "method_route_comparison": [
@@ -992,6 +1009,13 @@ summary = {
             "decision": "recommended",
             "reason": "fixture data follow a linear trend and holdout error is disclosed",
             "boundary": "valid only while the trend assumption remains plausible",
+            "evidence": [result["id"]],
+        },
+        {
+            "route": "black-box forecast without holdout check",
+            "decision": "rejected",
+            "reason": "it would not explain the trend assumption or disclose validation error",
+            "boundary": "only useful as an informal baseline",
             "evidence": [result["id"]],
         }
     ],

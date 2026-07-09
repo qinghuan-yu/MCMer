@@ -649,6 +649,7 @@ def _write_verified_fit_artifacts(tmp_path: Path) -> Path:
                     "coverage_status": "verified",
                     "reader_decision_guide": [
                         "Observed variable is the main-road aggregate flow; branch flows are unknown.",
+                        "Time context uses sample index t from the attached table.",
                         "The split is conditional on an explicit identifiability constraint.",
                     ],
                     "method_route_comparison": [
@@ -657,6 +658,13 @@ def _write_verified_fit_artifacts(tmp_path: Path) -> Path:
                             "status": "recommended",
                             "reason": "matches the stated piecewise trend and exposes residuals",
                             "boundary": "conditional branch-flow estimate",
+                            "evidence": ["result_piecewise_fit"],
+                        },
+                        {
+                            "route": "unconstrained unique branch recovery",
+                            "status": "rejected",
+                            "reason": "main-road aggregate observations alone do not identify every branch flow",
+                            "boundary": "requires extra branch sensors or prior constraints",
                             "evidence": ["result_piecewise_fit"],
                         }
                     ],
@@ -893,6 +901,48 @@ def test_result_verification_blocks_missing_reader_facing_result_summary(tmp_pat
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["status"] == "blocked"
     assert any("reader_decision_guide" in issue for issue in report["blocking_issues"])
+    assert any("final_answer_tables" in issue for issue in report["blocking_issues"])
+
+
+def test_result_verification_blocks_vague_reader_facing_result_summary(tmp_path: Path) -> None:
+    from app.guidance.stages import ResultVerificationStage
+
+    manifest_path = _write_verified_fit_artifacts(tmp_path)
+    registry_path = tmp_path / "result_registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["summary"] = {
+        "verified_count": 1,
+        "blocked_count": 0,
+        "coverage_status": "verified",
+        "reader_decision_guide": ["The system completed successfully."],
+        "method_route_comparison": [
+            {
+                "route": "some model",
+                "decision": "recommended",
+                "reason": "it works",
+                "boundary": "use it",
+                "evidence": ["result_piecewise_fit"],
+            }
+        ],
+        "identifiability_analysis": {"conclusion": "good"},
+        "claim_registry": [{"claim": "good result", "status": "verified"}],
+        "final_answer_tables": [{"table": "results", "status": "verified"}],
+    }
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    output = asyncio.run(
+        ResultVerificationStage().run(
+            task_id="task-vague-reader-summary",
+            task={"work_dir": str(tmp_path)},
+            input_path=manifest_path,
+            output_path=tmp_path / "verification_report.json",
+        )
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["status"] == "blocked"
+    assert any("observed/unknown/time" in issue for issue in report["blocking_issues"])
+    assert any("rejected alternative route" in issue for issue in report["blocking_issues"])
     assert any("final_answer_tables" in issue for issue in report["blocking_issues"])
 
 
