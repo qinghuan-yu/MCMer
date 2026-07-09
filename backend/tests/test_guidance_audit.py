@@ -240,6 +240,58 @@ def test_guidance_audit_blocks_final_answer_section_without_evidence_binding() -
     assert any(block["type"] == "final_answer_missing_evidence_binding" for block in report["blocks"])
 
 
+def test_guidance_audit_blocks_final_answer_table_rows_without_own_evidence() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 建模指导方案\n\n"
+            "## 可信度摘要\n\n"
+            "结果复核状态为 `verified`。\n\n"
+            "## 问题理解\n\n"
+            "观测数据是历史需求，未知目标是下一期需求，时间口径是 period index。\n\n"
+            "## 建模路线与读者决策\n\n"
+            "推荐 interpretable linear trend with holdout verification；被排除路线是 black-box forecast without holdout check。\n\n"
+            "## 建模路线取舍\n\n"
+            "recommended route: linear trend；rejected route: black-box forecast，因为无法解释验证误差。\n\n"
+            "## 可辨识性分析\n\n"
+            "线性方程 design matrix rank full，因此参数可辨识且 unique under trend assumption。\n\n"
+            "## 结论状态登记\n\n"
+            "数据证据来自 result_prediction；额外 assumption 是 linear trend；候选 representative answer 用于竞赛填表。\n\n"
+            "## 参数与来源表\n\n"
+            "| 参数 | 来源 |\n| --- | --- |\n| alpha | param_alpha |\n\n"
+            "## 必要计算结果\n\n"
+            "model formula: demand = alpha + beta * period；solver 使用 least squares fit；result_prediction 已登记。\n\n"
+            "## 最终答案与应填表格\n\n"
+            "| 应填项 | 答案 | 证据 |\n| --- | --- | --- |\n"
+            "| 下一期需求 | 使用线性趋势外推值 | result_prediction |\n"
+            "| 异常情景需求 | 采用同一趋势外推 |  |\n"
+        ),
+        guidance_context={
+            "required_sections": [
+                "问题理解",
+                "建模路线与读者决策",
+                "建模路线取舍",
+                "可辨识性分析",
+                "结论状态登记",
+                "参数与来源表",
+                "必要计算结果",
+                "最终答案与应填表格",
+            ]
+        },
+        result_registry={
+            "verified_results": [{"id": "result_prediction", "claim_text": "registered result"}],
+            "blocked_results": [],
+        },
+        parameter_registry={
+            "parameters": [
+                {"id": "param_alpha", "symbol": "alpha", "value": "source-locked"},
+            ]
+        },
+    )
+
+    assert report["status"] == "BLOCK"
+    assert any(block["type"] == "final_answer_missing_evidence_binding" for block in report["blocks"])
+
+
 def test_guidance_audit_treats_blocking_diagnostic_as_diagnostic_artifact() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(

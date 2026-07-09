@@ -20,6 +20,7 @@ _DISCLOSURE_TOKENS = (
     "待确认",
     "部分",
 )
+_FINAL_ANSWER_EVIDENCE_TOKENS = ("result_", "param_", "blocked", "阻断")
 
 
 def build_guidance_audit_report(
@@ -218,16 +219,26 @@ def _check_final_answer_evidence_binding(
         return
 
     lowered = section.lower()
-    if _contains_any(lowered, ("result_", "param_", "blocked", "阻断")):
+    if not _contains_any(lowered, _FINAL_ANSWER_EVIDENCE_TOKENS):
+        blocks.append({
+            "type": "final_answer_missing_evidence_binding",
+            "location": "最终答案与应填表格",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Bind final-answer rows to result_registry or parameter_registry IDs, or mark the row as blocked.",
+        })
         return
 
-    blocks.append({
-        "type": "final_answer_missing_evidence_binding",
-        "location": "最终答案与应填表格",
-        "route": "writer",
-        "severity": "high",
-        "fix": "Bind final-answer rows to result_registry or parameter_registry IDs, or mark the row as blocked.",
-    })
+    missing_rows = _final_answer_table_rows_missing_evidence(section)
+    if missing_rows:
+        blocks.append({
+            "type": "final_answer_missing_evidence_binding",
+            "location": "最终答案与应填表格",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Bind every final-answer table row to result_registry or parameter_registry IDs, or mark it as blocked.",
+            "missing_rows": missing_rows[:5],
+        })
 
 
 def _check_blocked_disclosure(
@@ -384,6 +395,31 @@ def _markdown_section(text: str, heading: str) -> str:
     if not next_heading:
         return rest
     return rest[:next_heading.start()]
+
+
+def _final_answer_table_rows_missing_evidence(section: str) -> list[str]:
+    missing_rows: list[str] = []
+    seen_header = False
+
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            seen_header = False
+            continue
+        if _is_markdown_table_separator(line):
+            continue
+        if not seen_header:
+            seen_header = True
+            continue
+        if not _contains_any(line.lower(), _FINAL_ANSWER_EVIDENCE_TOKENS):
+            missing_rows.append(line)
+
+    return missing_rows
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    cells = [cell.strip() for cell in line.strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
 
 
 def _registered_numbers(
