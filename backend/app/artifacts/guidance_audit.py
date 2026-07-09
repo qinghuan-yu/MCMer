@@ -21,6 +21,7 @@ _DISCLOSURE_TOKENS = (
     "部分",
 )
 _FINAL_ANSWER_EVIDENCE_TOKENS = ("result_", "param_", "blocked", "阻断")
+_EVIDENCE_ID_RE = re.compile(r"\b(?:result|param)_[A-Za-z0-9_.:-]+\b")
 
 
 def build_guidance_audit_report(
@@ -46,7 +47,7 @@ def build_guidance_audit_report(
     _check_blocked_disclosure(text, results, blocks)
     if not _is_blocking_diagnostic(text):
         _check_reader_guidance_value(text, context, blocks)
-        _check_final_answer_evidence_binding(text, context, blocks)
+        _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
         _check_parameter_coverage(text, parameters, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
         _check_registered_numbers(text, results, parameters, blocks)
@@ -206,6 +207,8 @@ def _check_reader_guidance_value(
 def _check_final_answer_evidence_binding(
     text: str,
     guidance_context: dict[str, object],
+    result_registry: dict[str, object],
+    parameter_registry: dict[str, object],
     blocks: list[dict[str, object]],
 ) -> None:
     required_sections = guidance_context.get("required_sections", [])
@@ -238,6 +241,18 @@ def _check_final_answer_evidence_binding(
             "severity": "high",
             "fix": "Bind every final-answer table row to result_registry or parameter_registry IDs, or mark it as blocked.",
             "missing_rows": missing_rows[:5],
+        })
+        return
+
+    unknown_refs = _unknown_final_answer_evidence_refs(section, result_registry, parameter_registry)
+    if unknown_refs:
+        blocks.append({
+            "type": "final_answer_unknown_evidence_reference",
+            "location": "最终答案与应填表格",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Reference only IDs that exist in result_registry or parameter_registry.",
+            "unknown_refs": unknown_refs[:10],
         })
 
 
@@ -415,6 +430,46 @@ def _final_answer_table_rows_missing_evidence(section: str) -> list[str]:
             missing_rows.append(line)
 
     return missing_rows
+
+
+def _unknown_final_answer_evidence_refs(
+    section: str,
+    result_registry: dict[str, object],
+    parameter_registry: dict[str, object],
+) -> list[str]:
+    known_refs = _registered_result_ids(result_registry) | _registered_parameter_ids(parameter_registry)
+    refs = sorted(set(_EVIDENCE_ID_RE.findall(section)))
+    return [ref for ref in refs if ref not in known_refs]
+
+
+def _registered_result_ids(result_registry: dict[str, object]) -> set[str]:
+    ids: set[str] = set()
+    for group_name in ("verified_results", "blocked_results", "warning_results"):
+        group = result_registry.get(group_name, [])
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip()
+            if item_id:
+                ids.add(item_id)
+    return ids
+
+
+def _registered_parameter_ids(parameter_registry: dict[str, object]) -> set[str]:
+    parameters = parameter_registry.get("parameters", [])
+    if not isinstance(parameters, list):
+        return set()
+
+    ids: set[str] = set()
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        parameter_id = str(parameter.get("id") or "").strip()
+        if parameter_id:
+            ids.add(parameter_id)
+    return ids
 
 
 def _is_markdown_table_separator(line: str) -> bool:
