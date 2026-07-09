@@ -81,6 +81,7 @@ def build_guidance_audit_report(
     _check_blocked_disclosure(text, results, blocks)
     if not _is_blocking_diagnostic(text):
         _check_reader_guidance_value(text, context, blocks)
+        _check_identifiability_section_structure(text, context, blocks)
         _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
         _check_parameter_coverage(text, parameters, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
@@ -234,6 +235,55 @@ def _check_reader_guidance_value(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite formal guidance so it directly answers observation/unknown/time, identifiability, route choice, formulas/results, and claim source layers.",
+            "missing_items": missing,
+        })
+
+
+def _check_identifiability_section_structure(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    if "可辨识性分析" not in "\n".join(str(section) for section in required_sections):
+        return
+
+    section = _markdown_section(text, "可辨识性分析")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(
+        lowered,
+        ("observ", "观测", "输入", "equation", "方程", "设计矩阵", "design matrix", "jacobian", "矩阵"),
+    ):
+        missing.append("observation_or_equation")
+    if not _contains_any(
+        lowered,
+        ("unknown", "未知", "parameter", "参数", "dimension", "维数", "自由度", "degree"),
+    ):
+        missing.append("unknown_or_parameter_dimension")
+    if not _contains_any(
+        lowered,
+        ("rank", "秩", "jacobian", "设计矩阵", "design matrix", "自由度", "degree"),
+    ):
+        missing.append("rank_or_degrees_of_freedom")
+    if not _contains_any(
+        lowered,
+        ("unique", "唯一", "不可", "non-unique", "missing", "缺少", "规范化", "assumption", "先验", "代表", "阻断"),
+    ):
+        missing.append("uniqueness_or_missing_information_conclusion")
+
+    if missing:
+        blocks.append({
+            "type": "identifiability_section_missing_structure",
+            "location": "可辨识性分析",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the identifiability section to state observations/equations, unknown parameters or dimensions, rank/degrees of freedom, and the uniqueness or missing-information conclusion.",
             "missing_items": missing,
         })
 
