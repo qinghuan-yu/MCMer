@@ -92,6 +92,7 @@ def build_guidance_audit_report(
         _check_review_section_error_context(text, context, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
         _check_registered_numbers(text, results, parameters, blocks)
+        _check_figure_interpretation_context(text, context, figures, blocks)
         _check_figure_coverage(text, figures, artifact_root, blocks)
 
     status = "PASS"
@@ -160,6 +161,51 @@ def _check_figure_coverage(
                 "fix": "List each figure's role, source data, and linked result IDs.",
                 "missing_refs": missing_refs,
             })
+
+
+def _check_figure_interpretation_context(
+    text: str,
+    guidance_context: dict[str, object],
+    figure_registry: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    required_text = "\n".join(str(section) for section in required_sections)
+    if "图片解读" not in required_text or "最终答案与应填表格" not in required_text:
+        return
+
+    figures = figure_registry.get("figures", [])
+    if not isinstance(figures, list) or not figures:
+        return
+
+    section = _markdown_section(text, "图片解读")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(
+        lowered,
+        ("interpret", "explain", "support", "show", "indicate", "说明", "解释", "支撑", "展示", "反映", "用于判断"),
+    ):
+        missing.append("interpretation_or_supported_judgment")
+    if not _contains_any(
+        lowered,
+        ("limit", "cannot", "not prove", "only", "boundary", "risk", "局限", "不能", "不等于", "只说明", "边界", "风险"),
+    ):
+        missing.append("limitation_or_nonproof")
+
+    if missing:
+        blocks.append({
+            "type": "figure_section_missing_interpretation",
+            "location": "图片解读",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the figure section to state what each figure supports and what it cannot prove, especially for fitted or decomposed results.",
+            "missing_items": missing,
+        })
 
 
 def _check_required_sections(

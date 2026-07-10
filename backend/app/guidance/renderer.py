@@ -360,6 +360,8 @@ def render_verified_guidance(
         lines.append(f"![{role}]({path})")
         lines.append(
             f"- 图片 `{path}`；用途 `{role}`；来源数据：{sources}；绑定结果：{result_ids}。"
+            "解释：该图用于展示数据、模型或复核诊断与登记结果之间的一致性，支撑读者判断对应结果是否可追踪。"
+            "局限：图形贴合只说明登记证据在当前模型口径下自洽，不能单独证明不可观测变量被唯一恢复，也不等于真实机理已被证明。"
         )
 
     lines.extend(["", "## 复核与稳健性", ""])
