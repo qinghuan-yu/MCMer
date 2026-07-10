@@ -82,7 +82,7 @@ def build_guidance_audit_report(
     if not _is_blocking_diagnostic(text):
         _check_reader_guidance_value(text, context, blocks)
         _check_problem_understanding_section_context(text, context, blocks)
-        _check_data_source_section_context(text, context, blocks)
+        _check_data_source_section_context(text, context, results, parameters, blocks)
         _check_route_tradeoff_section_structure(text, context, blocks)
         _check_identifiability_section_structure(text, context, blocks)
         _check_claim_registry_section_structure(text, context, blocks)
@@ -334,6 +334,8 @@ def _check_problem_understanding_section_context(
 def _check_data_source_section_context(
     text: str,
     guidance_context: dict[str, object],
+    result_registry: dict[str, object],
+    parameter_registry: dict[str, object],
     blocks: list[dict[str, object]],
 ) -> None:
     required_sections = guidance_context.get("required_sections", [])
@@ -373,6 +375,19 @@ def _check_data_source_section_context(
             "severity": "high",
             "fix": "Rewrite the data/source section to name the source files or tables, observed inputs or fields, and the time/sample/data coordinate system.",
             "missing_items": missing,
+        })
+        return
+
+    registered_sources = _registered_source_refs(result_registry, parameter_registry)
+    missing_refs = [source for source in registered_sources if source not in section]
+    if registered_sources and len(missing_refs) == len(registered_sources):
+        blocks.append({
+            "type": "data_section_missing_registered_source_reference",
+            "location": "数据与来源",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Reference at least one concrete source file, table, or data ID from parameter_registry or result_registry in the data/source section.",
+            "registered_sources": registered_sources[:10],
         })
 
 
@@ -699,6 +714,38 @@ def _check_blocked_disclosure(
         "severity": "high",
         "fix": "Disclose blocked, partial, or unverified results in the final guidance.",
     })
+
+
+def _registered_source_refs(
+    result_registry: dict[str, object],
+    parameter_registry: dict[str, object],
+) -> list[str]:
+    sources: list[str] = []
+    parameters = parameter_registry.get("parameters", [])
+    if isinstance(parameters, list):
+        for parameter in parameters:
+            if not isinstance(parameter, dict):
+                continue
+            for key in ("source_ref", "source_location"):
+                value = str(parameter.get(key) or "").strip()
+                if value and value not in sources:
+                    sources.append(value)
+
+    for group_name in ("verified_results", "blocked_results", "warning_results"):
+        group = result_registry.get(group_name, [])
+        if not isinstance(group, list):
+            continue
+        for result in group:
+            if not isinstance(result, dict):
+                continue
+            for key in ("source_data", "input_files", "source_ref"):
+                value = result.get(key)
+                candidates = value if isinstance(value, list) else [value]
+                for candidate in candidates:
+                    source = str(candidate or "").strip()
+                    if source and source not in sources:
+                        sources.append(source)
+    return sources
 
 
 def _check_parameter_coverage(
