@@ -81,6 +81,7 @@ def build_guidance_audit_report(
     _check_blocked_disclosure(text, results, blocks)
     if not _is_blocking_diagnostic(text):
         _check_reader_guidance_value(text, context, blocks)
+        _check_problem_understanding_section_context(text, context, blocks)
         _check_route_tradeoff_section_structure(text, context, blocks)
         _check_identifiability_section_structure(text, context, blocks)
         _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
@@ -236,6 +237,44 @@ def _check_reader_guidance_value(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite formal guidance so it directly answers observation/unknown/time, identifiability, route choice, formulas/results, and claim source layers.",
+            "missing_items": missing,
+        })
+
+
+def _check_problem_understanding_section_context(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    if "问题理解" not in "\n".join(str(section) for section in required_sections):
+        return
+
+    section = _markdown_section(text, "问题理解")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(lowered, ("observ", "观测", "数据", "输入", "附件", "样本")):
+        missing.append("observed_data_or_inputs")
+    if not _contains_any(lowered, ("unknown", "未知", "待求", "目标", "决策变量", "输出")):
+        missing.append("unknown_target_or_outputs")
+    if not _contains_any(
+        lowered,
+        ("time", "period", "sample", "coordinate", "时间", "时刻", "样本", "口径", "单位", "采样"),
+    ):
+        missing.append("time_or_data_coordinate")
+
+    if missing:
+        blocks.append({
+            "type": "problem_understanding_missing_context",
+            "location": "问题理解",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the problem-understanding section to state observed data or inputs, unknown targets or outputs, and the time/data coordinate system.",
             "missing_items": missing,
         })
 

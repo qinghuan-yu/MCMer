@@ -294,6 +294,64 @@ def test_guidance_audit_blocks_route_tradeoff_section_without_reason_boundary_or
     assert any(block["type"] == "route_tradeoff_section_missing_structure" for block in report["blocks"])
 
 
+def test_guidance_audit_blocks_problem_understanding_without_observation_unknown_or_time_context() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 建模指导方案\n\n"
+            "## 可信度摘要\n\n"
+            "结果复核状态为 `verified`。\n\n"
+            "## 问题理解\n\n"
+            "系统已完成建模指导。\n\n"
+            "## 建模路线与读者决策\n\n"
+            "observed data 是历史需求表；unknown target 是下一期需求；time coordinate 使用 period index。"
+            "identifiability 由 design matrix rank 判定，missing information 会单独披露。"
+            "recommended route 是 interpretable linear trend，rejected route 是 black-box forecast。"
+            "model formula、parameter、solver fit 和 final answer 均绑定 result_prediction。"
+            "data evidence、assumption prior 和 representative contest candidate answer 分层登记。\n\n"
+            "## 建模路线取舍\n\n"
+            "recommended route: interpretable linear trend；rejected route: black-box forecast；"
+            "reason: holdout error and interpretability；applicability boundary: linear trend period data only；"
+            "evidence source: result_prediction and data table。\n\n"
+            "## 可辨识性分析\n\n"
+            "观测方程 demand = alpha + beta * period；未知参数 alpha,beta，dimension two；"
+            "design matrix rank full；therefore unique under trend assumption。\n\n"
+            "## 结论状态登记\n\n"
+            "数据证据来自 result_prediction；额外 assumption 是 linear trend；候选 representative answer 用于竞赛填表。\n\n"
+            "## 参数与来源表\n\n"
+            "| 参数 | 来源 |\n| --- | --- |\n| alpha | param_alpha |\n\n"
+            "## 必要计算结果\n\n"
+            "model formula: demand = alpha + beta * period；solver 使用 least squares fit；result_prediction 已登记。\n\n"
+            "## 最终答案与应填表格\n\n"
+            "| 应填项 | 答案 | 结论状态 | 证据 |\n| --- | --- | --- | --- |\n"
+            "| 下一期需求 | demand_next = alpha + beta * next_period | evidence_verified | result_prediction |\n"
+        ),
+        guidance_context={
+            "required_sections": [
+                "问题理解",
+                "建模路线与读者决策",
+                "建模路线取舍",
+                "可辨识性分析",
+                "结论状态登记",
+                "参数与来源表",
+                "必要计算结果",
+                "最终答案与应填表格",
+            ]
+        },
+        result_registry={
+            "verified_results": [{"id": "result_prediction", "claim_text": "registered result"}],
+            "blocked_results": [],
+        },
+        parameter_registry={
+            "parameters": [
+                {"id": "param_alpha", "symbol": "alpha", "value": "source-locked"},
+            ]
+        },
+    )
+
+    assert report["status"] == "BLOCK"
+    assert any(block["type"] == "problem_understanding_missing_context" for block in report["blocks"])
+
+
 def test_guidance_audit_blocks_final_answer_section_without_evidence_binding() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(

@@ -150,6 +150,7 @@ def render_verified_guidance(
             verification_report=verification_report,
             result_registry=result_registry,
         )
+    problem_understanding = _problem_understanding_lines(model, result_registry)
     lines = [
         "# 建模指导方案",
         "",
@@ -159,7 +160,7 @@ def render_verified_guidance(
         "",
         "## 问题理解",
         "",
-        str(model.get("problem_summary") or "依据题目拆解契约完成当前子问题的建模与计算。"),
+        *problem_understanding,
         "",
         "## 数据与来源",
         "",
@@ -604,6 +605,56 @@ def _guidance_notes(result_registry: dict[str, Any]) -> list[str]:
     return [str(note).strip() for note in notes if str(note).strip()]
 
 
+def _problem_understanding_lines(
+    model: dict[str, Any],
+    result_registry: dict[str, Any],
+) -> list[str]:
+    lines = [
+        str(model.get("problem_summary") or "依据题目拆解契约完成当前子问题的建模与计算。").strip()
+    ]
+
+    for item in _raw_reader_decision_guide(result_registry):
+        text = _guidance_text(_reader_decision_item_text(item)).strip()
+        if text and text not in lines:
+            lines.append(f"- {text}")
+
+    combined = "\n".join(lines).lower()
+    if not _text_has_any(combined, ("observ", "观测", "数据", "输入", "附件", "样本")):
+        lines.append("- 观测数据/inputs：以数据与来源章节、参数注册表和 result_registry.source_data 登记为准。")
+    if not _text_has_any(combined, ("unknown", "未知", "待求", "目标", "决策变量", "输出")):
+        lines.append("- 未知目标/outputs：以已审核模型的目标、参数、状态变量和最终答案表为准。")
+    if not _text_has_any(
+        combined,
+        ("time", "period", "sample", "coordinate", "时间", "时刻", "样本", "口径", "单位", "采样"),
+    ):
+        lines.append("- 时间/数据口径：以题设、附件字段、样本/period/time 单位和参数表登记为准。")
+    return lines
+
+
+def _raw_reader_decision_guide(result_registry: dict[str, Any]) -> list[Any]:
+    summary = result_registry.get("summary", {})
+    if not isinstance(summary, dict):
+        return []
+    guide = summary.get("reader_decision_guide", [])
+    if not isinstance(guide, list):
+        return []
+    return guide
+
+
+def _reader_decision_item_text(item: Any) -> str:
+    if isinstance(item, dict):
+        return "；".join(
+            str(value)
+            for value in (
+                item.get("question") or item.get("topic"),
+                item.get("judgment") or item.get("answer"),
+                item.get("action") or item.get("guidance"),
+            )
+            if value not in {None, ""}
+        )
+    return str(item if item not in {None, ""} else "")
+
+
 def _claim_registry(result_registry: dict[str, Any]) -> list[dict[str, Any]]:
     summary = result_registry.get("summary", {})
     if isinstance(summary, dict):
@@ -819,6 +870,10 @@ def _guidance_text(value: Any) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return text
+
+
+def _text_has_any(text: str, needles: tuple[str, ...]) -> bool:
+    return any(needle.lower() in text for needle in needles)
 
 
 def _render_blocked_failure_diagnostic(
