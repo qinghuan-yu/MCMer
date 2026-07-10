@@ -84,6 +84,7 @@ def build_guidance_audit_report(
         _check_problem_understanding_section_context(text, context, blocks)
         _check_route_tradeoff_section_structure(text, context, blocks)
         _check_identifiability_section_structure(text, context, blocks)
+        _check_claim_registry_section_structure(text, context, blocks)
         _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
         _check_parameter_coverage(text, parameters, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
@@ -275,6 +276,44 @@ def _check_problem_understanding_section_context(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite the problem-understanding section to state observed data or inputs, unknown targets or outputs, and the time/data coordinate system.",
+            "missing_items": missing,
+        })
+
+
+def _check_claim_registry_section_structure(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    if "结论状态登记" not in "\n".join(str(section) for section in required_sections):
+        return
+
+    section = _markdown_section(text, "结论状态登记")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(lowered, _FINAL_ANSWER_STATUS_TOKENS + ("status", "状态", "结论状态")):
+        missing.append("claim_status_or_layer")
+    if not _contains_any(lowered, ("evidence", "source", "result_", "param_", "data", "证据", "来源", "数据")):
+        missing.append("evidence_or_source")
+    if not _contains_any(
+        lowered,
+        ("assumption", "prior", "representative", "candidate", "contest", "risk", "假设", "先验", "代表", "候选", "竞赛", "规范化", "风险", "阻断"),
+    ):
+        missing.append("assumption_or_representative_boundary")
+
+    if missing:
+        blocks.append({
+            "type": "claim_registry_section_missing_structure",
+            "location": "结论状态登记",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the claim registry section to classify each key conclusion by status, bind it to evidence or source IDs, and disclose assumptions, representative-choice boundaries, risks, or blocked status.",
             "missing_items": missing,
         })
 
