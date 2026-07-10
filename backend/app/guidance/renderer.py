@@ -336,6 +336,7 @@ def render_verified_guidance(
         lines.append("")
 
     lines.extend(["", "## 必要计算结果", ""])
+    lines.extend(_calculation_context_lines(model, parameter_registry))
     for result in result_registry.get("verified_results", []):
         if not isinstance(result, dict):
             continue
@@ -603,6 +604,64 @@ def _guidance_notes(result_registry: dict[str, Any]) -> list[str]:
     if not isinstance(notes, list):
         return []
     return [str(note).strip() for note in notes if str(note).strip()]
+
+
+def _calculation_context_lines(
+    model: dict[str, Any],
+    parameter_registry: dict[str, Any],
+) -> list[str]:
+    lines: list[str] = []
+
+    equations: list[str] = []
+    solvers: list[str] = []
+    subproblems = model.get("subproblem_models", [])
+    if isinstance(subproblems, list):
+        for subproblem in subproblems:
+            if not isinstance(subproblem, dict):
+                continue
+            for equation in subproblem.get("equations", []):
+                text = _guidance_text(equation).strip()
+                if text and text not in equations:
+                    equations.append(text)
+            method = _guidance_text(subproblem.get("selected_method")).strip()
+            if method and method != "待确认" and method not in solvers:
+                solvers.append(method)
+            for step in subproblem.get("solve_steps", []):
+                text = _guidance_text(step).strip()
+                if text and text not in solvers:
+                    solvers.append(text)
+
+    if equations:
+        lines.append("- 公式/模型方程：" + "；".join(f"`{equation}`" for equation in equations[:5]))
+    else:
+        lines.append("- 公式/模型方程：以分问题建模步骤和 approved_model_spec.json 登记的方程为准。")
+
+    parameter_refs = _calculation_parameter_refs(parameter_registry)
+    if parameter_refs:
+        lines.append("- 参数证据：" + "；".join(parameter_refs[:8]))
+    else:
+        lines.append("- 参数证据：当前未登记可引用参数，不能发布未绑定来源的数值结论。")
+
+    if solvers:
+        lines.append("- 求解/拟合方法：" + "；".join(solvers[:6]))
+    else:
+        lines.append("- 求解/拟合方法：以 approved_model_spec.json 和 solve.py 中登记的求解步骤为准。")
+    return lines
+
+
+def _calculation_parameter_refs(parameter_registry: dict[str, Any]) -> list[str]:
+    parameters = parameter_registry.get("parameters", [])
+    if not isinstance(parameters, list):
+        return []
+    refs: list[str] = []
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        parameter_id = _cell(parameter.get("id"))
+        symbol = _cell(parameter.get("symbol"))
+        status = _cell(parameter.get("trust_status"))
+        refs.append(f"`{parameter_id}`/{symbol}（{status}）")
+    return refs
 
 
 def _problem_understanding_lines(

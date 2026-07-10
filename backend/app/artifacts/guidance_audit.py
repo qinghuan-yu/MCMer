@@ -85,6 +85,7 @@ def build_guidance_audit_report(
         _check_route_tradeoff_section_structure(text, context, blocks)
         _check_identifiability_section_structure(text, context, blocks)
         _check_claim_registry_section_structure(text, context, blocks)
+        _check_calculation_results_section_structure(text, context, parameters, blocks)
         _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
         _check_parameter_coverage(text, parameters, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
@@ -314,6 +315,53 @@ def _check_claim_registry_section_structure(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite the claim registry section to classify each key conclusion by status, bind it to evidence or source IDs, and disclose assumptions, representative-choice boundaries, risks, or blocked status.",
+            "missing_items": missing,
+        })
+
+
+def _check_calculation_results_section_structure(
+    text: str,
+    guidance_context: dict[str, object],
+    parameter_registry: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    if "必要计算结果" not in "\n".join(str(section) for section in required_sections):
+        return
+
+    section = _markdown_section(text, "必要计算结果")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(lowered, ("formula", "equation", "function", "model", "公式", "方程", "函数", "模型")):
+        missing.append("formula_or_model")
+    if not (
+        _contains_any(lowered, ("parameter", "param_", "参数"))
+        or _section_mentions_registered_parameter(section, parameter_registry)
+    ):
+        missing.append("parameter_context")
+    if not _contains_any(
+        lowered,
+        ("solve", "solver", "fit", "fitting", "least squares", "optimiz", "forecast", "求解", "拟合", "优化", "预测"),
+    ):
+        missing.append("solver_or_method")
+    if not _contains_any(
+        lowered,
+        ("result_", "metric", "rmse", "residual", "objective", "forecast", "value", "结果", "指标", "误差", "残差", "目标值", "数值"),
+    ):
+        missing.append("result_or_metric")
+
+    if missing:
+        blocks.append({
+            "type": "calculation_results_section_missing_structure",
+            "location": "必要计算结果",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the calculation-results section to include formulas or model equations, parameter context, solver or fitting method, and concrete result IDs, values, or error metrics.",
             "missing_items": missing,
         })
 
@@ -628,6 +676,20 @@ def _is_inside_url(line: str, start: int, end: int) -> bool:
 
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle.lower() in text for needle in needles)
+
+
+def _section_mentions_registered_parameter(section: str, parameter_registry: dict[str, object]) -> bool:
+    parameters = parameter_registry.get("parameters", [])
+    if not isinstance(parameters, list):
+        return False
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        for key in ("id", "symbol"):
+            value = str(parameter.get(key) or "").strip()
+            if value and value in section:
+                return True
+    return False
 
 
 def _markdown_section(text: str, heading: str) -> str:
