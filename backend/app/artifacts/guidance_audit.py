@@ -88,6 +88,7 @@ def build_guidance_audit_report(
         _check_calculation_results_section_structure(text, context, parameters, blocks)
         _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
         _check_parameter_coverage(text, parameters, blocks)
+        _check_parameter_source_table_structure(text, context, parameters, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
         _check_registered_numbers(text, results, parameters, blocks)
         _check_figure_coverage(text, figures, artifact_root, blocks)
@@ -585,6 +586,48 @@ def _check_parameter_coverage(
             "severity": "high",
             "fix": "Add every registered core parameter to the parameter/source table.",
             "missing_parameter_ids": missing,
+        })
+
+
+def _check_parameter_source_table_structure(
+    text: str,
+    guidance_context: dict[str, object],
+    parameter_registry: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    required_text = "\n".join(str(section) for section in required_sections)
+    if "参数与来源表" not in required_text or "最终答案与应填表格" not in required_text:
+        return
+    parameters = parameter_registry.get("parameters", [])
+    if not isinstance(parameters, list) or not parameters:
+        return
+
+    section = _markdown_section(text, "参数与来源表")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(lowered, ("value", "数值", "取值", "值")):
+        missing.append("value")
+    if not _contains_any(lowered, ("unit", "单位")):
+        missing.append("unit")
+    if not _contains_any(lowered, ("source", "来源", "source_type", "source_ref", "source_location", "数据", "附件")):
+        missing.append("source")
+    if not _contains_any(lowered, ("trust", "status", "可信", "状态", "source_locked", "evidence_verified", "assumed", "estimated")):
+        missing.append("trust_status")
+
+    if missing:
+        blocks.append({
+            "type": "parameter_table_missing_source_structure",
+            "location": "参数与来源表",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the parameter table to include each parameter's value, unit, source or source type, and trust/status so readers can distinguish data-derived, assumed, and representative parameters.",
+            "missing_items": missing,
         })
 
 
