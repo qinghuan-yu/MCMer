@@ -82,6 +82,7 @@ def build_guidance_audit_report(
     if not _is_blocking_diagnostic(text):
         _check_reader_guidance_value(text, context, blocks)
         _check_problem_understanding_section_context(text, context, blocks)
+        _check_data_source_section_context(text, context, blocks)
         _check_route_tradeoff_section_structure(text, context, blocks)
         _check_identifiability_section_structure(text, context, blocks)
         _check_claim_registry_section_structure(text, context, blocks)
@@ -326,6 +327,51 @@ def _check_problem_understanding_section_context(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite the problem-understanding section to state observed data or inputs, unknown targets or outputs, and the time/data coordinate system.",
+            "missing_items": missing,
+        })
+
+
+def _check_data_source_section_context(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    required_text = "\n".join(str(section) for section in required_sections)
+    if "数据与来源" not in required_text or "最终答案与应填表格" not in required_text:
+        return
+
+    section = _markdown_section(text, "数据与来源")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(
+        lowered,
+        ("source", "file", "table", "dataset", "来源", "附件", "数据表", "文件", "source_ref"),
+    ):
+        missing.append("source_file_or_table")
+    if not _contains_any(
+        lowered,
+        ("observ", "input", "field", "column", "sample", "观测", "输入", "字段", "列", "样本"),
+    ):
+        missing.append("observed_data_or_fields")
+    if not _contains_any(
+        lowered,
+        ("time", "period", "sample", "coordinate", "unit", "时间", "时刻", "样本", "采样", "口径", "单位"),
+    ):
+        missing.append("time_or_data_coordinate")
+
+    if missing:
+        blocks.append({
+            "type": "data_section_missing_observation_context",
+            "location": "数据与来源",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the data/source section to name the source files or tables, observed inputs or fields, and the time/sample/data coordinate system.",
             "missing_items": missing,
         })
 

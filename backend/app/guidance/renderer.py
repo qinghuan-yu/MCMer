@@ -164,7 +164,7 @@ def render_verified_guidance(
         "",
         "## 数据与来源",
         "",
-        "数据来源逐项记录在参数注册表和结果注册表中。",
+        *_data_source_lines(parameter_registry, result_registry),
         "",
         "## 参数与来源表",
         "",
@@ -669,6 +669,57 @@ def _calculation_parameter_refs(parameter_registry: dict[str, Any]) -> list[str]
         status = _cell(parameter.get("trust_status"))
         refs.append(f"`{parameter_id}`/{symbol}（{status}）")
     return refs
+
+
+def _data_source_lines(
+    parameter_registry: dict[str, Any],
+    result_registry: dict[str, Any],
+) -> list[str]:
+    sources = _registered_data_sources(parameter_registry, result_registry)
+    source_text = "、".join(f"`{source}`" for source in sources[:8]) if sources else "参数表和结果表登记的 source_ref/source_data"
+    return [
+        f"- 来源文件/数据表：{source_text}。",
+        "- 观测数据/输入字段：只把题设或附件中直接观测到的量写成 data evidence；未观测的目标、状态变量或支路量必须在可辨识性分析中标为 unknown。",
+        "- 时间/样本口径：按题面、附件字段和参数表登记的 time/period/sample/unit 统一；若题面给的是采样序号，就禁止在正文混用分钟制延迟。",
+        "- 预处理与可信状态：清洗、单位换算、缺失值处理和代表性假设必须追踪到参数与来源表或 result_registry，不得只写“系统已登记”。",
+    ]
+
+
+def _registered_data_sources(
+    parameter_registry: dict[str, Any],
+    result_registry: dict[str, Any],
+) -> list[str]:
+    sources: list[str] = []
+    for parameter in parameter_registry.get("parameters", []):
+        if not isinstance(parameter, dict):
+            continue
+        for key in ("source_ref", "source_location"):
+            value = str(parameter.get(key) or "").strip()
+            if value and value not in sources:
+                sources.append(value)
+
+    result_groups = (
+        result_registry.get("verified_results", []),
+        result_registry.get("blocked_results", []),
+        result_registry.get("warning_results", []),
+    )
+    for group in result_groups:
+        if not isinstance(group, list):
+            continue
+        for result in group:
+            if not isinstance(result, dict):
+                continue
+            for key in ("source_data", "input_files", "source_ref"):
+                value = result.get(key)
+                if isinstance(value, list):
+                    candidates = value
+                else:
+                    candidates = [value]
+                for candidate in candidates:
+                    text = str(candidate or "").strip()
+                    if text and text not in sources:
+                        sources.append(text)
+    return sources
 
 
 def _problem_understanding_lines(
