@@ -89,6 +89,7 @@ def build_guidance_audit_report(
         _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
         _check_parameter_coverage(text, parameters, blocks)
         _check_parameter_source_table_structure(text, context, parameters, blocks)
+        _check_review_section_error_context(text, context, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
         _check_registered_numbers(text, results, parameters, blocks)
         _check_figure_coverage(text, figures, artifact_root, blocks)
@@ -627,6 +628,56 @@ def _check_parameter_source_table_structure(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite the parameter table to include each parameter's value, unit, source or source type, and trust/status so readers can distinguish data-derived, assumed, and representative parameters.",
+            "missing_items": missing,
+        })
+
+
+def _check_review_section_error_context(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    required_text = "\n".join(str(section) for section in required_sections)
+    if "复核与稳健性" not in required_text or "最终答案与应填表格" not in required_text:
+        return
+
+    section = _markdown_section(text, "复核与稳健性")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(
+        lowered,
+        ("rmse", "residual", "error", "objective", "metric", "误差", "残差", "目标值", "指标"),
+    ):
+        missing.append("error_or_metric")
+    if not _contains_any(
+        lowered,
+        ("threshold", "baseline", "tolerance", "criterion", "阈值", "基线", "容许", "准则", "对照"),
+    ):
+        missing.append("threshold_or_baseline")
+    if not _contains_any(
+        lowered,
+        ("interpret", "explain", "means", "说明", "解释", "判断", "不能", "代表"),
+    ):
+        missing.append("interpretation")
+    if not _contains_any(
+        lowered,
+        ("robust", "sensitivity", "stability", "稳健", "敏感", "稳定"),
+    ):
+        missing.append("robustness_or_sensitivity")
+
+    if missing:
+        blocks.append({
+            "type": "review_section_missing_error_context",
+            "location": "复核与稳健性",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the review section to explain error or residual metrics, thresholds or baselines, interpretation of pass/fail meaning, and robustness or sensitivity checks.",
             "missing_items": missing,
         })
 

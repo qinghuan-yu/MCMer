@@ -365,6 +365,11 @@ def render_verified_guidance(
     lines.extend(["", "## 复核与稳健性", ""])
     lines.append(f"- 数值复核结论：`{status}`。")
     lines.append("- 可辨识性与计算可行性：以模型审核结论和本轮数值复核状态为准。")
+    lines.append(
+        "- 误差阈值/基线解释：RMSE、残差、目标值和约束裕度只说明结果在 `verification_report.json` "
+        "登记的复算准则、baseline/threshold 或容许条件下自洽；若没有明确阈值或基线，"
+        "不能把 `verified` 写成真实机理充分证明。"
+    )
     checked_groups = [
         ("输入覆盖", verification_report.get("input_checks", [])),
         ("公式/目标函数", verification_report.get("equation_checks", [])),
