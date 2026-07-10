@@ -85,6 +85,7 @@ def build_guidance_audit_report(
         _check_route_tradeoff_section_structure(text, context, blocks)
         _check_identifiability_section_structure(text, context, blocks)
         _check_claim_registry_section_structure(text, context, blocks)
+        _check_subproblem_steps_section_structure(text, context, blocks)
         _check_calculation_results_section_structure(text, context, parameters, blocks)
         _check_final_answer_evidence_binding(text, context, results, parameters, blocks)
         _check_parameter_coverage(text, parameters, blocks)
@@ -410,6 +411,56 @@ def _check_calculation_results_section_structure(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite the calculation-results section to include formulas or model equations, parameter context, solver or fitting method, and concrete result IDs, values, or error metrics.",
+            "missing_items": missing,
+        })
+
+
+def _check_subproblem_steps_section_structure(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    if "分问题建模步骤" not in "\n".join(str(section) for section in required_sections):
+        return
+
+    section = _markdown_section(text, "分问题建模步骤")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not _contains_any(lowered, ("objective", "target", "goal", "目标", "待求", "输出")):
+        missing.append("objective_or_target")
+    if not _contains_any(
+        lowered,
+        ("formula", "equation", "function", "model", "公式", "方程", "函数", "模型"),
+    ):
+        missing.append("formula_or_model")
+    if not _contains_any(lowered, ("parameter", "param_", "alpha", "beta", "theta", "参数")):
+        missing.append("parameter_definition")
+    if not _contains_any(
+        lowered,
+        ("constraint", "assumption", "boundary", "condition", "limit", "约束", "假设", "边界", "条件", "局限"),
+    ):
+        missing.append("constraint_or_assumption_boundary")
+    if not _contains_any(
+        lowered,
+        ("solve", "solver", "step", "fit", "least squares", "optimiz", "estimate", "求解", "步骤", "拟合", "优化", "估计"),
+    ):
+        missing.append("solver_or_step")
+    if not _contains_any(lowered, ("result_", "expected", "output", "table", "结果", "输出", "应填", "表格")):
+        missing.append("expected_output_or_result")
+
+    if missing:
+        blocks.append({
+            "type": "subproblem_steps_missing_actionable_modeling",
+            "location": "分问题建模步骤",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite each subproblem step so it gives the modeling target, formula or model, parameters, constraints or assumptions, solver steps, and expected outputs.",
             "missing_items": missing,
         })
 

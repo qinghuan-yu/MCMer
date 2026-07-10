@@ -469,6 +469,83 @@ def test_guidance_audit_blocks_calculation_results_without_formula_parameter_sol
     assert any(block["type"] == "calculation_results_section_missing_structure" for block in report["blocks"])
 
 
+def test_guidance_audit_blocks_subproblem_steps_without_actionable_modeling_details() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 建模指导方案\n\n"
+            "## 可信度摘要\n\n"
+            "结果复核状态为 `verified`。\n\n"
+            "## 问题理解\n\n"
+            "观测数据是历史需求表，未知目标是下一期需求，时间口径是 period index。\n\n"
+            "## 建模路线与读者决策\n\n"
+            "observed data 是历史需求表；unknown target 是下一期需求；time coordinate 使用 period index。"
+            "identifiability 由 design matrix rank 判定，missing information 会单独披露。"
+            "recommended route 是 interpretable linear trend，rejected route 是 black-box forecast。"
+            "model formula、parameter、solver fit 和 final answer 均绑定 result_prediction。"
+            "data evidence、assumption prior 和 representative contest candidate answer 分层登记。\n\n"
+            "## 建模路线取舍\n\n"
+            "recommended route: interpretable linear trend；rejected route: black-box forecast；"
+            "reason: holdout error and interpretability；applicability boundary: linear trend period data only；"
+            "evidence source: result_prediction and data table。\n\n"
+            "## 可辨识性分析\n\n"
+            "观测方程 demand = alpha + beta * period；未知参数 alpha,beta，dimension two；"
+            "design matrix rank full；therefore unique under trend assumption。\n\n"
+            "## 结论状态登记\n\n"
+            "| claim_id | 状态 | 结论 | 证据 | 依赖假设 | 风险 |\n| --- | --- | --- | --- | --- | --- |\n"
+            "| claim_prediction | evidence_verified | 数据自洽预测值 | result_prediction | linear trend assumption | representative contest answer |\n\n"
+            "## 参数与来源表\n\n"
+            "| parameter_id | 符号 | 含义 | 数值 | 单位 | 来源类型 | 来源 | 可信状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| param_alpha | alpha | trend intercept | estimated_alpha | demand_unit | source_data | demand_table | evidence_verified |\n\n"
+            "## 分问题建模步骤\n\n"
+            "系统已完成各子问题建模，详见注册表。\n\n"
+            "## 必要计算结果\n\n"
+            "model formula: demand = alpha + beta * period；parameter 来自 param_alpha；"
+            "solver 使用 least squares fit；result_prediction 登记了 metric rmse 与 residual summary。\n\n"
+            "## 最终答案与应填表格\n\n"
+            "| 应填项 | 答案 | 结论状态 | 证据 |\n| --- | --- | --- | --- |\n"
+            "| 下一期需求 | demand_next = alpha + beta * next_period | evidence_verified | result_prediction |\n\n"
+            "## 复核与稳健性\n\n"
+            "RMSE 与 residual metric 使用 holdout baseline threshold 判断；解释为模型预测误差在容许准则内，"
+            "不能代表真实机理证明；robustness and sensitivity 仍受 linear trend boundary 限制。\n"
+        ),
+        guidance_context={
+            "required_sections": [
+                "问题理解",
+                "建模路线与读者决策",
+                "建模路线取舍",
+                "可辨识性分析",
+                "结论状态登记",
+                "参数与来源表",
+                "分问题建模步骤",
+                "必要计算结果",
+                "最终答案与应填表格",
+                "复核与稳健性",
+            ]
+        },
+        result_registry={
+            "verified_results": [{"id": "result_prediction", "claim_text": "registered result"}],
+            "blocked_results": [],
+        },
+        parameter_registry={
+            "parameters": [
+                {
+                    "id": "param_alpha",
+                    "symbol": "alpha",
+                    "value": "estimated_alpha",
+                    "unit": "demand_unit",
+                    "source_type": "source_data",
+                    "source_ref": "demand_table",
+                    "trust_status": "evidence_verified",
+                },
+            ]
+        },
+    )
+
+    assert report["status"] == "BLOCK"
+    assert any(block["type"] == "subproblem_steps_missing_actionable_modeling" for block in report["blocks"])
+
+
 def test_guidance_audit_blocks_parameter_table_without_value_unit_source_or_trust_context() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(
