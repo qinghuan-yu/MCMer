@@ -280,44 +280,58 @@ summary = {
     "blocked_count": 0,
     "coverage_status": "verified",
     "reader_decision_guide": [
-        "Observed variable is the main-road aggregate flow; branch flows are unknown.",
-        "Time context uses sample index t from the worksheet rows.",
-        "The branch split is conditional on the explicit identifiability constraint and must not be written as an unconstrained unique recovery.",
+        {"topic": "problem_context", "question": "What is observed, unknown, and the time convention?", "judgment": "The main-road aggregate flow is observed; branch flows are unknown; time uses worksheet sample index t.", "action": "State the aggregate observation and sample-index convention before modeling."},
+        {"topic": "identifiability", "question": "Can the branch flows be uniquely recovered?", "judgment": "No. Aggregate observations alone leave branch-flow degrees of freedom.", "action": "Report a solution family or an explicitly normalized representative estimate."},
+        {"topic": "route_choice", "question": "Which route is recommended and rejected?", "judgment": "Use constrained piecewise least squares; reject unconstrained unique recovery.", "action": "Explain both route decisions and their applicability boundaries."},
+        {"topic": "final_answers", "question": "What is the final answer that can be filled in?", "judgment": "The fitted piecewise functions are representative estimates conditional on normalization.", "action": "Bind each final answer row to the fitted result and parameter IDs."},
+        {"topic": "claim_sources", "question": "Which conclusions come from data or assumptions?", "judgment": "Aggregate recomposition is evidence verified; branch separation depends on an explicit prior.", "action": "Separate evidence-verified claims from chosen representative assumptions."},
     ],
     "method_route_comparison": [
         {
             "route": "constrained piecewise least squares",
-            "decision": "recommended",
+            "status": "recommended",
             "reason": "matches the stated trend and exposes residuals",
             "boundary": "conditional branch-flow estimate",
-            "evidence": [result["id"]],
+            "evidence_ids": [result["id"]],
         },
         {
             "route": "unconstrained unique branch recovery",
-            "decision": "rejected",
+            "status": "rejected",
             "reason": "aggregate observations alone leave branch-flow degrees of freedom",
             "boundary": "requires branch sensors or additional prior constraints",
-            "evidence": [result["id"]],
+            "evidence_ids": [result["id"]],
         }
     ],
-    "identifiability_analysis": {
-        "observed": "main-road aggregate flow",
-        "unknowns": "branch 1 and branch 2 flows",
-        "rank_check": "conditional on explicit split constraint",
+    "identifiability_analysis": [{
+        "subproblem_id": "problem_1",
+        "observed": "main-road aggregate flow F(t)",
+        "unknowns": "branch 1 and branch 2 piecewise-flow parameters",
+        "equation": "F(t)=f_1(t)+f_2(t)",
+        "rank_condition": "the aggregate design is rank deficient before an explicit split constraint",
         "conclusion": "representative estimate, not unconstrained unique recovery",
-    },
+        "missing_information": "branch sensor data or another independent boundary constraint",
+        "selection_rule": "choose the constrained piecewise least-squares representative",
+        "guidance": "Do not present the representative branch split as data-identified truth.",
+    }],
     "claim_registry": [
         {
-            "claim": result["claim_text"],
-            "status": "evidence_verified",
-            "evidence": [result["id"]],
+            "id": "claim_problem1_recomposition",
+            "status": "chosen_under_prior",
+            "claim_text": result["claim_text"],
+            "evidence_ids": [result["id"]],
+            "assumptions": ["explicit branch split normalization"],
+            "risk": "branch flows are not uniquely identifiable from aggregate data",
         }
     ],
     "final_answer_tables": [
         {
-            "table": "problem 1 branch-flow functions",
-            "status": "conditional_estimate",
-            "result_id": result["id"],
+            "id": "final_problem1_branch_functions",
+            "title": "Problem 1 representative branch-flow functions",
+            "rows": [
+                {"subproblem_id": "problem_1", "answer_item": "branch 1 function", "answer": f"f_1(t)={intercept:.12g}+{branch1_slope:.12g}t", "status": "chosen_under_prior", "evidence_ids": [result["id"], "param_branch1_intercept", "param_branch1_slope"]},
+                {"subproblem_id": "problem_1", "answer_item": "branch 2 function", "answer": f"f_2(t)={branch2_slope:.12g}t for t<={t_break}; {branch2_slope:.12g}(2*{t_break}-t) afterwards", "status": "chosen_under_prior", "evidence_ids": [result["id"], "param_t_break", "param_branch2_slope"]},
+            ],
+            "notes": ["These are normalized representative functions, not uniquely recovered branch truth."],
         }
     ],
 }
@@ -652,44 +666,59 @@ summary = {
     "blocked_count": 0,
     "coverage_status": "verified",
     "reader_decision_guide": [
-        "Observed data are product profits, resource usage, capacities, and demand limits.",
-        "Unknowns are product quantities; the linear program directly identifies the optimal mix under listed constraints.",
-        "Time context is not applicable because this fixture is a static product-mix decision.",
+        {"topic": "problem_context", "question": "What is observed, unknown, and the time context?", "judgment": "Profits, resource coefficients, capacities, and demand limits are observed; product quantities are unknown; this is static.", "action": "Define x_A and x_B and state that no time coordinate is used."},
+        {"topic": "identifiability", "question": "Is the optimum determined?", "judgment": "The registered deterministic linear program has a bounded optimum under the listed constraints.", "action": "Check feasibility and compare all feasible vertices."},
+        {"topic": "route_choice", "question": "Which route is recommended and rejected?", "judgment": "Recommend linear programming and reject nonlinear heuristic search for this linear problem.", "action": "State the objective, constraints, and route boundaries."},
+        {"topic": "final_answers", "question": "What is the final answer to fill in?", "judgment": "Fill in both optimal product quantities and maximum total profit.", "action": "Use the three evidence-bound final answer rows."},
+        {"topic": "claim_sources", "question": "Where do conclusions come from?", "judgment": "Coefficients are source locked and the optimum is evidence verified by vertex enumeration.", "action": "Keep fixture inputs separate from computed decisions."},
     ],
     "method_route_comparison": [
         {
             "route": "linear programming",
-            "decision": "recommended",
+            "status": "recommended",
             "reason": "objective and constraints are linear",
             "boundary": "valid for the listed deterministic capacities and profits",
-            "evidence": [result["id"]],
+            "evidence_ids": [result["id"]],
         },
         {
             "route": "nonlinear heuristic search",
-            "decision": "rejected",
+            "status": "rejected",
             "reason": "the objective and constraints are already linear and exactly solvable",
             "boundary": "unnecessary unless the problem introduces nonlinear costs or uncertainty",
-            "evidence": [result["id"]],
+            "evidence_ids": [result["id"]],
         }
     ],
-    "identifiability_analysis": {
+    "identifiability_analysis": [{
+        "subproblem_id": "problem_1",
         "observed": "profit coefficients and constraint matrix",
         "unknowns": "product quantities",
-        "rank_check": "constraint set yields a bounded optimum",
+        "equation": "maximize p_A*x_A+p_B*x_B subject to A*x<=b and x>=0",
+        "rank_condition": "active constraint intersections are nonsingular and the feasible region is bounded",
         "conclusion": "optimization answer is determined by the registered fixture data",
-    },
+        "missing_information": "none for the deterministic fixture; uncertainty analysis would require distributions or scenarios",
+        "selection_rule": "select the feasible vertex with greatest total profit",
+        "guidance": "Report active constraints and sensitivity boundary with the optimum.",
+    }],
     "claim_registry": [
         {
-            "claim": result["claim_text"],
+            "id": "claim_product_mix_optimum",
             "status": "evidence_verified",
-            "evidence": [result["id"]],
+            "claim_text": result["claim_text"],
+            "evidence_ids": [result["id"]],
+            "assumptions": ["deterministic linear profits and capacities"],
+            "risk": "optimum changes if coefficients or capacities change",
         }
     ],
     "final_answer_tables": [
         {
-            "table": "optimal product mix",
-            "status": "evidence_verified",
-            "result_id": result["id"],
+            "id": "final_product_mix",
+            "title": "Optimal product mix",
+            "rows": [
+                {"subproblem_id": "problem_1", "answer_item": "optimal product A quantity", "answer": f"{float(best[0]):.12g}", "status": "evidence_verified", "evidence_ids": [result["id"], "param_product_a_quantity"]},
+                {"subproblem_id": "problem_1", "answer_item": "optimal product B quantity", "answer": f"{float(best[1]):.12g}", "status": "evidence_verified", "evidence_ids": [result["id"], "param_product_b_quantity"]},
+                {"subproblem_id": "problem_1", "answer_item": "maximum total profit", "answer": f"{total_profit:.12g}", "status": "evidence_verified", "evidence_ids": [result["id"], "param_total_profit"]},
+            ],
+            "notes": ["Values solve the deterministic registered linear program."],
         }
     ],
 }
@@ -816,6 +845,11 @@ def test_optimization_fixture_runs_same_six_stage_guidance_without_wuyi_specific
     assert "linear programming" in guidance
     assert "result_product_mix_optimum" in guidance
     assert "param_total_profit" in guidance
+    assert "optimal product A quantity" in guidance
+    assert "optimal product B quantity" in guidance
+    assert "16.6666666667" in guidance
+    assert "maximum total profit" in guidance
+    assert "1866.66666667" in guidance
     assert "data/optimization.xlsx" in guidance
     assert "支路分解" not in guidance
     assert "识别约束" not in guidance
@@ -999,44 +1033,57 @@ summary = {
     "blocked_count": 0,
     "coverage_status": "verified",
     "reader_decision_guide": [
-        "Observed data are historical demand by period; the unknown is next-period demand.",
-        "Time context is the period index in the worksheet.",
-        "The forecast is a trend extrapolation supported by holdout error, not a guaranteed future observation.",
+        {"topic": "problem_context", "question": "What is observed, unknown, and the time convention?", "judgment": "Historical period-demand pairs are observed; next-period demand is unknown; time is worksheet period index.", "action": "Define the period index and forecast horizon."},
+        {"topic": "identifiability", "question": "Are trend parameters identifiable?", "judgment": "The two-column linear design matrix has full column rank.", "action": "Report the rank condition and distinguish parameter identification from future certainty."},
+        {"topic": "route_choice", "question": "Which route is recommended and rejected?", "judgment": "Recommend linear trend with holdout verification and reject an unchecked black-box forecast.", "action": "State the validation error and trend-validity boundary."},
+        {"topic": "final_answers", "question": "What is the final answer to fill in?", "judgment": "Fill in the next-period forecast as 208 demand units.", "action": "Bind the forecast row to both the result and computed parameter."},
+        {"topic": "claim_sources", "question": "Where do conclusions come from?", "judgment": "Historical values are source locked; coefficients and forecast are evidence verified under trend extrapolation.", "action": "Disclose that future trend persistence is an assumption."},
     ],
     "method_route_comparison": [
         {
             "route": "linear trend with holdout verification",
-            "decision": "recommended",
+            "status": "recommended",
             "reason": "fixture data follow a linear trend and holdout error is disclosed",
             "boundary": "valid only while the trend assumption remains plausible",
-            "evidence": [result["id"]],
+            "evidence_ids": [result["id"]],
         },
         {
             "route": "black-box forecast without holdout check",
-            "decision": "rejected",
+            "status": "rejected",
             "reason": "it would not explain the trend assumption or disclose validation error",
             "boundary": "only useful as an informal baseline",
-            "evidence": [result["id"]],
+            "evidence_ids": [result["id"]],
         }
     ],
-    "identifiability_analysis": {
+    "identifiability_analysis": [{
+        "subproblem_id": "problem_1",
         "observed": "period-demand pairs",
         "unknowns": "trend intercept, trend slope, next demand",
-        "rank_check": "linear design matrix has two independent columns",
+        "equation": "d_t=beta_0+beta_1*t+epsilon_t",
+        "rank_condition": "linear design matrix has two independent columns",
         "conclusion": "trend parameters are identifiable from the fixture series",
-    },
+        "missing_information": "future shocks and structural breaks are not observed",
+        "selection_rule": "ordinary least squares on training periods with one-period holdout verification",
+        "guidance": "Treat 208 as a trend forecast, not a guaranteed future observation.",
+    }],
     "claim_registry": [
         {
-            "claim": result["claim_text"],
+            "id": "claim_next_period_forecast",
             "status": "evidence_verified",
-            "evidence": [result["id"]],
+            "claim_text": result["claim_text"],
+            "evidence_ids": [result["id"]],
+            "assumptions": ["linear trend persists one additional period"],
+            "risk": "structural break would invalidate extrapolation",
         }
     ],
     "final_answer_tables": [
         {
-            "table": "next-period forecast",
-            "status": "evidence_verified",
-            "result_id": result["id"],
+            "id": "final_next_period_forecast",
+            "title": "Next-period demand forecast",
+            "rows": [
+                {"subproblem_id": "problem_1", "answer_item": "next-period demand", "answer": f"{forecast_value:.12g}", "status": "evidence_verified", "evidence_ids": [result["id"], "param_next_period_forecast"]},
+            ],
+            "notes": ["The answer is conditional on one-period linear-trend extrapolation."],
         }
     ],
 }
@@ -1152,6 +1199,8 @@ def test_forecast_fixture_runs_same_six_stage_guidance_with_holdout_verification
     assert "linear trend forecast" in guidance
     assert "result_demand_forecast" in guidance
     assert "param_next_period_forecast" in guidance
+    assert "next-period demand" in guidance
+    assert "208" in guidance
     assert "data/forecast.xlsx" in guidance
     assert audit["status"] == "PASS"
     assert messages[-1]["data"]["status"] == "completed"

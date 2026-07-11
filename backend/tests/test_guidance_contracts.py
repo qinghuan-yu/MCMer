@@ -86,6 +86,50 @@ def test_result_registry_rejects_duplicate_ids_across_verified_and_blocked() -> 
         )
 
 
+def test_result_registry_rejects_reader_summary_that_cannot_render_final_answers() -> None:
+    from app.guidance.artifacts import ResultRegistry
+
+    with pytest.raises(ValidationError):
+        ResultRegistry.model_validate(
+            {
+                "verified_results": [
+                    {
+                        "id": "result_prediction",
+                        "result_type": "forecast",
+                        "claim_text": "Forecast next-period demand.",
+                        "metrics": {"forecast_value": 208.0},
+                        "source_data": ["data/forecast.xlsx"],
+                    }
+                ],
+                "blocked_results": [],
+                "summary": {
+                    "verified_count": 1,
+                    "blocked_count": 0,
+                    "coverage_status": "verified",
+                    "reader_decision_guide": [
+                        "Observed demand is known; next-period demand is unknown."
+                    ],
+                    "method_route_comparison": [],
+                    "identifiability_analysis": {},
+                    "claim_registry": [
+                        {
+                            "claim": "Forecast next-period demand.",
+                            "status": "evidence_verified",
+                            "evidence": ["result_prediction"],
+                        }
+                    ],
+                    "final_answer_tables": [
+                        {
+                            "table": "next-period forecast",
+                            "status": "evidence_verified",
+                            "result_id": "result_prediction",
+                        }
+                    ],
+                },
+            }
+        )
+
+
 def test_model_spec_requires_executable_spec_for_each_subproblem() -> None:
     from app.guidance.contracts import ModelSpec
 

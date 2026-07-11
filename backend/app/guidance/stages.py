@@ -14,6 +14,7 @@ from app.guidance.artifacts import (
     ParameterRegistry,
     ResultRegistry,
     SolverResults,
+    reader_guidance_reference_issues,
 )
 from app.guidance.contracts import (
     ApprovedModelSpec,
@@ -368,8 +369,8 @@ class ResultVerificationStage:
             blocking_issues.append("parameter_registry has no parameter evidence")
         if results is not None and not results.verified_results:
             blocking_issues.append("result_registry has no verified results")
-        if results is not None and results.verified_results:
-            blocking_issues.extend(_verify_reader_facing_result_summary(results.summary))
+        if results is not None and parameters is not None and results.verified_results:
+            blocking_issues.extend(reader_guidance_reference_issues(results, parameters))
         blocking_issues.extend(numerical_checks["issues"])
         blocking_issues.extend(figure_issues)
         if not units_passed:
@@ -614,111 +615,6 @@ def _is_positive_review_value(value) -> bool:
         text.startswith(f"{positive};") or text.startswith(f"{positive}:")
         for positive in positives
     )
-
-
-def _verify_reader_facing_result_summary(summary: dict) -> list[str]:
-    required_fields = [
-        "verified_count",
-        "blocked_count",
-        "coverage_status",
-        "reader_decision_guide",
-        "method_route_comparison",
-        "identifiability_analysis",
-        "claim_registry",
-        "final_answer_tables",
-    ]
-    missing = [
-        field
-        for field in required_fields
-        if field not in summary or _is_empty_summary_value(summary.get(field))
-    ]
-    if not missing:
-        return _verify_reader_facing_summary_content(summary)
-    return [
-        "result_registry.summary missing reader-facing guidance fields: "
-        + ", ".join(missing)
-    ]
-
-
-def _verify_reader_facing_summary_content(summary: dict) -> list[str]:
-    issues: list[str] = []
-    decision_text = _summary_text(summary.get("reader_decision_guide"))
-    if not (
-        _contains_any(decision_text, ("observed", "observation", "观测", "数据", "input"))
-        and _contains_any(decision_text, ("unknown", "未知", "待求", "决策变量", "target"))
-        and _contains_any(decision_text, ("time", "period", "sample", "coordinate", "时间", "时刻", "样本", "口径", "not applicable"))
-    ):
-        issues.append(
-            "result_registry.summary reader_decision_guide must explain observed/unknown/time context"
-        )
-
-    route_text = _summary_text(summary.get("method_route_comparison"))
-    if not _contains_any(route_text, ("recommended", "recommend", "推荐")):
-        issues.append("result_registry.summary method_route_comparison missing recommended route")
-    if not _contains_any(
-        route_text,
-        ("rejected", "excluded", "not recommended", "why not", "被排除", "排除", "不推荐"),
-    ):
-        issues.append("result_registry.summary method_route_comparison missing rejected alternative route")
-
-    identifiability_text = _summary_text(summary.get("identifiability_analysis"))
-    if not _contains_any(
-        identifiability_text,
-        (
-            "identifi",
-            "unique",
-            "rank",
-            "condition",
-            "determined",
-            "bounded",
-            "missing",
-            "可辨识",
-            "唯一",
-            "秩",
-            "条件",
-            "缺少",
-            "不可",
-        ),
-    ):
-        issues.append(
-            "result_registry.summary identifiability_analysis must explain identifiability or uniqueness"
-        )
-
-    claim_registry = summary.get("claim_registry")
-    if not isinstance(claim_registry, list) or any(
-        not isinstance(item, dict)
-        or not str(item.get("status") or "").strip()
-        or not any(item.get(key) for key in ("evidence", "assumptions", "source", "risk"))
-        for item in claim_registry
-    ):
-        issues.append("result_registry.summary claim_registry entries must include conclusion status and source evidence")
-
-    final_answer_text = _summary_text(summary.get("final_answer_tables"))
-    if not _contains_any(
-        final_answer_text,
-        ("result_id", "evidence", "blocked", "answer", "value", "证据", "答案", "结果"),
-    ):
-        issues.append("result_registry.summary final_answer_tables must bind answers to evidence or blocked reasons")
-
-    return issues
-
-
-def _is_empty_summary_value(value) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str):
-        return not value.strip()
-    if isinstance(value, (list, dict, tuple, set)):
-        return len(value) == 0
-    return False
-
-
-def _summary_text(value) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True).lower()
-
-
-def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
-    return any(needle.lower() in text for needle in needles)
 
 
 def _write_model(path: Path, model) -> None:

@@ -648,9 +648,36 @@ def _write_verified_fit_artifacts(tmp_path: Path) -> Path:
                     "blocked_count": 0,
                     "coverage_status": "verified",
                     "reader_decision_guide": [
-                        "Observed variable is the main-road aggregate flow; branch flows are unknown.",
-                        "Time context uses sample index t from the attached table.",
-                        "The split is conditional on an explicit identifiability constraint.",
+                        {
+                            "topic": "problem_context",
+                            "question": "What is observed, unknown, and the time coordinate?",
+                            "judgment": "The main-road aggregate is observed; branch flows are unknown; time uses sample index t.",
+                            "action": "State the aggregate observation, branch unknowns, and sample-index coordinate before modeling.",
+                        },
+                        {
+                            "topic": "identifiability",
+                            "question": "Can the branch flows be uniquely recovered?",
+                            "judgment": "They are not unique without the explicit split constraint.",
+                            "action": "Present the result as a conditional representative estimate.",
+                        },
+                        {
+                            "topic": "route_choice",
+                            "question": "Which route is recommended and rejected?",
+                            "judgment": "Recommend constrained piecewise fitting and reject unconstrained unique recovery.",
+                            "action": "Explain both route decisions and their applicability boundaries.",
+                        },
+                        {
+                            "topic": "final_answers",
+                            "question": "What can be filled into the answer?",
+                            "judgment": "The registered piecewise aggregate equation and breakpoint are conditionally fillable.",
+                            "action": "Bind the answer row to result_piecewise_fit and breakpoint.",
+                        },
+                        {
+                            "topic": "claim_sources",
+                            "question": "Which claims come from data or assumptions?",
+                            "judgment": "Aggregate fit is data evidence; branch separation depends on an explicit assumption.",
+                            "action": "Separate evidence_verified claims from chosen representative assumptions.",
+                        },
                     ],
                     "method_route_comparison": [
                         {
@@ -658,34 +685,49 @@ def _write_verified_fit_artifacts(tmp_path: Path) -> Path:
                             "status": "recommended",
                             "reason": "matches the stated piecewise trend and exposes residuals",
                             "boundary": "conditional branch-flow estimate",
-                            "evidence": ["result_piecewise_fit"],
+                            "evidence_ids": ["result_piecewise_fit"],
                         },
                         {
                             "route": "unconstrained unique branch recovery",
                             "status": "rejected",
                             "reason": "main-road aggregate observations alone do not identify every branch flow",
                             "boundary": "requires extra branch sensors or prior constraints",
-                            "evidence": ["result_piecewise_fit"],
+                            "evidence_ids": ["result_piecewise_fit"],
                         }
                     ],
-                    "identifiability_analysis": {
+                    "identifiability_analysis": [{
+                        "subproblem_id": "problem1",
                         "observed": "q_main(t)",
-                        "unknown": "q_1(t), q_2(t)",
-                        "rank_check": "full rank after explicit constraint",
-                        "conclusion": "conditional estimate, not an unconstrained unique recovery",
-                    },
+                        "unknowns": "q_1(t), q_2(t)",
+                        "equation": "q_main(t) = q_1(t) + q_2(t)",
+                        "rank_condition": "The unconstrained split has a free degree; the explicit constraint closes it.",
+                        "conclusion": "Conditional estimate, not an unconstrained unique recovery.",
+                        "missing_information": "Independent branch sensors or boundary-flow observations are absent.",
+                        "selection_rule": "Use the reviewed split constraint to select one representative solution.",
+                        "guidance": "Disclose the non-uniqueness before presenting the fitted functions.",
+                    }],
                     "claim_registry": [
                         {
-                            "claim": "The fitted aggregate flow reproduces the observations.",
+                            "id": "claim_piecewise_fit",
+                            "claim_text": "The fitted aggregate flow reproduces the observations.",
                             "status": "evidence_verified",
-                            "evidence": ["result_piecewise_fit"],
+                            "evidence_ids": ["result_piecewise_fit"],
+                            "assumptions": ["The reviewed split constraint selects a representative branch decomposition."],
+                            "risk": "The branch split is not uniquely identified by aggregate observations.",
                         }
                     ],
                     "final_answer_tables": [
                         {
-                            "table": "piecewise fit",
-                            "status": "evidence_verified",
-                            "result_id": "result_piecewise_fit",
+                            "id": "final_piecewise_fit",
+                            "title": "Piecewise branch-flow answer",
+                            "rows": [{
+                                "subproblem_id": "problem1",
+                                "answer_item": "Conditional aggregate decomposition",
+                                "answer": "q_main(t)=q_1(t)+q_2(t), t_break=30",
+                                "status": "chosen_under_prior",
+                                "evidence_ids": ["result_piecewise_fit", "param_t_break"],
+                            }],
+                            "notes": ["The row is a representative decomposition, not a uniquely recovered truth."],
                         }
                     ],
                 },
@@ -941,8 +983,9 @@ def test_result_verification_blocks_vague_reader_facing_result_summary(tmp_path:
 
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["status"] == "blocked"
-    assert any("observed/unknown/time" in issue for issue in report["blocking_issues"])
-    assert any("rejected alternative route" in issue for issue in report["blocking_issues"])
+    assert any("result_registry.json contract invalid" in issue for issue in report["blocking_issues"])
+    assert any("reader_decision_guide.0" in issue for issue in report["blocking_issues"])
+    assert any("method_route_comparison.0.status" in issue for issue in report["blocking_issues"])
     assert any("final_answer_tables" in issue for issue in report["blocking_issues"])
 
 

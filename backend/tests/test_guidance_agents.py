@@ -640,6 +640,9 @@ def test_program_generator_prompts_for_typed_registries_and_verification_metrics
     assert "identifiability_analysis" in system_prompt
     assert "claim_registry" in system_prompt
     assert "final_answer_tables" in system_prompt
+    assert "topic 必须分别且仅为 problem_context、identifiability、route_choice、final_answers、claim_sources" in system_prompt
+    assert "status 只能是 recommended 或 rejected" in system_prompt
+    assert "每个 row={subproblem_id,answer_item,answer,status,evidence_ids,blocked_reason}" in system_prompt
     assert "root filenames must be written exactly at the work directory root" in rules
     assert "Do not prefix root required outputs with output/, outputs/, results/, or result/" in rules
     assert "Figures may only link to verified_results IDs" in rules
@@ -1139,9 +1142,9 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "I_green(k; g)=1 当 (k-g) mod 9 落在 [0,5)" in guidance
     assert "## 建模路线取舍" in guidance
     assert "直接唯一反推各支路" in guidance
-    assert "被排除：主路总量分解存在自由度" in guidance
+    assert "| 直接唯一反推各支路 | rejected |" in guidance
     assert "黑箱曲线拟合" in guidance
-    assert "被排除：无法解释支路趋势与题设约束" in guidance
+    assert "| 黑箱曲线拟合 | rejected |" in guidance
     assert "EM/MCMC 噪声模型" in guidance
-    assert "被排除：题设未提供随机机制" in guidance
-    assert "推荐：可辨识性分析 + 规范化代表解 + 基函数回归 + 秩诊断" in guidance
+    assert "| EM/MCMC 噪声模型 | rejected |" in guidance
+    assert "| 可辨识性分析 + 规范化代表解 + 基函数回归 + 秩诊断 | recommended |" in guidance
