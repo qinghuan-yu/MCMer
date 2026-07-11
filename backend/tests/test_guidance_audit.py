@@ -190,6 +190,89 @@ def test_guidance_audit_blocks_formal_guidance_with_vague_reader_sections() -> N
     assert any(block["type"] == "vague_reader_guidance" for block in report["blocks"])
 
 
+def test_guidance_audit_blocks_vague_reader_decision_section_even_when_other_sections_are_complete() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 建模指导方案\n\n"
+            "## 可信度摘要\n\n"
+            "结果复核状态为 `verified`。\n\n"
+            "## 问题理解\n\n"
+            "观测数据是 data/demand.xlsx 的 demand column，未知目标是下一期需求，时间口径是 period index。\n\n"
+            "## 数据与来源\n\n"
+            "来源文件 data/demand.xlsx；观测输入字段是 demand column；时间/样本口径是 period index。\n\n"
+            "## 建模路线与读者决策\n\n"
+            "系统已经跑完，具体判断和动作见后文注册表。\n\n"
+            "## 建模路线取舍\n\n"
+            "recommended route 是 interpretable linear trend；rejected route 是 black-box forecast；"
+            "reason 是 holdout error 与 interpretability；applicability boundary 是 linear trend period data；"
+            "evidence source 是 result_prediction 和 data/demand.xlsx。\n\n"
+            "## 可辨识性分析\n\n"
+            "观测方程 demand = alpha + beta * period；未知参数是 alpha,beta，parameter dimension two；"
+            "design matrix rank full，因此在 linear trend assumption 下 unique。\n\n"
+            "## 结论状态登记\n\n"
+            "| claim_id | 状态 | 结论 | 证据 | 依赖假设 | 风险 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| claim_prediction | evidence_verified | 数据自洽预测 | result_prediction | linear trend assumption | representative contest answer |\n\n"
+            "## 参数与来源表\n\n"
+            "| parameter_id | 符号 | 含义 | 数值 | 单位 | 来源类型 | 来源 | 可信状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| param_alpha | alpha | trend intercept | estimated_alpha | demand_unit | source_data | data/demand.xlsx | evidence_verified |\n\n"
+            "## 必要计算结果\n\n"
+            "model formula 是 demand = alpha + beta * period；parameter 来自 param_alpha；"
+            "solver 使用 least squares fit；result_prediction 登记 metric rmse 和 residual summary。\n\n"
+            "## 最终答案与应填表格\n\n"
+            "| 应填项 | 答案 | 结论状态 | 证据 |\n| --- | --- | --- | --- |\n"
+            "| 下一期需求 | demand_next = alpha + beta * next_period | evidence_verified | result_prediction |\n\n"
+            "## 复核与稳健性\n\n"
+            "RMSE 和 residual metric 以 holdout baseline threshold 判断；通过只表示预测误差满足准则，"
+            "不证明真实机理；robustness 和 sensitivity 仍受 linear trend boundary 限制。\n"
+        ),
+        guidance_context={
+            "required_sections": [
+                "问题理解",
+                "数据与来源",
+                "建模路线与读者决策",
+                "建模路线取舍",
+                "可辨识性分析",
+                "结论状态登记",
+                "参数与来源表",
+                "必要计算结果",
+                "最终答案与应填表格",
+                "复核与稳健性",
+            ]
+        },
+        result_registry={
+            "verified_results": [
+                {
+                    "id": "result_prediction",
+                    "claim_text": "registered result",
+                    "source_data": ["data/demand.xlsx"],
+                }
+            ],
+            "blocked_results": [],
+        },
+        parameter_registry={
+            "parameters": [
+                {
+                    "id": "param_alpha",
+                    "symbol": "alpha",
+                    "value": "estimated_alpha",
+                    "unit": "demand_unit",
+                    "source_type": "source_data",
+                    "source_ref": "data/demand.xlsx",
+                    "trust_status": "evidence_verified",
+                }
+            ]
+        },
+    )
+
+    assert report["status"] == "BLOCK"
+    assert any(
+        block["type"] == "reader_decision_section_missing_actionable_summary"
+        for block in report["blocks"]
+    )
+
+
 def test_guidance_audit_blocks_identifiability_section_without_structural_analysis() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(

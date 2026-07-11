@@ -81,6 +81,7 @@ def build_guidance_audit_report(
     _check_blocked_disclosure(text, results, blocks)
     if not _is_blocking_diagnostic(text):
         _check_reader_guidance_value(text, context, blocks)
+        _check_reader_decision_section_structure(text, context, blocks)
         _check_problem_understanding_section_context(text, context, blocks)
         _check_data_source_section_context(text, context, results, parameters, blocks)
         _check_route_tradeoff_section_structure(text, context, blocks)
@@ -289,6 +290,69 @@ def _check_reader_guidance_value(
             "route": "writer",
             "severity": "high",
             "fix": "Rewrite formal guidance so it directly answers observation/unknown/time, identifiability, route choice, formulas/results, and claim source layers.",
+            "missing_items": missing,
+        })
+
+
+def _check_reader_decision_section_structure(
+    text: str,
+    guidance_context: dict[str, object],
+    blocks: list[dict[str, object]],
+) -> None:
+    required_sections = guidance_context.get("required_sections", [])
+    if not isinstance(required_sections, list):
+        return
+    if "建模路线与读者决策" not in "\n".join(str(section) for section in required_sections):
+        return
+
+    section = _markdown_section(text, "建模路线与读者决策")
+    if not section.strip():
+        return
+
+    lowered = section.lower()
+    missing: list[str] = []
+    if not (
+        _contains_any(lowered, ("observed", "observation", "观测", "数据", "输入"))
+        and _contains_any(lowered, ("unknown", "未知", "待求", "目标", "输出"))
+        and _contains_any(
+            lowered,
+            ("time", "period", "sample", "coordinate", "时间", "时刻", "样本", "口径", "单位"),
+        )
+    ):
+        missing.append("observed_unknown_time_context")
+    if not _contains_any(
+        lowered,
+        ("unique", "identifi", "rank", "missing information", "可辨识", "唯一", "不可", "秩", "缺少"),
+    ):
+        missing.append("identifiability_or_missing_information")
+    if not (
+        _contains_any(lowered, ("recommended", "recommend", "chosen", "采用", "推荐", "选择"))
+        and _contains_any(lowered, ("rejected", "excluded", "not recommended", "排除", "不推荐", "放弃"))
+    ):
+        missing.append("recommended_and_rejected_routes")
+    if not (
+        _contains_any(lowered, ("final answer", "answer table", "最终答案", "应填", "可填", "答案"))
+        and _contains_any(lowered, _FINAL_ANSWER_EVIDENCE_TOKENS)
+        and _contains_any(lowered, ("action", "guidance", "write", "modeling", "建模", "写作", "动作"))
+    ):
+        missing.append("final_answer_evidence_and_action")
+    if not (
+        _contains_any(lowered, ("data", "evidence", "result_", "数据", "证据"))
+        and _contains_any(lowered, ("assumption", "prior", "假设", "先验", "规范化"))
+        and _contains_any(
+            lowered,
+            ("candidate", "representative", "contest", "chosen", "候选", "代表", "竞赛"),
+        )
+    ):
+        missing.append("claim_source_layers")
+
+    if missing:
+        blocks.append({
+            "type": "reader_decision_section_missing_actionable_summary",
+            "location": "建模路线与读者决策",
+            "route": "writer",
+            "severity": "high",
+            "fix": "Rewrite the reader-decision section itself to answer observation/unknown/time, identifiability, recommended and rejected routes, final-answer evidence/actions, and claim-source layers.",
             "missing_items": missing,
         })
 

@@ -804,8 +804,13 @@ def _default_reader_decision_guide(result_registry: dict[str, Any]) -> list[dict
             "action": "若证据不足，应写成条件性估计、代表解或待补充信息。",
         },
         {
+            "question": "推荐路线/排除路线",
+            "judgment": "推荐审核通过模型、已登记结果和局限披露；排除把低残差直接写成真实机理。",
+            "action": "建模与写作时同时交代推荐理由、排除理由和适用边界。",
+        },
+        {
             "question": "最终可填内容",
-            "judgment": "当前可填内容仅限已登记 verified result 和参数来源表支持的结论。",
+            "judgment": "当前可填内容仅限数据证据支持的结论；额外假设和竞赛代表解必须分层标注。",
             "action": f"引用最终答案表并绑定证据：{evidence}。",
         },
     ]
