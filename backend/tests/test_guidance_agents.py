@@ -1119,7 +1119,21 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "8:30 (k=46)" in guidance
     assert "param_problem2_k16_fitted_main_flow" in guidance
     assert "param_problem4_k46_fitted_main_flow" in guidance
-    assert "不能作为唯一支路流量" in guidance
+    specified_time_table = next(
+        table
+        for table in results["summary"]["final_answer_tables"]
+        if table["id"] == "final_problem2_to_4_specified_time_values"
+    )
+    blocked_branch_rows = [
+        row for row in specified_time_table["rows"] if row["status"] == "blocked"
+    ]
+    assert len(blocked_branch_rows) == 6
+    assert all("支路流量" in row["answer_item"] for row in blocked_branch_rows)
+    assert all(
+        "缺少支路传感器或其他独立约束" in row["blocked_reason"]
+        for row in blocked_branch_rows
+    )
+    assert "当前主路聚合观测不能唯一确定该时刻各支路流量" in guidance
     assert "## 建模路线与读者决策" in guidance
     assert "观测量/未知量/时间口径" in guidance
     assert "只观测主路聚合流量" in guidance

@@ -441,12 +441,22 @@ def build_specified_time_table(parameters, fits):
                 "status": "evidence_verified",
                 "evidence_ids": [fit["result_id"], parameter_id],
             })
+            rows.append({
+                "subproblem_id": fit["subproblem_id"],
+                "answer_item": f"{label} 各支路流量",
+                "status": "blocked",
+                "evidence_ids": [fit["result_id"]],
+                "blocked_reason": (
+                    "当前主路聚合观测不能唯一确定该时刻各支路流量；"
+                    "缺少支路传感器或其他独立约束。"
+                ),
+            })
     return {
         "id": "final_problem2_to_4_specified_time_values",
         "title": "问题2-4指定时刻拟合值",
         "rows": rows,
         "notes": [
-            "这些数值是给定基函数和相位/延迟设定下的主路聚合拟合值，不能作为唯一支路流量。",
+            "已验证数值是给定基函数和相位/延迟设定下的主路聚合拟合值；支路值逐行标为 blocked，不得用聚合值替代。",
             "时间变量 k 为样本序号；7:30 对应 k=16，8:30 对应 k=46。",
         ],
     }
