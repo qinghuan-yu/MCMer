@@ -242,23 +242,32 @@ def solve_problem1(source_path, parameters, verified_results, evidence, figures)
     )
 
 
-def problem2_columns(t_values):
+def basis_columns(basis):
+    return [column for _, column in basis]
+
+
+def problem2_basis(t_values):
     delayed = np.maximum(t_values - 1.0, 0.0)
     return [
-        np.ones_like(t_values),
-        delayed,
-        np.minimum(delayed, 24.0),
-        np.maximum(delayed - 37.0, 0.0),
-        np.minimum(t_values, 25.0),
-        np.sin(2.0 * np.pi * t_values / 9.0),
-        np.cos(2.0 * np.pi * t_values / 9.0),
+        ("1", np.ones_like(t_values)),
+        ("max(k - 1,0)", delayed),
+        ("min(max(k - 1,0),24)", np.minimum(delayed, 24.0)),
+        ("max(max(k - 1,0) - 37,0)", np.maximum(delayed - 37.0, 0.0)),
+        ("min(k,25)", np.minimum(t_values, 25.0)),
+        ("sin(2*pi*k/9)", np.sin(2.0 * np.pi * t_values / 9.0)),
+        ("cos(2*pi*k/9)", np.cos(2.0 * np.pi * t_values / 9.0)),
     ]
+
+
+def problem2_columns(t_values):
+    return basis_columns(problem2_basis(t_values))
 
 
 def solve_problem2(source_path, parameters, verified_results, evidence, figures):
     source_ref = f"{source_path.as_posix()}#sheet2"
     t_values, observed = read_series(source_path, 1)
-    coefficients, predicted, residuals, rmse, max_abs, rank = fit_lstsq(problem2_columns(t_values), observed)
+    basis = problem2_basis(t_values)
+    coefficients, predicted, residuals, rmse, max_abs, rank = fit_lstsq(basis_columns(basis), observed)
     for index, value in enumerate(coefficients):
         add_parameter(parameters, f"param_problem2_coef_{index}", f"theta_2_{index}", f"Problem 2 regression coefficient {index}", value, "vehicles per 2 minutes", source_ref)
     add_parameter(parameters, "param_problem2_delay", "delta_2", "upstream observation delay", 1.0, "sample index", source_ref)
@@ -293,22 +302,32 @@ def solve_problem2(source_path, parameters, verified_results, evidence, figures)
         "t_values": t_values,
         "predicted": predicted,
         "source_ref": source_ref,
+        "model_label": "延迟基函数回归",
+        "lhs": "F_2(k)",
+        "coefficients": coefficients,
+        "basis_terms": [term for term, _ in basis],
+        "evidence_ids": ["result_problem2_traffic_fit", "param_problem2_delay"] + [f"param_problem2_coef_{index}" for index in range(7)],
     }
 
 
-def problem3_columns(t_values, start):
+def signal_basis(t_values, start):
     mask = green_mask(t_values, start).astype(float)
+    start_label = f"{float(start):g}"
     return [
-        np.ones_like(t_values),
-        t_values,
-        np.maximum(t_values - 10.0, 0.0),
-        np.maximum(t_values - 30.0, 0.0),
-        np.maximum(t_values - 45.0, 0.0),
-        mask,
-        mask * t_values,
-        np.sin(2.0 * np.pi * t_values / 9.0),
-        np.cos(2.0 * np.pi * t_values / 9.0),
+        ("1", np.ones_like(t_values)),
+        ("k", t_values),
+        ("max(k - 10,0)", np.maximum(t_values - 10.0, 0.0)),
+        ("max(k - 30,0)", np.maximum(t_values - 30.0, 0.0)),
+        ("max(k - 45,0)", np.maximum(t_values - 45.0, 0.0)),
+        (f"I_green(k;{start_label})", mask),
+        (f"k*I_green(k;{start_label})", mask * t_values),
+        ("sin(2*pi*k/9)", np.sin(2.0 * np.pi * t_values / 9.0)),
+        ("cos(2*pi*k/9)", np.cos(2.0 * np.pi * t_values / 9.0)),
     ]
+
+
+def problem3_columns(t_values, start):
+    return basis_columns(signal_basis(t_values, start))
 
 
 def solve_problem3(source_path, parameters, verified_results, evidence, figures):
@@ -316,7 +335,8 @@ def solve_problem3(source_path, parameters, verified_results, evidence, figures)
     t_values, observed = read_series(source_path, 2)
     start = 3.0
     columns_factory = lambda t: problem3_columns(t, start)
-    coefficients, predicted, residuals, rmse, max_abs, rank = fit_lstsq(columns_factory(t_values), observed)
+    basis = signal_basis(t_values, start)
+    coefficients, predicted, residuals, rmse, max_abs, rank = fit_lstsq(basis_columns(basis), observed)
     add_parameter(parameters, "param_problem3_green_start", "g_3", "first green-light sample", start, "sample index", source_ref)
     add_parameter(parameters, "param_problem3_green_duration", "q_3", "green-light duration in each cycle", 5.0, "samples", source_ref)
     add_parameter(parameters, "param_problem3_cycle_period", "p_3", "traffic-light cycle period", 9.0, "samples", source_ref)
@@ -352,6 +372,11 @@ def solve_problem3(source_path, parameters, verified_results, evidence, figures)
         "t_values": t_values,
         "predicted": predicted,
         "source_ref": source_ref,
+        "model_label": "交通灯相位基函数回归",
+        "lhs": "F_3(k)",
+        "coefficients": coefficients,
+        "basis_terms": [term for term, _ in basis],
+        "evidence_ids": ["result_problem3_signal_fit", "param_problem3_green_start"] + [f"param_problem3_coef_{index}" for index in range(9)],
     }
 
 
@@ -408,6 +433,11 @@ def solve_problem4(source_path, parameters, verified_results, evidence, figures)
         "predicted": best["predicted"],
         "green_start": best["start"],
         "source_ref": source_ref,
+        "model_label": "含噪交通灯相位基函数回归",
+        "lhs": "F_4(k)",
+        "coefficients": best["coefficients"],
+        "basis_terms": [term for term, _ in signal_basis(t_values, best["start"])],
+        "evidence_ids": ["result_problem4_noisy_signal_fit", "param_problem4_green_start"] + [f"param_problem4_coef_{index}" for index in range(9)],
     }
 
 
@@ -462,51 +492,42 @@ def build_specified_time_table(parameters, fits):
     }
 
 
-def build_basis_dictionary_table():
+def format_model_expression(lhs, coefficients, basis_terms):
+    terms = [
+        f"({float(coefficient):.6g})*({basis_term})"
+        for coefficient, basis_term in zip(coefficients, basis_terms)
+    ]
+    return f"{lhs}=" + " + ".join(terms)
+
+
+def format_symbolic_expression(problem_number, lhs, basis_terms):
+    terms = [
+        f"theta_{problem_number}_{index}*({basis_term})"
+        for index, basis_term in enumerate(basis_terms)
+    ]
+    return f"{lhs}=" + " + ".join(terms)
+
+
+def build_fitted_model_table(fits):
+    rows = []
+    for fit in fits:
+        problem_number = fit["subproblem_id"][-1]
+        symbolic = format_symbolic_expression(problem_number, fit["lhs"], fit["basis_terms"])
+        numeric = format_model_expression(fit["lhs"], fit["coefficients"], fit["basis_terms"])
+        rows.append({
+            "subproblem_id": fit["subproblem_id"],
+            "answer_item": "主路聚合拟合模型（符号式与数值式）",
+            "answer": f"{fit['model_label']}；符号式：{symbolic}；数值代入：{numeric}",
+            "status": "evidence_verified",
+            "evidence_ids": fit["evidence_ids"],
+        })
     return {
-        "id": "final_problem2_to_4_basis_dictionary",
-        "title": "问题2-4基函数与参数字典",
-        "rows": [
-            {
-                "subproblem_id": "problem2",
-                "answer_item": "基函数与参数字典",
-                "answer": "F_2(k)=X_2(k) theta_2，delta_2=1 sample；theta_2_0 * 1 + theta_2_1 * max(k-1,0) + theta_2_2 * min(max(k-1,0),c_2) + theta_2_3 * max(max(k-1,0)-h_2,0) + theta_2_4 * min(k,d_2) + theta_2_5 * sin(2*pi*k/p_2) + theta_2_6 * cos(2*pi*k/p_2)",
-                "status": "evidence_verified",
-                "evidence_ids": [
-                    *[f"param_problem2_coef_{index}" for index in range(7)],
-                    "param_problem2_delay", "param_problem2_delayed_cap",
-                    "param_problem2_delayed_hinge", "param_problem2_direct_cap",
-                    "param_problem2_cycle_period",
-                ],
-            },
-            {
-                "subproblem_id": "problem3",
-                "answer_item": "基函数与参数字典",
-                "answer": "F_3(k)=X_3(k; g_3) theta_3，g_3=3；theta_3_0 * 1 + theta_3_1 * k + theta_3_2 * max(k-h_3_1,0) + theta_3_3 * max(k-h_3_2,0) + theta_3_4 * max(k-h_3_3,0) + theta_3_5 * I_green(k; g_3) + theta_3_6 * k * I_green(k; g_3) + theta_3_7 * sin(2*pi*k/p_3) + theta_3_8 * cos(2*pi*k/p_3)",
-                "status": "evidence_verified",
-                "evidence_ids": [
-                    *[f"param_problem3_coef_{index}" for index in range(9)],
-                    "param_problem3_green_start", "param_problem3_green_duration",
-                    "param_problem3_cycle_period", "param_problem3_hinge_10",
-                    "param_problem3_hinge_30", "param_problem3_hinge_45",
-                ],
-            },
-            {
-                "subproblem_id": "problem4",
-                "answer_item": "基函数与参数字典",
-                "answer": "F_4(k)=X_4(k; g_4) theta_4，g_4 由候选相位最小残差选择；theta_4_0 * 1 + theta_4_1 * k + theta_4_2 * max(k-h_4_1,0) + theta_4_3 * max(k-h_4_2,0) + theta_4_4 * max(k-h_4_3,0) + theta_4_5 * I_green(k; g_4) + theta_4_6 * k * I_green(k; g_4) + theta_4_7 * sin(2*pi*k/p_4) + theta_4_8 * cos(2*pi*k/p_4)",
-                "status": "evidence_verified",
-                "evidence_ids": [
-                    *[f"param_problem4_coef_{index}" for index in range(9)],
-                    "param_problem4_green_start", "param_problem4_green_duration",
-                    "param_problem4_cycle_period", "param_problem4_hinge_10",
-                    "param_problem4_hinge_30", "param_problem4_hinge_45",
-                ],
-            },
-        ],
+        "id": "final_problem2_to_4_fitted_models",
+        "title": "问题2-4基函数与数值代入模型",
+        "rows": rows,
         "notes": [
             "I_green(k; g)=1 当 (k-g) mod 9 落在 [0,5)，否则为 0。",
-            "这些基函数定义的是主路聚合拟合模型；未增加支路传感器或额外先验前，不能把 theta 唯一解释成各支路真实流量。",
+            "符号式和数值式来自拟合所用的同一组基函数；未增加支路传感器或额外先验前，不能把系数唯一解释成各支路真实流量。",
         ],
     }
 
@@ -653,7 +674,9 @@ def main():
         figures,
         problem4_fit["green_start"],
     )
-    basis_dictionary_table = build_basis_dictionary_table()
+    fitted_model_table = build_fitted_model_table(
+        [problem2_fit, problem3_fit, problem4_fit]
+    )
 
     parameter_registry = {
         "parameters": parameters,
@@ -852,38 +875,7 @@ def main():
                     ],
                 },
                 problem5_rank_table,
-                {
-                    "id": "final_problem2_to_4_fitted_models",
-                    "title": "问题2-4拟合模型填表",
-                    "rows": [
-                        {
-                            "subproblem_id": "problem2",
-                            "answer_item": "主路聚合拟合模型",
-                            "answer": "延迟基函数回归：F_2(k)=X_2(k) theta_2；参数组 theta_2_0..theta_2_6；delay=1 sample",
-                            "status": "evidence_verified",
-                            "evidence_ids": ["result_problem2_traffic_fit", "param_problem2_delay"] + [f"param_problem2_coef_{index}" for index in range(7)],
-                        },
-                        {
-                            "subproblem_id": "problem3",
-                            "answer_item": "交通灯相位拟合模型",
-                            "answer": "信号相位基函数回归：F_3(k)=X_3(k; g_3) theta_3；参数组 theta_3_0..theta_3_8",
-                            "status": "evidence_verified",
-                            "evidence_ids": ["result_problem3_signal_fit", "param_problem3_green_start"] + [f"param_problem3_coef_{index}" for index in range(9)],
-                        },
-                        {
-                            "subproblem_id": "problem4",
-                            "answer_item": "含噪交通灯相位拟合模型",
-                            "answer": "含噪信号相位基函数回归：F_4(k)=X_4(k; g_4) theta_4；参数组 theta_4_0..theta_4_8",
-                            "status": "evidence_verified",
-                            "evidence_ids": ["result_problem4_noisy_signal_fit", "param_problem4_green_start"] + [f"param_problem4_coef_{index}" for index in range(9)],
-                        },
-                    ],
-                    "notes": [
-                        "问题2-4的表格给出的是给定基函数下的拟合模型摘要；模型形式不确定，不能解释为唯一支路恢复。",
-                        "若赛题要求填写具体支路流量，需要进一步把 theta 参数代回各支路基函数并在指定时刻复算。",
-                    ],
-                },
-                basis_dictionary_table,
+                fitted_model_table,
                 specified_time_table,
             ],
         },
