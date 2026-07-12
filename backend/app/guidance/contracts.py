@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -16,11 +16,21 @@ CORE_EXECUTION_OUTPUTS = (
 )
 
 
+class SourceRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference: str
+    status: Literal["available", "missing"]
+    matched_files: list[str] = Field(default_factory=list)
+    note: str
+
+
 class ProblemSpec(BaseModel):
     schema_version: str = "1.0"
     task_summary: str
     subproblems: list[dict[str, Any]] = Field(default_factory=list)
     data_sources: list[dict[str, Any]] = Field(default_factory=list)
+    source_requirements: list[SourceRequirement] = Field(default_factory=list)
     locked_facts: list[str] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
 
@@ -57,23 +67,40 @@ class CandidateMethodSpec(BaseModel):
     reason: str = Field(max_length=180)
 
 
-class SubproblemModelSpec(BaseModel):
+class BaseSubproblemModelSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subproblem_id: str
     objective: str = Field(max_length=240)
+    expected_results: list[str] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def canonicalize_subproblem_id(self) -> BaseSubproblemModelSpec:
+        self.subproblem_id = canonical_subproblem_id(self.subproblem_id)
+        return self
+
+
+class SolvableSubproblemModelSpec(BaseSubproblemModelSpec):
+    execution_status: Literal["solvable"]
     selected_method: str = Field(max_length=120)
     rationale: str = Field(max_length=260)
     equations: list[str] = Field(min_length=1, max_length=5)
     parameters: list[ParameterDefinition] = Field(min_length=1, max_length=8)
     constraints: list[str] = Field(min_length=1, max_length=8)
     solve_steps: list[str] = Field(min_length=1, max_length=8)
-    expected_results: list[str] = Field(min_length=1, max_length=5)
 
-    @model_validator(mode="after")
-    def canonicalize_subproblem_id(self) -> SubproblemModelSpec:
-        self.subproblem_id = canonical_subproblem_id(self.subproblem_id)
-        return self
+
+class BlockedSubproblemModelSpec(BaseSubproblemModelSpec):
+    execution_status: Literal["blocked"]
+    blocking_reason: str = Field(max_length=320)
+    missing_inputs: list[str] = Field(min_length=1, max_length=8)
+    recovery_action: str = Field(max_length=240)
+
+
+SubproblemModelSpec = Annotated[
+    SolvableSubproblemModelSpec | BlockedSubproblemModelSpec,
+    Field(discriminator="execution_status"),
+]
 
 
 class ReviewResolution(BaseModel):
@@ -96,8 +123,20 @@ class ModelSpec(BaseModel):
     assumptions: list[str] = Field(default_factory=list, max_length=12)
     symbols: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
     subproblem_models: list[SubproblemModelSpec] = Field(min_length=1)
+    coverage_status: Literal["complete", "partial", "blocked"] = "complete"
     figure_requests: list[dict[str, Any]] = Field(default_factory=list, max_length=8)
     review_resolutions: list[ReviewResolution] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def derive_coverage_status(self) -> ModelSpec:
+        statuses = {item.execution_status for item in self.subproblem_models}
+        if statuses == {"solvable"}:
+            self.coverage_status = "complete"
+        elif statuses == {"blocked"}:
+            self.coverage_status = "blocked"
+        else:
+            self.coverage_status = "partial"
+        return self
 
 
 class RevisedModelSpec(ModelSpec):

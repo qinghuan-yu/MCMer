@@ -1004,14 +1004,20 @@ def _is_probable_structure_number(text: str, start: int, end: int, value: str) -
 
     if _is_inside_url(line, local_start, local_end):
         return True
-    if re.match(r"^#{1,6}\s+\d+(?:\.\d+)+\b", line):
+    if re.match(r"^#{1,6}\s+(?:子问题\s+)?\d+(?:\.\d+)+(?:\b|-)", line):
         return True
     if line.startswith(("#", "-", "*")) and len(value) <= 2:
         return True
     if suffix == "." and value.isdigit() and len(value) <= 2:
         return True
-    if value.isdigit() and int(value) <= 25 and line.startswith("|"):
-        return True
+    if line.startswith("|"):
+        first_cell = line.split("|", 2)[1].strip()
+        if re.fullmatch(
+            r"(?:problem)?\d+(?:\.\d+)*(?:-[^|\s]+)?",
+            first_cell,
+            re.IGNORECASE,
+        ):
+            return True
     return False
 
 

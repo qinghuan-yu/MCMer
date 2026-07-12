@@ -51,7 +51,7 @@ class FakeDecomposer:
 
 
 class FakeModeler:
-    async def model(self, *, problem_spec, task: dict, work_dir: Path):
+    async def model(self, *, problem_spec, data_profile, task: dict, work_dir: Path):
         from app.guidance.contracts import ModelSpec
 
         return ModelSpec(
@@ -64,6 +64,7 @@ class FakeModeler:
             }],
             assumptions=["The branch decomposition uses an explicit identifiability constraint."],
             subproblem_models=[{
+                "execution_status": "solvable",
                 "subproblem_id": "problem_1",
                 "objective": "Fit branch flows.",
                 "selected_method": "piecewise least squares",
@@ -111,6 +112,7 @@ class RevisingFakeModeler(FakeModeler):
         problem_spec,
         previous_model,
         review,
+        data_profile,
         task: dict,
         work_dir: Path,
     ):
@@ -141,6 +143,7 @@ class UnresolvedRevisionModeler(FakeModeler):
         problem_spec,
         previous_model,
         review,
+        data_profile,
         task: dict,
         work_dir: Path,
     ):
@@ -167,6 +170,58 @@ def test_decomposition_stage_saves_problem_spec_with_uploaded_files(tmp_path: Pa
     assert payload["data_sources"] == [{"path": "data/attachment.xlsx"}]
 
 
+def test_decomposition_stage_reconciles_missing_referenced_appendices_with_disk(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.stages import DecompositionStage
+
+    class MisleadingDecomposer:
+        async def decompose(self, *, question: str, data_files: list[str], task: dict):
+            return ProblemSpec(
+                task_summary=question,
+                subproblems=[{"id": "problem1"}, {"id": "problem2"}],
+                data_sources=[{
+                    "path": "data/A-附件.xlsx",
+                    "description": "该文件包含表1-4以及附录2和附录3。",
+                }],
+                locked_facts=[
+                    "附录2提供刀盘载荷模型。",
+                    "附录3提供滚刀磨损参数。",
+                    "主附件提供预紧力观测。",
+                ],
+            )
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "A-附件.xlsx").write_bytes(b"xlsx")
+    output = asyncio.run(
+        DecompositionStage(decomposer=MisleadingDecomposer()).run(
+            task_id="task-missing-appendices",
+            task={
+                "work_dir": str(tmp_path),
+                "question": "问题2基于附录2计算载荷；问题3根据附录3分析磨损。",
+            },
+            input_path=None,
+            output_path=tmp_path / "problem_spec.json",
+        )
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    requirements = {item["reference"]: item for item in payload["source_requirements"]}
+    assert requirements["附录2"]["status"] == "missing"
+    assert requirements["附录3"]["status"] == "missing"
+    assert requirements["附录2"]["matched_files"] == []
+    assert all("附录2" not in fact and "附录3" not in fact for fact in payload["locked_facts"])
+    assert all(
+        "附录2" not in json.dumps(source, ensure_ascii=False)
+        and "附录3" not in json.dumps(source, ensure_ascii=False)
+        for source in payload["data_sources"]
+    )
+    assert any("附录2" in item and "未上传" in item for item in payload["uncertainties"])
+    assert any("附录3" in item and "未上传" in item for item in payload["uncertainties"])
+
+
 def test_modeling_stage_consumes_saved_problem_spec_and_saves_model_spec(tmp_path: Path) -> None:
     from app.guidance.stages import ModelingStage
 
@@ -189,6 +244,74 @@ def test_modeling_stage_consumes_saved_problem_spec_and_saves_model_spec(tmp_pat
     assert payload["candidate_methods"]
     assert payload["subproblem_models"][0]["equations"]
     assert payload["figure_requests"]
+
+
+def test_modeling_stage_passes_normalized_workbook_profile_to_modeler(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    from app.guidance.contracts import ModelSpec
+    from app.guidance.stages import ModelingStage
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "表1_标准实验数据"
+    sheet.append(["直径", "力矩", "预紧力"])
+    sheet.append([18, 50, 12.68])
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    workbook.save(data_dir / "attachment.xlsx")
+    problem_path = tmp_path / "problem_spec.json"
+    problem_path.write_text(
+        json.dumps({"task_summary": "Fit table 1.", "subproblems": [{"id": "problem1"}]}),
+        encoding="utf-8",
+    )
+
+    class ProfileCapturingModeler:
+        def __init__(self) -> None:
+            self.data_profile = None
+
+        async def model(self, *, problem_spec, data_profile, task: dict, work_dir: Path):
+            self.data_profile = data_profile
+            return ModelSpec.model_validate({
+                "model_id": "profile-aware-model",
+                "selected_method": "linear regression",
+                "subproblem_models": [{
+                    "execution_status": "solvable",
+                    "subproblem_id": "problem1",
+                    "objective": "Fit table 1.",
+                    "selected_method": "linear regression",
+                    "rationale": "The workbook profile proves table 1 is available.",
+                    "equations": ["T = K P d"],
+                    "parameters": [{
+                        "parameter_id": "K",
+                        "symbol": "K",
+                        "meaning": "torque coefficient",
+                        "unit": "dimensionless",
+                        "source_type": "estimated",
+                        "source_detail": "data/attachment.xlsx 表1_标准实验数据",
+                        "estimation_method": "least squares",
+                        "constraints": ["K > 0"],
+                    }],
+                    "constraints": ["design matrix rank must be full"],
+                    "solve_steps": ["Read the profiled sheet and fit K."],
+                    "expected_results": ["K and residual metrics"],
+                }],
+            })
+
+    modeler = ProfileCapturingModeler()
+    asyncio.run(
+        ModelingStage(modeler=modeler).run(
+            task_id="task-profile-aware-modeling",
+            task={"work_dir": str(tmp_path)},
+            input_path=problem_path,
+            output_path=tmp_path / "model_spec.json",
+        )
+    )
+
+    sheet_profile = modeler.data_profile["files"][0]["workbook"]["sheets"][0]
+    assert sheet_profile["name"] == "表1_标准实验数据"
+    assert sheet_profile["columns"] == ["直径", "力矩", "预紧力"]
+    assert (tmp_path / "data_profile.json").is_file()
 
 
 def test_modeling_stage_rejects_missing_or_extra_subproblem_models(tmp_path: Path) -> None:
@@ -225,7 +348,7 @@ def test_modeling_stage_revises_from_saved_review_contract(tmp_path: Path) -> No
         encoding="utf-8",
     )
     previous_model = asyncio.run(
-        FakeModeler().model(problem_spec=None, task={}, work_dir=tmp_path)
+        FakeModeler().model(problem_spec=None, data_profile={}, task={}, work_dir=tmp_path)
     )
     (tmp_path / "model_spec.json").write_text(
         previous_model.model_dump_json(),
@@ -269,7 +392,9 @@ def test_modeling_stage_rejects_revision_without_resolving_each_review_requireme
         json.dumps({"task_summary": "Fit branch flows.", "subproblems": [{"id": "problem_1"}]}),
         encoding="utf-8",
     )
-    previous_model = asyncio.run(FakeModeler().model(problem_spec=None, task={}, work_dir=tmp_path))
+    previous_model = asyncio.run(
+        FakeModeler().model(problem_spec=None, data_profile={}, task={}, work_dir=tmp_path)
+    )
     (tmp_path / "model_spec.json").write_text(previous_model.model_dump_json(), encoding="utf-8")
     review_path = tmp_path / "model_review.json"
     review_path.write_text(
@@ -302,7 +427,7 @@ def test_model_review_stage_saves_review_and_approved_model_contracts(tmp_path: 
         encoding="utf-8",
     )
     model_spec = asyncio.run(
-        FakeModeler().model(problem_spec=None, task={}, work_dir=tmp_path)
+        FakeModeler().model(problem_spec=None, data_profile={}, task={}, work_dir=tmp_path)
     )
     model_path = tmp_path / "model_spec.json"
     model_path.write_text(model_spec.model_dump_json(), encoding="utf-8")
@@ -338,7 +463,9 @@ def test_model_review_stage_passes_saved_problem_contract_to_reviewer(tmp_path: 
         json.dumps({"task_summary": "Estimate all branch flows.", "subproblems": [{"id": "problem_1"}]}),
         encoding="utf-8",
     )
-    model_spec = asyncio.run(FakeModeler().model(problem_spec=None, task={}, work_dir=tmp_path))
+    model_spec = asyncio.run(
+        FakeModeler().model(problem_spec=None, data_profile={}, task={}, work_dir=tmp_path)
+    )
     model_path = tmp_path / "model_spec.json"
     model_path.write_text(model_spec.model_dump_json(), encoding="utf-8")
     reviewer = ProblemAwareReviewer()
@@ -494,6 +621,38 @@ def test_calculation_stage_profiles_uploaded_workbook_before_program_generation(
     assert workbook_profile["sheets"][0]["name"] == "表1"
     assert workbook_profile["sheets"][0]["columns"] == ["时刻", "主路3车流量"]
     assert workbook_profile["sheets"][0]["sample_rows"][0] == ["7:00", 12.5]
+
+
+def test_workbook_profile_normalizes_merged_group_labels_and_trailing_empty_columns(
+    tmp_path: Path,
+) -> None:
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill
+
+    from app.guidance.stages import _profile_workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "标准实验数据"
+    sheet.append(["滚刀直径", "破岩力"])
+    sheet.merge_cells("A2:A4")
+    sheet["A2"] = 17
+    sheet["B2"] = 101.0
+    sheet["B3"] = 102.0
+    sheet["B4"] = 103.0
+    sheet["C1"].fill = PatternFill(fill_type="solid", fgColor="FFFFFF")
+    workbook_path = tmp_path / "merged-groups.xlsx"
+    workbook.save(workbook_path)
+
+    profile = _profile_workbook(workbook_path)["sheets"][0]
+
+    assert profile["max_column"] == 3
+    assert profile["effective_max_column"] == 2
+    assert profile["ignored_trailing_empty_columns"] == 1
+    assert profile["columns"] == ["滚刀直径", "破岩力"]
+    assert profile["merged_ranges"] == ["A2:A4"]
+    assert profile["forward_fill_columns"] == ["滚刀直径"]
+    assert profile["sample_rows"] == [[17, 101.0], [17, 102.0], [17, 103.0]]
 
 
 def test_calculation_stage_saves_generation_failure_checkpoint(tmp_path: Path) -> None:
@@ -767,6 +926,7 @@ def _write_verified_fit_artifacts(tmp_path: Path) -> Path:
                     "candidate_methods": [{"name": "piecewise least squares"}],
                     "assumptions": ["Branch separation is conditional on an explicit identifiability constraint."],
                     "subproblem_models": [{
+                        "execution_status": "solvable",
                         "subproblem_id": "problem_1",
                         "objective": "Infer the branch flows.",
                         "selected_method": "constrained piecewise least squares",
@@ -1643,3 +1803,48 @@ def test_review_positive_value_accepts_consistent_with_explanation() -> None:
     from app.guidance.stages import _is_positive_review_value
 
     assert _is_positive_review_value("consistent; units are defined and aligned")
+
+
+def test_verified_guidance_evidence_accepts_typed_blocked_subproblem() -> None:
+    from app.guidance.contracts import VerificationReport
+    from app.guidance.stages import _enforce_verified_guidance_evidence
+
+    passed = [{"status": "passed"}]
+    report = VerificationReport(
+        model_id="partial-model",
+        status="verified",
+        input_checks=passed,
+        equation_checks=passed,
+        unit_checks=passed,
+        constraint_checks=passed,
+        residual_checks=passed,
+        sensitivity_checks=passed,
+    )
+    checked = _enforce_verified_guidance_evidence(
+        report,
+        approved_model={
+            "approved_model": {
+                "subproblem_models": [
+                    {
+                        "execution_status": "solvable",
+                        "subproblem_id": "problem1",
+                        "equations": ["y=X theta"],
+                        "parameters": [{"parameter_id": "theta"}],
+                        "solve_steps": ["fit and verify"],
+                    },
+                    {
+                        "execution_status": "blocked",
+                        "subproblem_id": "problem2",
+                        "blocking_reason": "missing appendix",
+                        "missing_inputs": ["appendix 2"],
+                        "recovery_action": "supply appendix 2 and rerun",
+                    },
+                ],
+            },
+        },
+        parameter_registry={"parameters": [{"id": "theta"}]},
+        result_registry={"verified_results": [{"id": "result1"}]},
+    )
+
+    assert checked.status == "verified"
+    assert checked.blocking_issues == []

@@ -318,39 +318,10 @@ def render_verified_guidance(
             lines.append("")
 
     lines.extend(["", "## 分问题建模步骤", ""])
-    for subproblem in model.get("subproblem_models", []):
-        if not isinstance(subproblem, dict):
-            continue
-        subproblem_id = _cell(subproblem.get("subproblem_id"))
-        lines.append(f"### 子问题 {subproblem_id}")
-        lines.append("")
-        lines.append(f"- 目标：{_guidance_text(subproblem.get('objective'))}")
-        lines.append(f"- 方法：{_guidance_text(subproblem.get('selected_method'))}")
-        lines.append(f"- 选择理由：{_guidance_text(subproblem.get('rationale'))}")
-        for equation in subproblem.get("equations", []):
-            lines.append(f"- 公式：`{_guidance_text(equation)}`")
-        for parameter in subproblem.get("parameters", []):
-            if not isinstance(parameter, dict):
-                continue
-            lines.append(
-                "- 参数 `{symbol}`：{meaning}；单位 `{unit}`；来源 `{source}`；估计方法：{method}。".format(
-                    symbol=_cell(parameter.get("symbol")),
-                    meaning=_guidance_text(parameter.get("meaning")),
-                    unit=_cell(parameter.get("unit")),
-                    source=_guidance_text(parameter.get("source_detail")),
-                    method=_guidance_text(parameter.get("estimation_method")),
-                )
-            )
-        for constraint in subproblem.get("constraints", []):
-            lines.append(f"- 约束：{_guidance_text(constraint)}")
-        for index, step in enumerate(subproblem.get("solve_steps", []), start=1):
-            lines.append(f"- 求解步骤 {index}：{_guidance_text(step)}")
-        for result in subproblem.get("expected_results", []):
-            lines.append(f"- 预期结果：{_guidance_text(result)}")
-        lines.append("")
+    lines.extend(_registered_subproblem_modeling_lines(result_registry, model))
 
     lines.extend(["", "## 必要计算结果", ""])
-    lines.extend(_calculation_context_lines(model, parameter_registry))
+    lines.extend(_calculation_context_lines(result_registry, parameter_registry))
     for result in result_registry.get("verified_results", []):
         if not isinstance(result, dict):
             continue
@@ -362,6 +333,11 @@ def render_verified_guidance(
 
     lines.extend(["", "## 图片解读", ""])
     figures = verification_report.get("artifact_refs", {}).get("figures", [])
+    result_claims = {
+        str(result.get("id") or ""): _guidance_text(result.get("claim_text"))
+        for result in result_registry.get("verified_results", [])
+        if isinstance(result, dict)
+    }
     for figure in figures if isinstance(figures, list) else []:
         if not isinstance(figure, dict):
             continue
@@ -371,10 +347,15 @@ def render_verified_guidance(
         result_ids = ", ".join(
             f"`{_cell(item)}`" for item in figure.get("linked_result_ids", [])
         )
+        linked_claims = "；".join(
+            result_claims.get(str(item), "")
+            for item in figure.get("linked_result_ids", [])
+            if result_claims.get(str(item), "")
+        )
         lines.append(f"![{role}]({path})")
         lines.append(
             f"- 图片 `{path}`；用途 `{role}`；来源数据：{sources}；绑定结果：{result_ids}。"
-            "解释：该图用于展示数据、模型或复核诊断与登记结果之间的一致性，支撑读者判断对应结果是否可追踪。"
+            f"解释：本图直接支撑已登记结论：{linked_claims or '对应结果的模型与数据关系'}。"
             "局限：图形贴合只说明登记证据在当前模型口径下自洽，不能单独证明不可观测变量被唯一恢复，也不等于真实机理已被证明。"
         )
 
@@ -628,34 +609,25 @@ def _guidance_notes(result_registry: dict[str, Any]) -> list[str]:
 
 
 def _calculation_context_lines(
-    model: dict[str, Any],
+    result_registry: dict[str, Any],
     parameter_registry: dict[str, Any],
 ) -> list[str]:
     lines: list[str] = []
 
     equations: list[str] = []
     solvers: list[str] = []
-    subproblems = model.get("subproblem_models", [])
-    if isinstance(subproblems, list):
-        for subproblem in subproblems:
-            if not isinstance(subproblem, dict):
-                continue
-            for equation in subproblem.get("equations", []):
-                text = _guidance_text(equation).strip()
-                if text and text not in equations:
-                    equations.append(text)
-            method = _guidance_text(subproblem.get("selected_method")).strip()
-            if method and method != "待确认" and method not in solvers:
-                solvers.append(method)
-            for step in subproblem.get("solve_steps", []):
-                text = _guidance_text(step).strip()
-                if text and text not in solvers:
-                    solvers.append(text)
+    for analysis in _identifiability_analysis(result_registry):
+        equation = _guidance_text(analysis.get("equation")).strip()
+        if equation and equation != "待确认" and equation not in equations:
+            equations.append(equation)
+        selection_rule = _guidance_text(analysis.get("selection_rule")).strip()
+        if selection_rule and selection_rule != "待确认" and selection_rule not in solvers:
+            solvers.append(selection_rule)
 
     if equations:
         lines.append("- 公式/模型方程：" + "；".join(f"`{equation}`" for equation in equations[:5]))
     else:
-        lines.append("- 公式/模型方程：以分问题建模步骤和 approved_model_spec.json 登记的方程为准。")
+        lines.append("- 公式/模型方程：当前结果注册表未登记已执行模型，不能引用候选公式。")
 
     parameter_refs = _calculation_parameter_refs(parameter_registry)
     if parameter_refs:
@@ -666,7 +638,7 @@ def _calculation_context_lines(
     if solvers:
         lines.append("- 求解/拟合方法：" + "；".join(solvers[:6]))
     else:
-        lines.append("- 求解/拟合方法：以 approved_model_spec.json 和 solve.py 中登记的求解步骤为准。")
+        lines.append("- 求解/拟合方法：当前结果注册表未登记已执行求解规则。")
     return lines
 
 
@@ -820,6 +792,111 @@ def _identifiability_analysis(result_registry: dict[str, Any]) -> list[dict[str,
         if isinstance(analysis, list):
             return [item for item in analysis if isinstance(item, dict)]
     return []
+
+
+def _registered_subproblem_modeling_lines(
+    result_registry: dict[str, Any],
+    model: dict[str, Any],
+) -> list[str]:
+    analyses = _identifiability_analysis(result_registry)
+    answer_tables = _final_answer_tables(result_registry)
+    lines: list[str] = []
+    if analyses:
+        for analysis in analyses:
+            subproblem_id = str(analysis.get("subproblem_id") or "unknown")
+            lines.extend([
+                f"### 子问题 {_cell(subproblem_id)}",
+                "",
+                f"- 目标：{_guidance_text(analysis.get('guidance'))}",
+                f"- 已执行模型/公式：`{_guidance_text(analysis.get('equation'))}`",
+                f"- 参数或未知量：{_guidance_text(analysis.get('unknowns'))}",
+                f"- 观测输入：{_guidance_text(analysis.get('observed'))}",
+                f"- 约束与秩条件：{_guidance_text(analysis.get('rank_condition'))}",
+                f"- 缺失信息/适用边界：{_guidance_text(analysis.get('missing_information'))}",
+                "- 求解步骤 1：按已登记观测构建设计矩阵并拟合上述模型。",
+                f"- 求解步骤 2：{_guidance_text(analysis.get('selection_rule'))}",
+                f"- 唯一性结论：{_guidance_text(analysis.get('conclusion'))}",
+            ])
+            for row in _matching_final_answer_rows(answer_tables, subproblem_id):
+                lines.append(
+                    "- 已登记输出：{item}；答案：{answer}；状态：{status}；证据：{evidence}。".format(
+                        item=_guidance_text(row.get("answer_item")),
+                        answer=_guidance_text(row.get("answer") or row.get("blocked_reason")),
+                        status=_cell(row.get("status")),
+                        evidence=_cell(_join_claim_items(row.get("evidence_ids"))),
+                    )
+                )
+            lines.append("")
+
+        for subproblem in model.get("subproblem_models", []):
+            if isinstance(subproblem, dict) and subproblem.get("execution_status") == "blocked":
+                lines.extend(_blocked_subproblem_modeling_lines(subproblem))
+        return lines
+
+    for subproblem in model.get("subproblem_models", []):
+        if not isinstance(subproblem, dict):
+            continue
+        if subproblem.get("execution_status") == "blocked":
+            lines.extend(_blocked_subproblem_modeling_lines(subproblem))
+            continue
+        lines.extend([
+            f"### 子问题 {_cell(subproblem.get('subproblem_id'))}",
+            "",
+            f"- 目标：{_guidance_text(subproblem.get('objective'))}",
+            f"- 方法：{_guidance_text(subproblem.get('selected_method'))}",
+            f"- 选择理由：{_guidance_text(subproblem.get('rationale'))}",
+        ])
+        for equation in subproblem.get("equations", []):
+            lines.append(f"- 公式：`{_guidance_text(equation)}`")
+        for parameter in subproblem.get("parameters", []):
+            if isinstance(parameter, dict):
+                lines.append(
+                    f"- 参数 `{_cell(parameter.get('symbol'))}`："
+                    f"{_guidance_text(parameter.get('meaning'))}。"
+                )
+        for constraint in subproblem.get("constraints", []):
+            lines.append(f"- 约束：{_guidance_text(constraint)}")
+        for index, step in enumerate(subproblem.get("solve_steps", []), start=1):
+            lines.append(f"- 求解步骤 {index}：{_guidance_text(step)}")
+        for result in subproblem.get("expected_results", []):
+            lines.append(f"- 预期结果：{_guidance_text(result)}")
+        lines.append("")
+    return lines
+
+
+def _matching_final_answer_rows(
+    answer_tables: list[dict[str, Any]],
+    analysis_id: str,
+) -> list[dict[str, Any]]:
+    base_id = analysis_id.split("-", 1)[0]
+    rows: list[dict[str, Any]] = []
+    for table in answer_tables:
+        table_rows = table.get("rows", [])
+        if not isinstance(table_rows, list):
+            continue
+        for row in table_rows:
+            if not isinstance(row, dict):
+                continue
+            row_id = str(row.get("subproblem_id") or "")
+            if row_id == analysis_id or row_id == base_id:
+                rows.append(row)
+    return rows
+
+
+def _blocked_subproblem_modeling_lines(subproblem: dict[str, Any]) -> list[str]:
+    lines = [
+        f"### 子问题 {_cell(subproblem.get('subproblem_id'))}",
+        "",
+        f"- 目标：{_guidance_text(subproblem.get('objective'))}",
+        "- 执行状态：`blocked`，不生成公式、参数或数值。",
+        f"- 阻断原因：{_guidance_text(subproblem.get('blocking_reason'))}",
+        f"- 缺失输入：{_guidance_text(_join_claim_items(subproblem.get('missing_inputs')))}",
+        f"- 恢复动作：{_guidance_text(subproblem.get('recovery_action'))}",
+    ]
+    for result in subproblem.get("expected_results", []):
+        lines.append(f"- 恢复后预期输出：{_guidance_text(result)}")
+    lines.append("")
+    return lines
 
 
 def _final_answer_tables(result_registry: dict[str, Any]) -> list[dict[str, Any]]:

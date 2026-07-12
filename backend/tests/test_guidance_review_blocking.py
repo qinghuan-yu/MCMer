@@ -13,13 +13,14 @@ class FixtureDecomposer:
 
 
 class UnchangedInvalidModeler:
-    async def model(self, *, problem_spec, task: dict, work_dir: Path):
+    async def model(self, *, problem_spec, data_profile, task: dict, work_dir: Path):
         from app.guidance.contracts import ModelSpec
 
         return ModelSpec(
             model_id="invalid-model",
             selected_method="candidate model under review",
             subproblem_models=[{
+                "execution_status": "solvable",
                 "subproblem_id": "problem_1",
                 "objective": "Fit the candidate model.",
                 "selected_method": "candidate model under review",
@@ -47,6 +48,7 @@ class UnchangedInvalidModeler:
         problem_spec,
         previous_model,
         review,
+        data_profile,
         task: dict,
         work_dir: Path,
     ):

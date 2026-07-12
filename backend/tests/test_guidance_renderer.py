@@ -118,3 +118,96 @@ def test_renderer_preserves_canonical_reader_decision_topics() -> None:
     assert "推荐路线与排除路线" in markdown
     assert "最终答案、证据与写作动作" in markdown
     assert "数据/证据、假设/先验、候选/代表解来源分层" in markdown
+
+
+def test_renderer_uses_registered_execution_model_instead_of_stale_candidate_model() -> None:
+    markdown = render_verified_guidance(
+        approved_model={
+            "approved_model": {
+                "subproblem_models": [{
+                    "execution_status": "solvable",
+                    "subproblem_id": "1.2",
+                    "objective": "detect a breakpoint",
+                    "selected_method": "CUSUM candidate",
+                    "rationale": "candidate only",
+                    "equations": ["stale power-law formula"],
+                    "parameters": [],
+                    "constraints": [],
+                    "solve_steps": ["run unexecuted CUSUM"],
+                    "expected_results": ["candidate"],
+                }],
+            },
+        },
+        verification_report={"status": "verified", "artifact_refs": {"figures": []}},
+        parameter_registry={"parameters": []},
+        result_registry={
+            "verified_results": [{
+                "id": "result_breakpoint",
+                "claim_text": "BIC supports the registered hinge model.",
+                "metrics": {"rmse": 1.0, "max_abs_residual": 2.0},
+            }],
+            "blocked_results": [],
+            "summary": {
+                "identifiability_analysis": [{
+                    "subproblem_id": "1.2-rock",
+                    "observed": "five force series by torque",
+                    "unknowns": "common Tc and hinge coefficients",
+                    "equation": "P_j=a_j+b_j*T+c_j*max(0,T-Tc)",
+                    "rank_condition": "fixed-Tc design matrix has full rank",
+                    "conclusion": "Tc is a criterion-dependent candidate",
+                    "missing_information": "denser observations near the transition",
+                    "selection_rule": "select by BIC improvement over a single line",
+                    "guidance": "report the candidate interval and evidence ID",
+                }],
+                "final_answer_tables": [{
+                    "id": "answer_1_2",
+                    "title": "breakpoint answer",
+                    "rows": [{
+                        "subproblem_id": "1.2",
+                        "answer_item": "rock breakpoint",
+                        "answer": "registered candidate interval",
+                        "status": "chosen_under_prior",
+                        "evidence_ids": ["result_breakpoint"],
+                    }],
+                    "notes": [],
+                }],
+            },
+        },
+    )
+
+    section = markdown.split("## 分问题建模步骤", 1)[1].split("## 必要计算结果", 1)[0]
+    assert "P_j=a_j+b_j*T+c_j*max(0,T-Tc)" in section
+    assert "select by BIC improvement" in section
+    assert "result_breakpoint" in section
+    assert "stale power-law formula" not in section
+    assert "unexecuted CUSUM" not in section
+    assert "stale power-law formula" not in markdown
+    assert "unexecuted CUSUM" not in markdown
+
+
+def test_renderer_explains_figure_with_bound_result_claim() -> None:
+    markdown = render_verified_guidance(
+        approved_model={"approved_model": {"subproblem_models": []}},
+        verification_report={
+            "status": "verified",
+            "artifact_refs": {"figures": [{
+                "path": "figures/bic.png",
+                "role": "verification_diagnostic",
+                "source_data": ["data/attachment.xlsx"],
+                "linked_result_ids": ["result_rock_breakpoint"],
+            }]},
+        },
+        parameter_registry={"parameters": []},
+        result_registry={
+            "verified_results": [{
+                "id": "result_rock_breakpoint",
+                "claim_text": "岩石折线 BIC 明显低于单一直线，支持判据下候选区间。",
+                "metrics": {"rmse": 1.0, "max_abs_residual": 2.0},
+            }],
+            "blocked_results": [],
+            "summary": {},
+        },
+    )
+
+    figure_section = markdown.split("## 图片解读", 1)[1].split("## 复核与稳健性", 1)[0]
+    assert "岩石折线 BIC 明显低于单一直线" in figure_section

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import csv
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -50,6 +51,7 @@ class Modeler(Protocol):
         self,
         *,
         problem_spec: ProblemSpec,
+        data_profile: dict,
         task: dict,
         work_dir: Path,
     ) -> RevisedModelSpec: ...
@@ -60,6 +62,7 @@ class Modeler(Protocol):
         problem_spec: ProblemSpec,
         previous_model: ModelSpec,
         review: ModelReview,
+        data_profile: dict,
         task: dict,
         work_dir: Path,
     ) -> ModelSpec: ...
@@ -100,10 +103,17 @@ class DecompositionStage:
         output_path: Path,
     ) -> Path:
         root = output_path.parent
+        question = str(task.get("source_question") or task.get("question") or "").strip()
+        data_files = _list_data_files(root)
         problem_spec = await self.decomposer.decompose(
-            question=str(task.get("source_question") or task.get("question") or "").strip(),
-            data_files=_list_data_files(root),
+            question=question,
+            data_files=data_files,
             task=task,
+        )
+        problem_spec = _reconcile_source_requirements(
+            problem_spec,
+            question=question,
+            available_files=data_files,
         )
         _write_model(output_path, problem_spec)
         return output_path
@@ -122,10 +132,16 @@ class ModelingStage:
         output_path: Path,
     ) -> Path:
         source_path = _required_input(input_path)
+        data_profile = _build_data_profile(output_path.parent)
+        (output_path.parent / "data_profile.json").write_text(
+            json.dumps(data_profile, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         if source_path.name == "problem_spec.json":
             problem_spec = ProblemSpec.model_validate_json(source_path.read_text(encoding="utf-8"))
             model_spec = await self.modeler.model(
                 problem_spec=problem_spec,
+                data_profile=data_profile,
                 task=task,
                 work_dir=output_path.parent,
             )
@@ -141,6 +157,7 @@ class ModelingStage:
                 problem_spec=problem_spec,
                 previous_model=previous_model,
                 review=review,
+                data_profile=data_profile,
                 task=task,
                 work_dir=output_path.parent,
             )
@@ -525,6 +542,92 @@ def _list_data_files(root: Path) -> list[str]:
     return sorted(path.relative_to(root).as_posix() for path in data_dir.rglob("*") if path.is_file())
 
 
+def _reconcile_source_requirements(
+    problem_spec: ProblemSpec,
+    *,
+    question: str,
+    available_files: list[str],
+) -> ProblemSpec:
+    references = list(
+        dict.fromkeys(
+            re.sub(r"\s+", "", match.group(0))
+            for match in re.finditer(r"(?i)(?:附录\s*\d+|appendix\s*[a-z0-9]+)", question)
+        )
+    )
+    requirements = []
+    missing_references: list[str] = []
+    for reference in references:
+        normalized_reference = re.sub(r"\s+", "", reference).casefold()
+        matched_files = [
+            path
+            for path in available_files
+            if normalized_reference in re.sub(r"\s+", "", Path(path).stem).casefold()
+        ]
+        embedded_heading = bool(
+            re.search(
+                rf"(?im)^\s*{re.escape(reference)}\s*(?:[:：]|$)",
+                question,
+            )
+        )
+        status = "available" if matched_files or embedded_heading else "missing"
+        if status == "missing":
+            missing_references.append(reference)
+        requirements.append(
+            {
+                "reference": reference,
+                "status": status,
+                "matched_files": matched_files,
+                "note": (
+                    "Matched an uploaded file or an embedded appendix heading."
+                    if status == "available"
+                    else "Referenced by the problem statement but absent from uploaded files."
+                ),
+            }
+        )
+
+    locked_facts = [
+        fact
+        for fact in problem_spec.locked_facts
+        if not any(reference in fact for reference in missing_references)
+    ]
+    data_sources = [
+        _remove_missing_source_claims(source, missing_references)
+        for source in problem_spec.data_sources
+    ]
+    uncertainties = list(problem_spec.uncertainties)
+    for reference in missing_references:
+        message = f"{reference}在题面中被引用但未上传；依赖该来源的子问题必须标记 blocked。"
+        if message not in uncertainties:
+            uncertainties.append(message)
+    return ProblemSpec.model_validate(
+        {
+            **problem_spec.model_dump(mode="json"),
+            "data_sources": data_sources,
+            "source_requirements": requirements,
+            "locked_facts": locked_facts,
+            "uncertainties": uncertainties,
+        }
+    )
+
+
+def _remove_missing_source_claims(source: dict, missing_references: list[str]) -> dict:
+    cleaned: dict = {}
+    for key, value in source.items():
+        if isinstance(value, str):
+            if not any(reference in value for reference in missing_references):
+                cleaned[key] = value
+        elif isinstance(value, list):
+            cleaned[key] = [
+                item
+                for item in value
+                if not isinstance(item, str)
+                or not any(reference in item for reference in missing_references)
+            ]
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
 def _build_data_profile(root: Path) -> dict:
     files: list[dict] = []
     for path in (root / "data").rglob("*") if (root / "data").is_dir() else []:
@@ -547,30 +650,77 @@ def _build_data_profile(root: Path) -> dict:
 def _profile_workbook(path: Path) -> dict:
     from openpyxl import load_workbook
 
-    workbook = load_workbook(path, read_only=True, data_only=True)
+    workbook = load_workbook(path, read_only=False, data_only=True)
     try:
         sheets: list[dict] = []
         for sheet in workbook.worksheets:
-            rows = list(
-                sheet.iter_rows(
-                    min_row=1,
-                    max_row=min(sheet.max_row or 0, 6),
-                    values_only=True,
+            effective_max_column = max(
+                (
+                    cell.column
+                    for row in sheet.iter_rows()
+                    for cell in row
+                    if cell.value is not None
+                ),
+                default=0,
+            )
+            sampled_rows = [
+                (row_number, list(values))
+                for row_number, values in enumerate(
+                    sheet.iter_rows(
+                        min_row=1,
+                        max_row=min(sheet.max_row or 0, 6),
+                        max_col=effective_max_column,
+                        values_only=True,
+                    ),
+                    start=1,
+                )
+                if any(value is not None for value in values)
+            ]
+            header_row = sampled_rows[0][0] if sampled_rows else 0
+            header_values = sampled_rows[0][1] if sampled_rows else []
+            columns = [str(value) for value in header_values]
+            merged_ranges = [
+                merged
+                for merged in sheet.merged_cells.ranges
+                if merged.min_col <= effective_max_column
+            ]
+            vertical_group_ranges = [
+                merged
+                for merged in merged_ranges
+                if merged.min_col == merged.max_col
+                and merged.max_row > merged.min_row
+                and merged.min_row > header_row
+                and sheet.cell(merged.min_row, merged.min_col).value is not None
+            ]
+            forward_fill_columns = list(
+                dict.fromkeys(
+                    columns[merged.min_col - 1]
+                    for merged in vertical_group_ranges
+                    if merged.min_col <= len(columns)
                 )
             )
-            non_empty_rows = [
-                [_json_safe_cell(value) for value in row]
-                for row in rows
-                if any(value is not None for value in row)
-            ]
-            columns = [str(value) for value in non_empty_rows[0]] if non_empty_rows else []
+            sample_rows: list[list] = []
+            for row_number, raw_values in sampled_rows[1:5]:
+                values = list(raw_values)
+                for merged in vertical_group_ranges:
+                    column_index = merged.min_col - 1
+                    if merged.min_row <= row_number <= merged.max_row and values[column_index] is None:
+                        values[column_index] = sheet.cell(merged.min_row, merged.min_col).value
+                sample_rows.append([_json_safe_cell(value) for value in values])
             sheets.append(
                 {
                     "name": sheet.title,
                     "max_row": sheet.max_row,
                     "max_column": sheet.max_column,
+                    "effective_max_column": effective_max_column,
+                    "ignored_trailing_empty_columns": max(
+                        (sheet.max_column or 0) - effective_max_column,
+                        0,
+                    ),
                     "columns": columns,
-                    "sample_rows": non_empty_rows[1:5],
+                    "merged_ranges": [str(merged) for merged in merged_ranges],
+                    "forward_fill_columns": forward_fill_columns,
+                    "sample_rows": sample_rows,
                 }
             )
         return {"sheets": sheets}
@@ -672,10 +822,7 @@ def _enforce_verified_guidance_evidence(
         issues.append("verified guidance evidence missing: subproblem modeling details")
     else:
         for subproblem in subproblems:
-            if not isinstance(subproblem, dict) or not all(
-                isinstance(subproblem.get(field), list) and subproblem[field]
-                for field in ("equations", "parameters", "solve_steps")
-            ):
+            if not _has_complete_subproblem_guidance_details(subproblem):
                 issues.append("verified guidance evidence incomplete: subproblem modeling details")
                 break
 
@@ -687,6 +834,25 @@ def _enforce_verified_guidance_evidence(
             "blocking_issues": [*report.blocking_issues, *issues],
         }
     )
+
+
+def _has_complete_subproblem_guidance_details(subproblem: object) -> bool:
+    if not isinstance(subproblem, dict):
+        return False
+    execution_status = subproblem.get("execution_status")
+    if execution_status == "solvable":
+        return all(
+            isinstance(subproblem.get(field), list) and bool(subproblem[field])
+            for field in ("equations", "parameters", "solve_steps")
+        )
+    if execution_status == "blocked":
+        return (
+            bool(str(subproblem.get("blocking_reason") or "").strip())
+            and isinstance(subproblem.get("missing_inputs"), list)
+            and bool(subproblem["missing_inputs"])
+            and bool(str(subproblem.get("recovery_action") or "").strip())
+        )
+    return False
 
 
 _FIGURE_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".webp"}

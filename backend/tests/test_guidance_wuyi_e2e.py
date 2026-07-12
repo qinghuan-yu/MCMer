@@ -26,7 +26,7 @@ class WuyiProblemOneDecomposer:
 
 
 class WuyiProblemOneModeler:
-    async def model(self, *, problem_spec, task: dict, work_dir: Path):
+    async def model(self, *, problem_spec, data_profile, task: dict, work_dir: Path):
         from app.guidance.contracts import ModelSpec
 
         return ModelSpec(
@@ -49,6 +49,7 @@ class WuyiProblemOneModeler:
                 {"symbol": "q_2", "meaning": "branch 2 flow"},
             ],
             subproblem_models=[{
+                "execution_status": "solvable",
                 "subproblem_id": "problem_1",
                 "objective": "Infer branch 1 and branch 2 flow functions.",
                 "selected_method": "continuous piecewise least squares",
@@ -123,9 +124,10 @@ class WuyiProblemOneReviewer:
 
 
 class WuyiRevisionModeler(WuyiProblemOneModeler):
-    async def model(self, *, problem_spec, task: dict, work_dir: Path):
+    async def model(self, *, problem_spec, data_profile, task: dict, work_dir: Path):
         model = await super().model(
             problem_spec=problem_spec,
+            data_profile=data_profile,
             task=task,
             work_dir=work_dir,
         )
@@ -142,6 +144,7 @@ class WuyiRevisionModeler(WuyiProblemOneModeler):
         problem_spec,
         previous_model,
         review,
+        data_profile,
         task: dict,
         work_dir: Path,
     ):
@@ -149,6 +152,7 @@ class WuyiRevisionModeler(WuyiProblemOneModeler):
 
         revised = await WuyiProblemOneModeler().model(
             problem_spec=problem_spec,
+            data_profile=data_profile,
             task=task,
             work_dir=work_dir,
         )
@@ -472,7 +476,7 @@ class ProductMixOptimizationDecomposer:
 
 
 class ProductMixOptimizationModeler:
-    async def model(self, *, problem_spec, task: dict, work_dir: Path):
+    async def model(self, *, problem_spec, data_profile, task: dict, work_dir: Path):
         from app.guidance.contracts import ModelSpec
 
         return ModelSpec(
@@ -500,6 +504,7 @@ class ProductMixOptimizationModeler:
                 {"symbol": "P", "meaning": "total profit"},
             ],
             subproblem_models=[{
+                "execution_status": "solvable",
                 "subproblem_id": "problem_1",
                 "objective": "Maximize total profit under resource and demand limits.",
                 "selected_method": "linear programming",
@@ -878,7 +883,7 @@ class DemandForecastDecomposer:
 
 
 class DemandForecastModeler:
-    async def model(self, *, problem_spec, task: dict, work_dir: Path):
+    async def model(self, *, problem_spec, data_profile, task: dict, work_dir: Path):
         from app.guidance.contracts import ModelSpec
 
         return ModelSpec(
@@ -906,6 +911,7 @@ class DemandForecastModeler:
                 {"symbol": "F_9", "meaning": "forecast demand for period 9"},
             ],
             subproblem_models=[{
+                "execution_status": "solvable",
                 "subproblem_id": "problem_1",
                 "objective": "Estimate a trend and forecast one period beyond the uploaded data.",
                 "selected_method": "linear trend forecast",

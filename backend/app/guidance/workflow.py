@@ -10,9 +10,9 @@ from app.guidance.agents import (
     LLMModeler,
     LLMModelReviewer,
     LLMProblemDecomposer,
-    LLMProgramGenerator,
 )
 from app.guidance.execution import LocalProgramExecutor
+from app.guidance.program_templates import TemplateProgramGenerator
 from app.guidance.pipeline import GuidancePipeline
 from app.guidance.stages import (
     CalculationStage,
@@ -48,18 +48,12 @@ def build_default_guidance_pipeline(workflow_mode: str = "standard") -> Guidance
         max_tokens=8192,
         request_timeout=budget.llm_timeout,
     )
-    coder_llm = LLM(
-        model=config_manager.get_effective_model("CODER_MODEL"),
-        temperature=0.1,
-        max_tokens=16384,
-        request_timeout=budget.llm_timeout,
-    )
     return GuidancePipeline(
         decomposition_stage=DecompositionStage(decomposer=LLMProblemDecomposer(decomposition_llm)),
         modeling_stage=ModelingStage(modeler=LLMModeler(modeling_llm)),
         model_review_stage=ModelReviewStage(reviewer=LLMModelReviewer(review_llm)),
         calculation_stage=CalculationStage(
-            program_generator=LLMProgramGenerator(coder_llm),
+            program_generator=TemplateProgramGenerator(),
             executor=LocalProgramExecutor(),
         ),
         result_verification_stage=ResultVerificationStage(),

@@ -397,9 +397,9 @@ def test_default_guidance_pipeline_applies_standard_llm_timeout_budget() -> None
         pipeline._stages["decomposition"].decomposer.llm,
         pipeline._stages["modeling"].modeler.llm,
         pipeline._stages["model_review"].reviewer.llm,
-        pipeline._stages["calculation"].program_generator.llm,
     ]
     assert {llm.request_timeout for llm in llms} == {120}
+    assert not hasattr(pipeline._stages["calculation"].program_generator, "llm")
 
 
 def test_guidance_package_does_not_depend_on_legacy_workflow() -> None:

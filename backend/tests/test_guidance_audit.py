@@ -1350,6 +1350,32 @@ def test_guidance_audit_ignores_decimal_section_numbers() -> None:
     assert report["blocks"] == []
 
 
+def test_guidance_audit_ignores_subproblem_ids_in_headings_and_table_keys() -> None:
+    report = build_guidance_audit_report(
+        guidance_markdown=(
+            "# 建模指导方案\n\n"
+            "## 参数与来源表\n\n"
+            "| 参数 | 来源 |\n| --- | --- |\n| alpha = 0.12 | param_alpha |\n\n"
+            "### 子问题 1.2\n\n"
+            "| 题号 | 结论 |\n| --- | --- |\n"
+            "| 1.2-rock | candidate |\n| 2.1 | blocked |\n| 2.2 | blocked |\n| 3.2 | blocked |\n"
+        ),
+        guidance_context={"required_sections": ["参数与来源表"]},
+        result_registry={"verified_results": [], "blocked_results": []},
+        parameter_registry={
+            "parameters": [{
+                "id": "param_alpha",
+                "symbol": "alpha",
+                "value": 0.12,
+                "trust_status": "source_locked",
+            }],
+        },
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocks"] == []
+
+
 def test_guidance_audit_accepts_numbers_from_disclosed_blocked_results() -> None:
     report = build_guidance_audit_report(
         guidance_markdown=(

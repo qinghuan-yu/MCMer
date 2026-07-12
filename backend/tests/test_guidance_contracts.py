@@ -2,6 +2,56 @@ import pytest
 from pydantic import ValidationError
 
 
+def test_model_spec_accepts_explicit_partial_solvability_without_fake_model_fields() -> None:
+    from app.guidance.contracts import ModelSpec
+
+    model_spec = ModelSpec.model_validate(
+        {
+            "model_id": "partial-input-model",
+            "selected_method": "fit available experiments and disclose missing inputs",
+            "subproblem_models": [
+                {
+                    "execution_status": "solvable",
+                    "subproblem_id": "problem1",
+                    "objective": "Fit the available standard experiment data.",
+                    "selected_method": "constrained regression",
+                    "rationale": "The workbook contains the required observations.",
+                    "equations": ["y = X theta"],
+                    "parameters": [
+                        {
+                            "parameter_id": "theta_1",
+                            "symbol": "theta_1",
+                            "meaning": "regression coefficient",
+                            "unit": "dimensionless",
+                            "source_type": "estimated",
+                            "source_detail": "data/A-attachment.xlsx",
+                            "estimation_method": "least squares",
+                            "constraints": ["finite"],
+                        }
+                    ],
+                    "constraints": ["design matrix rank is checked"],
+                    "solve_steps": ["Read the available sheet.", "Fit and verify the model."],
+                    "expected_results": ["fitted coefficient and residual metrics"],
+                },
+                {
+                    "execution_status": "blocked",
+                    "subproblem_id": "problem2",
+                    "objective": "Compute the cutter-head loads.",
+                    "blocking_reason": "The statement references Appendix 2, but it was not uploaded.",
+                    "missing_inputs": ["Appendix 2 cutter-head geometry and load parameters"],
+                    "recovery_action": "Upload Appendix 2 and rerun modeling.",
+                    "expected_results": ["blocked final-answer row with the missing-input reason"],
+                },
+            ],
+        }
+    )
+
+    assert model_spec.coverage_status == "partial"
+    assert model_spec.subproblem_models[0].execution_status == "solvable"
+    assert model_spec.subproblem_models[1].execution_status == "blocked"
+    assert not hasattr(model_spec.subproblem_models[1], "equations")
+
+
 def test_model_spec_rejects_llm_owned_execution_outputs() -> None:
     from app.guidance.contracts import ModelSpec
 
@@ -28,6 +78,7 @@ def test_execution_required_outputs_excludes_planned_figures() -> None:
         ],
         subproblem_models=[
             {
+                "execution_status": "solvable",
                 "subproblem_id": "problem1",
                 "objective": "Model task 1.",
                 "selected_method": "structured modeling",
@@ -181,6 +232,7 @@ def test_problem_spec_assigns_stable_ids_to_blank_subproblems_for_coverage() -> 
         ],
         subproblem_models=[
             {
+                "execution_status": "solvable",
                 "subproblem_id": f"problem{index}",
                 "objective": f"Model task {index}.",
                 "selected_method": "structured modeling",
@@ -257,6 +309,7 @@ def test_model_spec_canonicalizes_numeric_subproblem_ids_for_coverage() -> None:
         ],
         subproblem_models=[
             {
+                "execution_status": "solvable",
                 "subproblem_id": str(index),
                 "objective": f"Model task {index}.",
                 "selected_method": "structured modeling",
@@ -314,6 +367,7 @@ def test_model_spec_canonicalizes_prefixed_subproblem_ids_for_coverage() -> None
         ],
         subproblem_models=[
             {
+                "execution_status": "solvable",
                 "subproblem_id": f"P{index}",
                 "objective": f"Model task {index}.",
                 "selected_method": "structured modeling",

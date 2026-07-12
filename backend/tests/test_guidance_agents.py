@@ -118,6 +118,7 @@ def test_modeler_regenerates_after_schema_validation_error(tmp_path) -> None:
                 "model_id": "traffic-flow",
                 "selected_method": "constrained least squares",
                 "subproblem_models": [{
+                    "execution_status": "solvable",
                     "subproblem_id": "problem_1",
                     "objective": "Estimate branch flows.",
                     "selected_method": "constrained least squares",
@@ -170,6 +171,7 @@ def test_modeler_sends_compact_problem_payload_to_avoid_real_prompt_timeout(tmp_
             "model_id": "traffic-flow",
             "selected_method": "constrained piecewise regression",
             "subproblem_models": [{
+                "execution_status": "solvable",
                 "subproblem_id": "problem1",
                 "objective": "Estimate two branch flow functions.",
                 "selected_method": "constrained piecewise regression",
@@ -204,9 +206,10 @@ def test_modeler_sends_compact_problem_payload_to_avoid_real_prompt_timeout(tmp_
         modeler.model(
             problem_spec=ProblemSpec(
                 task_summary=long_question,
-                subproblems=[{
-                    "id": "problem1",
-                    "description": "Y-shaped road branch decomposition.",
+                    subproblems=[{
+                        "id": "problem1",
+                        "subproblem_id": "1.1",
+                        "description": "Y-shaped road branch decomposition.",
                     "goals": ["estimate branch flows", "fill function table"],
                     "inputs": ["Attachment Table 1"],
                     "outputs": ["function expressions"],
@@ -226,6 +229,7 @@ def test_modeler_sends_compact_problem_payload_to_avoid_real_prompt_timeout(tmp_
     assert len(encoded) < 3500
     assert "很长的道路交通背景。" not in encoded
     assert payload["subproblems"][0]["id"] == "problem1"
+    assert payload["subproblems"][0]["subproblem_id"] == "1.1"
     assert payload["subproblems"][0]["goals"] == ["estimate branch flows", "fill function table"]
     assert payload["data_sources"][0]["name"] == "Attachment.xlsx"
 
@@ -239,6 +243,7 @@ def test_modeler_prompt_contains_readable_identifiability_requirements(tmp_path)
             "model_id": "traffic-flow",
             "selected_method": "约束最小二乘",
             "subproblem_models": [{
+                "execution_status": "solvable",
                 "subproblem_id": "problem1",
                 "objective": "推测支路车流量。",
                 "selected_method": "约束最小二乘",
@@ -277,8 +282,13 @@ def test_modeler_prompt_contains_readable_identifiability_requirements(tmp_path)
     assert "你是数学建模方案专家" in prompt
     assert "可辨识性计划" in prompt
     assert "设计矩阵满秩" in prompt
-    assert "每个子问题最多 8 个核心参数" in prompt
+    assert "每个可解子问题最多 8 个核心参数" in prompt
+    assert "coverage_status=partial" in prompt
+    assert "必须使用 blocked" in prompt
     assert "用参数组" in prompt
+    assert "id 字段" in prompt
+    assert "依赖 blocked 子问题" in prompt
+    assert "分别估计并逐组输出" in prompt
     assert "浣犳槸" not in prompt
 
 
@@ -299,6 +309,7 @@ def test_modeler_regenerates_when_subproblem_lists_too_many_parameters(tmp_path)
         "model_id": "traffic-flow",
         "selected_method": "constrained regression",
         "subproblem_models": [{
+            "execution_status": "solvable",
             "subproblem_id": "problem1",
             "objective": "Estimate branch flow functions.",
             "selected_method": "piecewise regression",
@@ -356,6 +367,7 @@ def test_modeler_accepts_chinese_identifiability_plan_keywords(tmp_path) -> None
             "model_id": "traffic-flow",
             "selected_method": "约束最小二乘",
             "subproblem_models": [{
+                "execution_status": "solvable",
                 "subproblem_id": "problem1",
                 "objective": "推测支路车流量。",
                 "selected_method": "约束最小二乘",
@@ -394,6 +406,52 @@ def test_modeler_accepts_chinese_identifiability_plan_keywords(tmp_path) -> None
     assert len(llm.calls) == 1
 
 
+def test_modeler_accepts_identifiability_plan_in_parameter_constraints(tmp_path) -> None:
+    from app.guidance.agents import LLMModeler
+    from app.guidance.contracts import ProblemSpec
+
+    response = {
+        "model_id": "traffic-flow",
+        "selected_method": "约束分段回归",
+        "subproblem_models": [{
+            "execution_status": "solvable",
+            "subproblem_id": "problem1",
+            "objective": "估计临界温度和分段函数。",
+            "selected_method": "约束分段回归",
+            "rationale": "表内观测足以拟合分段关系。",
+            "equations": ["y=f(T; theta)"],
+            "parameters": [{
+                "parameter_id": "theta_problem1",
+                "symbol": "theta_1",
+                "meaning": "分段回归参数组",
+                "unit": "mixed",
+                "source_type": "estimated",
+                "source_detail": "附件表1",
+                "estimation_method": "网格搜索与约束最小二乘",
+                "constraints": ["可辨识性计划：逐个候选断点检查设计矩阵满秩并比较唯一最优值。"],
+            }],
+            "constraints": ["断点两侧至少各有三个样本"],
+            "solve_steps": ["遍历候选断点并最小化残差平方和"],
+            "expected_results": ["临界温度与分段拟合式"],
+        }],
+    }
+    llm = StubLLM([response, response])
+
+    result = asyncio.run(
+        LLMModeler(llm).model(
+            problem_spec=ProblemSpec(
+                task_summary="分析温度阈值。",
+                subproblems=[{"id": "problem1"}],
+            ),
+            task={},
+            work_dir=tmp_path,
+        )
+    )
+
+    assert result.subproblem_models[0].subproblem_id == "problem1"
+    assert len(llm.calls) == 1
+
+
 def test_modeler_regenerates_when_subproblem_lacks_identifiability_plan(tmp_path) -> None:
     from app.guidance.agents import LLMModeler
     from app.guidance.contracts import ProblemSpec
@@ -402,6 +460,7 @@ def test_modeler_regenerates_when_subproblem_lacks_identifiability_plan(tmp_path
         "model_id": "traffic-flow",
         "selected_method": "constrained piecewise regression",
         "subproblem_models": [{
+            "execution_status": "solvable",
             "subproblem_id": "problem1",
             "objective": "Estimate branch flow functions.",
             "selected_method": "piecewise regression",
@@ -471,6 +530,7 @@ def test_model_reviewer_receives_problem_and_model_contracts(tmp_path) -> None:
                 model_id="traffic-flow",
                 selected_method="least squares",
                 subproblem_models=[{
+                    "execution_status": "solvable",
                     "subproblem_id": "problem_1",
                     "objective": "Estimate branch flows.",
                     "selected_method": "least squares",
@@ -587,327 +647,10 @@ def test_contract_request_enforces_one_outer_timeout_budget(tmp_path) -> None:
     assert diagnostic["attempts"][0]["error_type"] == "RuntimeError"
 
 
-def test_program_generator_prompts_for_typed_registries_and_verification_metrics(tmp_path) -> None:
-    from app.guidance.agents import LLMProgramGenerator
-    from app.guidance.contracts import ApprovedModelSpec
-
-    llm = StubLLM(
-        {
-            "language": "python",
-            "entrypoint": "solve.py",
-            "source_code": "from pathlib import Path\nPath('solver_results.json').write_text('{}')\n",
-            "declared_outputs": [
-                "solver_results.json",
-                "parameter_registry.json",
-                "result_registry.json",
-                "figure_registry.json",
-            ],
-        }
-    )
-    generator = LLMProgramGenerator(llm)
-    approved_model = ApprovedModelSpec(
-        review_status="approved",
-        model_id="typed-artifacts",
-        required_outputs=[
-            "solver_results.json",
-            "parameter_registry.json",
-            "result_registry.json",
-            "figure_registry.json",
-        ],
-    )
-
-    asyncio.run(
-        generator.generate(
-            approved_model=approved_model,
-            task={},
-            work_dir=tmp_path,
-            data_profile={},
-        )
-    )
-
-    system_prompt = llm.calls[0]["history"][0]["content"]
-    payload = json.loads(llm.calls[0]["history"][1]["content"])
-    rules = "\n".join(payload["program_generation_rules"])
-    assert "summary 必须是 JSON object" in system_prompt
-    assert "rmse" in system_prompt
-    assert "max_abs_residual" in system_prompt
-    assert "constraint_values 必须是非空数字数组" in system_prompt
-    assert "constraint_values 不能使用 residuals" in system_prompt
-    assert "solver_results.evidence 不允许 kind=blocked" in system_prompt
-    assert "placeholder/not implemented/would need to compute" in system_prompt
-    assert "reader_decision_guide" in system_prompt
-    assert "method_route_comparison" in system_prompt
-    assert "identifiability_analysis" in system_prompt
-    assert "claim_registry" in system_prompt
-    assert "final_answer_tables" in system_prompt
-    assert "topic 必须分别且仅为 problem_context、identifiability、route_choice、final_answers、claim_sources" in system_prompt
-    assert "status 只能是 recommended 或 rejected" in system_prompt
-    assert "每个 row={subproblem_id,answer_item,answer,status,evidence_ids,blocked_reason}" in system_prompt
-    assert "root filenames must be written exactly at the work directory root" in rules
-    assert "Do not prefix root required outputs with output/, outputs/, results/, or result/" in rules
-    assert "Figures may only link to verified_results IDs" in rules
-    assert "If there are no verified_results, figure_registry.figures must be empty" in rules
-    assert "Do not put planned-but-unwritten figures in figure_registry" in rules
-    assert "If a verified result cannot supply typed solver evidence" in rules
-
-
-def test_program_generator_regenerates_when_source_uses_empty_constraint_values(tmp_path) -> None:
-    from app.guidance.agents import LLMProgramGenerator
-    from app.guidance.contracts import ApprovedModelSpec
-
-    llm = StubLLM(
-        [
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": "constraint_values = []\nprint('bad evidence')\n",
-                "declared_outputs": ["solver_results.json"],
-            },
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": "constraint_values = [0.0]\nprint('valid evidence')\n",
-                "declared_outputs": ["solver_results.json"],
-            },
-        ]
-    )
-    generator = LLMProgramGenerator(llm)
-    approved_model = ApprovedModelSpec(
-        review_status="approved",
-        model_id="semantic-program-validation",
-        required_outputs=["solver_results.json"],
-    )
-
-    result = asyncio.run(
-        generator.generate(
-            approved_model=approved_model,
-            task={},
-            work_dir=tmp_path,
-            data_profile={},
-        )
-    )
-
-    assert "valid evidence" in result.source_code
-    assert len(llm.calls) == 2
-    assert "UnsafeGeneratedProgramError" in llm.calls[1]["history"][1]["content"]
-    assert "constraint_values" in llm.calls[1]["history"][1]["content"]
-
-
-def test_program_generator_regenerates_when_constraint_values_reuse_residuals(tmp_path) -> None:
-    from app.guidance.agents import LLMProgramGenerator
-    from app.guidance.contracts import ApprovedModelSpec
-
-    llm = StubLLM(
-        [
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": (
-                    "residuals = [1.0, -2.0]\n"
-                    "solver_results = {'evidence': [{'kind': 'regression', "
-                    "'subproblem_id': 'problem1', 'result_id': 'result1', "
-                    "'observed': [3.0, 4.0], 'predicted': [2.0, 6.0], "
-                    "'residuals': residuals, 'constraint_values': residuals, "
-                    "'parameter_stability': {'method': 'loo', 'max_relative_change': 0.0, "
-                    "'threshold': 0.1}}]}\n"
-                ),
-                "declared_outputs": ["solver_results.json"],
-            },
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": (
-                    "constraint_margins = [3.0, 4.0]\n"
-                    "solver_results = {'evidence': [{'kind': 'regression', "
-                    "'subproblem_id': 'problem1', 'result_id': 'result1', "
-                    "'observed': [3.0, 4.0], 'predicted': [3.0, 4.0], "
-                    "'residuals': [0.0, 0.0], 'constraint_values': constraint_margins, "
-                    "'parameter_stability': {'method': 'loo', 'max_relative_change': 0.0, "
-                    "'threshold': 0.1}}]}\n"
-                ),
-                "declared_outputs": ["solver_results.json"],
-            },
-        ]
-    )
-    generator = LLMProgramGenerator(llm)
-    approved_model = ApprovedModelSpec(
-        review_status="approved",
-        model_id="residual-constraint-values",
-        required_outputs=["solver_results.json"],
-    )
-
-    result = asyncio.run(
-        generator.generate(
-            approved_model=approved_model,
-            task={},
-            work_dir=tmp_path,
-            data_profile={},
-        )
-    )
-
-    assert "'constraint_values': residuals" not in result.source_code
-    assert len(llm.calls) == 2
-    assert "constraint_values" in llm.calls[1]["history"][1]["content"]
-    assert "residual" in llm.calls[1]["history"][1]["content"]
-
-
-def test_program_generator_regenerates_when_regression_evidence_has_empty_series(tmp_path) -> None:
-    from app.guidance.agents import LLMProgramGenerator
-    from app.guidance.contracts import ApprovedModelSpec
-
-    llm = StubLLM(
-        [
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": (
-                    "solver_results = {'evidence': [{'kind': 'regression', "
-                    "'subproblem_id': 'problem2', 'result_id': 'problem2', "
-                    "'observed': [1.0], 'predicted': [], 'residuals': [], "
-                    "'constraint_values': [1.0], "
-                    "'parameter_stability': {'method': 'loo', 'max_relative_change': 0.0, "
-                    "'threshold': 0.1}}]}\n"
-                ),
-                "declared_outputs": ["solver_results.json"],
-            },
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": (
-                    "solver_results = {'evidence': [{'kind': 'regression', "
-                    "'subproblem_id': 'problem2', 'result_id': 'problem2', "
-                    "'observed': [1.0], 'predicted': [1.0], 'residuals': [0.0], "
-                    "'constraint_values': [1.0], "
-                    "'parameter_stability': {'method': 'loo', 'max_relative_change': 0.0, "
-                    "'threshold': 0.1}}]}\n"
-                ),
-                "declared_outputs": ["solver_results.json"],
-            },
-        ]
-    )
-    generator = LLMProgramGenerator(llm)
-    approved_model = ApprovedModelSpec(
-        review_status="approved",
-        model_id="regression-empty-series",
-        required_outputs=["solver_results.json"],
-    )
-
-    result = asyncio.run(
-        generator.generate(
-            approved_model=approved_model,
-            task={},
-            work_dir=tmp_path,
-            data_profile={},
-        )
-    )
-
-    assert "'predicted': []" not in result.source_code
-    assert len(llm.calls) == 2
-    assert "predicted" in llm.calls[1]["history"][1]["content"]
-
-
-def test_program_generator_regenerates_when_source_writes_declared_outputs_under_output_dir(tmp_path) -> None:
-    from app.guidance.agents import LLMProgramGenerator
-    from app.guidance.contracts import ApprovedModelSpec
-
-    llm = StubLLM(
-        [
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": (
-                    "from pathlib import Path\n"
-                    "Path('output').mkdir(exist_ok=True)\n"
-                    "Path('output/solver_results.json').write_text('{}')\n"
-                ),
-                "declared_outputs": ["solver_results.json"],
-            },
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": "from pathlib import Path\nPath('solver_results.json').write_text('{}')\n",
-                "declared_outputs": ["solver_results.json"],
-            },
-        ]
-    )
-    generator = LLMProgramGenerator(llm)
-    approved_model = ApprovedModelSpec(
-        review_status="approved",
-        model_id="declared-output-location",
-        required_outputs=["solver_results.json"],
-    )
-
-    result = asyncio.run(
-        generator.generate(
-            approved_model=approved_model,
-            task={},
-            work_dir=tmp_path,
-            data_profile={},
-        )
-    )
-
-    assert "output/solver_results.json" not in result.source_code
-    assert len(llm.calls) == 2
-    assert "declared output" in llm.calls[1]["history"][1]["content"]
-
-
-def test_program_generator_regenerates_when_source_writes_blocked_solver_evidence(tmp_path) -> None:
-    from app.guidance.agents import LLMProgramGenerator
-    from app.guidance.contracts import ApprovedModelSpec
-
-    llm = StubLLM(
-        [
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": (
-                    "import json\n"
-                    "solver_results = {'evidence': [{'kind': 'blocked', 'result_id': 'problem1'}]}\n"
-                    "open('solver_results.json', 'w').write(json.dumps(solver_results))\n"
-                ),
-                "declared_outputs": ["solver_results.json"],
-            },
-            {
-                "language": "python",
-                "entrypoint": "solve.py",
-                "source_code": (
-                    "import json\n"
-                    "solver_results = {'evidence': [{'kind': 'regression', 'result_id': 'result1', "
-                    "'subproblem_id': 'problem1', 'observed': [1.0], 'predicted': [1.0], "
-                    "'residuals': [0.0], 'constraint_values': [0.0], "
-                    "'parameter_stability': {'method': 'loo', 'max_relative_change': 0.0, "
-                    "'threshold': 0.1}}]}\n"
-                    "open('solver_results.json', 'w').write(json.dumps(solver_results))\n"
-                ),
-                "declared_outputs": ["solver_results.json"],
-            },
-        ]
-    )
-    generator = LLMProgramGenerator(llm)
-    approved_model = ApprovedModelSpec(
-        review_status="approved",
-        model_id="blocked-evidence",
-        required_outputs=["solver_results.json"],
-    )
-
-    result = asyncio.run(
-        generator.generate(
-            approved_model=approved_model,
-            task={},
-            work_dir=tmp_path,
-            data_profile={},
-        )
-    )
-
-    assert "'kind': 'blocked'" not in result.source_code
-    assert len(llm.calls) == 2
-    assert "kind=blocked" in llm.calls[1]["history"][1]["content"]
-
-
 def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_workbook(tmp_path) -> None:
-    from app.guidance.agents import LLMProgramGenerator
     from app.guidance.contracts import ApprovedModelSpec
     from app.guidance.execution import LocalProgramExecutor
+    from app.guidance.program_templates import TemplateProgramGenerator
     from app.guidance.stages import GuidanceStage, ResultVerificationStage
 
     source = (
@@ -935,6 +678,7 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
             "assumptions": ["为增强可辨识性，部分参数被固定为合理值。"],
             "subproblem_models": [
                 {
+                    "execution_status": "solvable",
                     "subproblem_id": f"problem{i}",
                     "objective": f"Estimate traffic-flow structure for problem {i}.",
                     "selected_method": "piecewise least squares",
@@ -1004,11 +748,7 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
             },
         }],
     }
-    llm = StubLLM({
-        "source_code": "raise AssertionError('LLM should not be called')",
-        "declared_outputs": [],
-    })
-    generator = LLMProgramGenerator(llm)
+    generator = TemplateProgramGenerator()
 
     program = asyncio.run(
         generator.generate(
@@ -1051,7 +791,7 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     audit = json.loads((tmp_path / "guidance_audit_report.json").read_text(encoding="utf-8"))
     guidance = (tmp_path / "guidance.md").read_text(encoding="utf-8")
 
-    assert llm.calls == []
+    assert not hasattr(generator, "llm")
     assert manifest.status == "passed"
     assert len(results["verified_results"]) == 5
     assert {item["id"] for item in results["verified_results"]} == {
@@ -1089,13 +829,13 @@ def test_program_generator_uses_deterministic_wuyi_traffic_template_for_real_wor
     assert "a_2=1.5-lambda" in guidance
     assert "rank(A_S)=dim(theta)" in guidance
     assert "固定b1=0或b2=0以确保参数唯一识别" not in guidance
-    assert "只能作为规范化约束，不能作为数据唯一识别证据" in guidance
+    assert "不能把规范化估计写成唯一反推结论" in guidance
     assert "F(t) = f1(t-2) + f2(t-2) + f3(t) + f4(t)" not in guidance
     assert "F(t) = f1(t-2) + f2(t-2) + f3(t)" not in guidance
     assert "F_true(t) = f1(t-2) + f2(t-2) + f3(t)" not in guidance
-    assert "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)+f_4(k)" in guidance
-    assert "F(k)=f_1(k-1)+f_2(k-1)+f_3(k)" in guidance
-    assert "F_obs(k)=F_true(k)+epsilon(k)" in guidance
+    assert "符号式：F_2(k)=theta_2_0*(1)" in guidance
+    assert "符号式：F_3(k)=theta_3_0*(1)" in guidance
+    assert "符号式：F_4(k)=theta_4_0*(1)" in guidance
     assert "## 最终答案与应填表格" in guidance
     assert "问题1规范化代表解" in guidance
     assert "f_1(k)=7+0.5k" in guidance
