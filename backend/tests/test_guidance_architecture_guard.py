@@ -24,6 +24,22 @@ def test_production_guidance_has_no_whole_problem_template_entrypoints() -> None
     assert "TemplateProgramGenerator" not in workflow_source
 
 
+def test_production_contracts_expose_only_model_ir_execution_boundary() -> None:
+    from app.guidance import contracts
+
+    legacy_symbols = {
+        "ModelSpec",
+        "RevisedModelSpec",
+        "ApprovedModelSpec",
+        "ModelReview",
+        "ExecutionManifest",
+    }
+
+    assert not legacy_symbols.intersection(vars(contracts))
+    source = (GUIDANCE_PACKAGE / "contracts.py").read_text(encoding="utf-8")
+    assert "solver_results.json" not in source
+
+
 def test_unknown_capability_is_blocked_as_missing_operator_without_llm() -> None:
     from app.guidance.model_ir import (
         CandidateModel,

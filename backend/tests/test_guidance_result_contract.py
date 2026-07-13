@@ -1,6 +1,10 @@
 import asyncio
+import json
+import shutil
 import zipfile
 from pathlib import Path
+
+import pytest
 
 from app.core.workflow import _build_completed_task_result
 from app.schemas.response import TaskResult
@@ -136,11 +140,50 @@ def test_guidance_download_returns_markdown_attachment(tmp_path: Path, monkeypat
     assert response.filename == "guidance.md"
 
 
-def test_workspace_download_returns_zip_with_task_artifacts(tmp_path: Path, monkeypatch) -> None:
+def _write_complete_guidance_workspace(root: Path) -> None:
+    (root / "data").mkdir()
+    (root / "figures").mkdir()
+    (root / "data" / "input.xlsx").write_bytes(b"original-input")
+    (root / "model_ir.json").write_text('{"model_id":"model-1"}', encoding="utf-8")
+    (root / "approved_model_ir.json").write_text(
+        '{"model_id":"model-1"}',
+        encoding="utf-8",
+    )
+    (root / "execution_plan.json").write_text(
+        json.dumps({
+            "schema_version": "1.0",
+            "model_id": "model-1",
+            "graph": {
+                "nodes": [{
+                    "node_id": "node-1",
+                    "operator_id": "fit.linear",
+                    "operator_version": "1.2.3",
+                }],
+            },
+        }),
+        encoding="utf-8",
+    )
+    (root / "execution_manifest.json").write_text(
+        '{"schema_version":"1.0","model_id":"model-1","status":"passed"}',
+        encoding="utf-8",
+    )
+    (root / "notebook.ipynb").write_text('{"cells":[]}', encoding="utf-8")
+    (root / "parameter_registry.json").write_text('{"parameters":[]}', encoding="utf-8")
+    (root / "result_registry.json").write_text('{"verified_results":[]}', encoding="utf-8")
+    (root / "figure_registry.json").write_text(
+        '{"figures":[{"path":"figures/result.png"}]}',
+        encoding="utf-8",
+    )
+    (root / "verification_report.json").write_text('{"status":"verified"}', encoding="utf-8")
+    (root / "guidance_audit_report.json").write_text('{"status":"PASS"}', encoding="utf-8")
+    (root / "figures" / "result.png").write_bytes(b"png-evidence")
+    (root / "guidance.md").write_text("# trusted guidance\n", encoding="utf-8")
+
+
+def test_workspace_download_returns_complete_evidence_zip(tmp_path: Path, monkeypatch) -> None:
     from app.api import routes
 
-    (tmp_path / "guidance.md").write_text("# trusted guidance\n", encoding="utf-8")
-    (tmp_path / "parameter_registry.json").write_text('{"parameters":[]}', encoding="utf-8")
+    _write_complete_guidance_workspace(tmp_path)
     (tmp_path / "workspace.zip").write_text("old bundle", encoding="utf-8")
     monkeypatch.setattr(
         routes.task_manager,
@@ -154,9 +197,137 @@ def test_workspace_download_returns_zip_with_task_artifacts(tmp_path: Path, monk
     assert response.filename == "task-zip-workspace.zip"
     with zipfile.ZipFile(response.path) as archive:
         names = set(archive.namelist())
-        assert "guidance.md" in names
-        assert "parameter_registry.json" in names
+        manifest = json.loads(archive.read("workspace_manifest.json"))
+        groups = manifest["artifact_groups"]
+        assert groups["original_inputs"] == ["data/input.xlsx"]
+        assert groups["model_ir"] == ["approved_model_ir.json", "model_ir.json"]
+        assert groups["execution_plan"] == ["execution_plan.json"]
+        assert groups["operator_versions"] == [{
+            "node_id": "node-1",
+            "operator_id": "fit.linear",
+            "version": "1.2.3",
+        }]
+        assert groups["code_exports"] == ["notebook.ipynb"]
+        assert groups["registries"] == [
+            "figure_registry.json",
+            "parameter_registry.json",
+            "result_registry.json",
+        ]
+        assert groups["verification_reports"] == [
+            "guidance_audit_report.json",
+            "verification_report.json",
+        ]
+        assert groups["figures"] == ["figures/result.png"]
+        assert groups["guidance"] == ["guidance.md"]
+        assert manifest["completeness_status"] == "complete"
+        assert manifest["missing_required_groups"] == []
+        assert {item["path"] for item in manifest["files"]} == names - {"workspace_manifest.json"}
         assert "workspace.zip" not in names
+
+
+def test_workspace_download_rejects_passed_execution_with_missing_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from fastapi import HTTPException
+
+    from app.api import routes
+
+    (tmp_path / "execution_manifest.json").write_text(
+        '{"schema_version":"1.0","model_id":"model-1","status":"passed"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "guidance.md").write_text("# incomplete\n", encoding="utf-8")
+    monkeypatch.setattr(
+        routes.task_manager,
+        "get_task",
+        lambda task_id: {"task_id": task_id, "work_dir": str(tmp_path)},
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(routes.download_workspace("task-incomplete"))
+
+    assert raised.value.status_code == 409
+    assert "original_inputs" in str(raised.value.detail)
+    assert "execution_plan" in str(raised.value.detail)
+
+
+def test_blocked_workspace_download_records_partial_evidence_without_hiding_files(
+    tmp_path: Path,
+) -> None:
+    from app.artifacts.workspace_archive import build_workspace_archive
+
+    (tmp_path / "execution_manifest.json").write_text(
+        '{"schema_version":"1.0","model_id":"model-1","status":"blocked"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "guidance.md").write_text("# blocked guidance\n", encoding="utf-8")
+
+    archive_path = build_workspace_archive("task-blocked", tmp_path)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        manifest = json.loads(archive.read("workspace_manifest.json"))
+        assert manifest["execution_status"] == "blocked"
+        assert manifest["completeness_status"] == "partial"
+        assert "execution_plan" in manifest["missing_required_groups"]
+        assert "guidance.md" in archive.namelist()
+
+
+def test_real_attachment_execution_exports_complete_reproducibility_zip(
+    tmp_path: Path,
+) -> None:
+    from app.artifacts.workspace_archive import build_workspace_archive
+    from app.guidance.model_ir import ModelIR
+    from app.guidance.model_ir_compiler import ModelIRCompiler
+    from app.guidance.operator_catalog import build_default_operator_registry
+    from app.guidance.operator_execution import OperatorGraphExecutor
+
+    repo_root = Path(__file__).parents[2]
+    source_attachment = (
+        repo_root
+        / "backend/project/work_dir/20260629-guidance-final-answer-95dd18ea"
+        / "data/附件(Attachment).xlsx"
+    )
+    fixture_path = repo_root / "backend/tests/fixtures/model_ir/wuyi_traffic_flow.json"
+    work_dir = tmp_path / "real-workspace"
+    (work_dir / "data").mkdir(parents=True)
+    shutil.copy2(source_attachment, work_dir / "data" / source_attachment.name)
+    model_ir = ModelIR.model_validate_json(fixture_path.read_text(encoding="utf-8"))
+    serialized_ir = model_ir.model_dump_json(indent=2)
+    (work_dir / "model_ir.json").write_text(serialized_ir, encoding="utf-8")
+    (work_dir / "approved_model_ir.json").write_text(serialized_ir, encoding="utf-8")
+
+    registry = build_default_operator_registry()
+    compilation = ModelIRCompiler(registry=registry).compile_to_file(
+        model_ir,
+        output_path=work_dir / "execution_plan.json",
+    )
+    assert compilation.execution_plan is not None
+    execution = OperatorGraphExecutor(registry=registry).execute(
+        execution_plan=compilation.execution_plan,
+        model_ir=model_ir,
+        work_dir=work_dir,
+    )
+    assert execution.status == "passed"
+    (work_dir / "verification_report.json").write_text(
+        '{"status":"verified"}',
+        encoding="utf-8",
+    )
+    (work_dir / "guidance_audit_report.json").write_text(
+        '{"status":"PASS"}',
+        encoding="utf-8",
+    )
+    (work_dir / "guidance.md").write_text("# verified guidance\n", encoding="utf-8")
+
+    archive_path = build_workspace_archive("task-real", work_dir)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        manifest = json.loads(archive.read("workspace_manifest.json"))
+        assert manifest["completeness_status"] == "complete"
+        assert manifest["missing_required_groups"] == []
+        assert len(manifest["artifact_groups"]["operator_versions"]) > 10
+        assert len(manifest["artifact_groups"]["figures"]) == 5
+        assert "data/附件(Attachment).xlsx" in archive.namelist()
 
 
 def test_frontend_history_and_paper_views_expose_workspace_zip_download() -> None:

@@ -122,7 +122,7 @@ class GuidancePipeline:
 
         approved = _load_approved_model(approved_path)
         if approved.review_status == "approved":
-            yield _progress(task_id, "calculation", 0.62, "正在生成并执行完整求解程序")
+            yield _progress(task_id, "calculation", 0.62, "正在编译并执行算子图")
             manifest_path = await self._run_stage(
                 "calculation", task_id, task, approved_path, root / "execution_manifest.json"
             )

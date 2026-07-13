@@ -1,8 +1,6 @@
 """REST API 路由"""
 import os
 import asyncio
-import tempfile
-import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +23,10 @@ from app.services.source_ingest import (
     purpose_for_upload,
 )
 from app.core.workflow import run_workflow
+from app.artifacts.workspace_archive import (
+    WorkspaceArchiveIncompleteError,
+    build_workspace_archive,
+)
 from app.schemas.enums import TaskStatus
 from app.schemas.response import (
     HistoryTaskInfo,
@@ -339,37 +341,22 @@ async def download_workspace(task_id: str):
     if not work_dir.is_dir():
         raise HTTPException(status_code=404, detail="项目工作区不存在")
 
-    archive_path = _build_workspace_archive(task_id, work_dir)
+    try:
+        archive_path = build_workspace_archive(task_id, work_dir)
+    except WorkspaceArchiveIncompleteError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "missing_required_groups": list(exc.missing_required_groups),
+            },
+        ) from exc
     return FileResponse(
         path=archive_path,
         media_type="application/zip",
         filename=f"{task_id}-workspace.zip",
         background=BackgroundTask(lambda: archive_path.unlink(missing_ok=True)),
     )
-
-
-def _build_workspace_archive(task_id: str, work_dir: Path) -> Path:
-    handle = tempfile.NamedTemporaryFile(
-        prefix=f"{task_id}-workspace-",
-        suffix=".zip",
-        delete=False,
-    )
-    archive_path = Path(handle.name)
-    handle.close()
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(work_dir.rglob("*")):
-            if not path.is_file() or _is_generated_workspace_archive(work_dir, path):
-                continue
-            archive.write(path, path.relative_to(work_dir).as_posix())
-    return archive_path
-
-
-def _is_generated_workspace_archive(work_dir: Path, path: Path) -> bool:
-    if path.parent != work_dir or path.suffix.lower() != ".zip":
-        return False
-    name = path.name.lower()
-    return name == "workspace.zip" or name.endswith("-workspace.zip")
-
 
 # ============================================================
 # 论文修订

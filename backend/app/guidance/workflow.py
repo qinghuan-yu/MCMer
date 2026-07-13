@@ -12,8 +12,8 @@ from app.guidance.agents import (
     LLMProblemDecomposer,
 )
 from app.guidance.model_ir_compiler import ModelIRCompiler
+from app.guidance.operator_catalog import build_default_operator_registry
 from app.guidance.operator_execution import OperatorGraphExecutor
-from app.guidance.operators import OperatorRegistry
 from app.guidance.pipeline import GuidancePipeline
 from app.guidance.stages import (
     CalculationStage,
@@ -49,7 +49,7 @@ def build_default_guidance_pipeline(workflow_mode: str = "standard") -> Guidance
         max_tokens=8192,
         request_timeout=budget.llm_timeout,
     )
-    operator_registry = OperatorRegistry()
+    operator_registry = build_default_operator_registry()
     return GuidancePipeline(
         decomposition_stage=DecompositionStage(decomposer=LLMProblemDecomposer(decomposition_llm)),
         modeling_stage=ModelingStage(modeler=LLMModeler(modeling_llm)),
