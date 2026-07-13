@@ -1,0 +1,156 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Semantic and numerical regression baseline for replacing whole-problem templates with Model IR operators.",
+  "cases": [
+    {
+      "id": "wuyi_traffic_flow",
+      "source_work_dir": "backend/project/work_dir/20260629-guidance-final-answer-95dd18ea",
+      "input_sha256": "DC93B1181E52477581AB512C978AA8E625451A9EF523A321CFA5DC1DBA6763AA",
+      "expected_task_coverage": "complete_with_model_boundaries",
+      "parameters": {
+        "param_problem1_break_t": 30.0,
+        "param_problem1_main_rise_slope": 1.5,
+        "param_problem1_direct_slope": 0.5,
+        "param_problem1_triangular_slope": 1.0,
+        "param_problem2_delay": 1.0,
+        "param_problem3_green_start": 3.0,
+        "param_problem4_green_start": 2.0,
+        "param_problem5_monitoring_count": 20.0,
+        "param_problem5_monitoring_times": "0, 1, 3, 7, 10, 12, 16, 21, 24, 25, 30, 34, 37, 39, 43, 45, 48, 52, 57, 59"
+      },
+      "results": {
+        "result_problem1_traffic_fit": {
+          "rmse": 2.6425360419521994e-14,
+          "max_abs_residual": 3.552713678800501e-14
+        },
+        "result_problem2_traffic_fit": {
+          "rmse": 6.0902588016427766,
+          "max_abs_residual": 8.660133402436301
+        },
+        "result_problem3_signal_fit": {
+          "rmse": 10.493492019568833,
+          "max_abs_residual": 24.070122626042775
+        },
+        "result_problem4_noisy_signal_fit": {
+          "rmse": 3.647608079154455,
+          "max_abs_residual": 8.055871127760948
+        },
+        "result_problem5_minimum_monitoring": {
+          "objective_value": 20.0,
+          "monitoring_count": 20.0
+        }
+      },
+      "blocked_result_ids": [],
+      "figure_bindings": {
+        "figures/problem1_fit.png": ["result_problem1_traffic_fit"],
+        "figures/problem2_fit.png": ["result_problem2_traffic_fit"],
+        "figures/problem3_fit.png": ["result_problem3_signal_fit"],
+        "figures/problem4_fit.png": ["result_problem4_noisy_signal_fit"],
+        "figures/problem5_monitoring.png": ["result_problem5_minimum_monitoring"]
+      },
+      "required_guidance_claims": [
+        "问题1支路分解不可唯一识别，输出仅是规范化代表解",
+        "统一使用样本序号，2分钟延迟等于1个采样步",
+        "问题2到问题4的拟合不证明支路被唯一恢复",
+        "问题5的20个时刻是候选设计，最小性仍需秩证明"
+      ],
+      "required_claim_statuses": [
+        "chosen_under_prior",
+        "source_locked",
+        "evidence_verified",
+        "candidate_design"
+      ],
+      "verification_status": "verified",
+      "guidance_audit_status": "PASS",
+      "numeric_tolerance": {
+        "relative": 1e-8,
+        "absolute": 1e-10
+      }
+    },
+    {
+      "id": "wuyi_anchor_bolt",
+      "source_work_dir": "backend/project/work_dir/20260712-191111-dcd758cf",
+      "input_sha256": "063592AD582E43DFF46B4A56799D57BBA6AC2F80335111D58D55705E38C93F15",
+      "expected_task_coverage": "partial",
+      "parameters": {
+        "param_K_18": 0.1620031060795988,
+        "param_K_20": 0.1830690459697201,
+        "param_K_22": 0.189867918154836,
+        "param_Tc_rock_candidate": 200.0
+      },
+      "results": {
+        "result_K_18": {
+          "rmse": 18.36509394405051,
+          "max_abs_residual": 39.83523970407387,
+          "K": 0.1620031060795988
+        },
+        "result_K_20": {
+          "rmse": 11.235580948959615,
+          "max_abs_residual": 23.80575224365225,
+          "K": 0.1830690459697201
+        },
+        "result_K_22": {
+          "rmse": 7.851457865329062,
+          "max_abs_residual": 14.619282398605918,
+          "K": 0.189867918154836
+        },
+        "result_rock_breakpoint": {
+          "single_line_bic": 94.0851138513004,
+          "best_hinge_bic": 76.44134470735176,
+          "bic_improvement": 17.643769143948646,
+          "best_breakpoint_candidate": 200.0,
+          "candidate_lower": 175.0,
+          "candidate_upper": 200.0,
+          "breakpoint_supported": 1.0
+        },
+        "result_coal_breakpoint": {
+          "single_line_bic": 81.68765708539655,
+          "best_hinge_bic": 88.44286889097816,
+          "bic_improvement": -6.7552118055816095,
+          "breakpoint_supported": 0.0
+        }
+      },
+      "blocked_result_ids": [
+        "blocked_2_1",
+        "blocked_2_2",
+        "blocked_3_1",
+        "blocked_3_2",
+        "blocked_problem4"
+      ],
+      "figure_bindings": {
+        "figures/torque_coefficient_fits.png": [
+          "result_K_18",
+          "result_K_20",
+          "result_K_22"
+        ],
+        "figures/breakpoint_bic_by_condition.png": [
+          "result_rock_breakpoint",
+          "result_coal_breakpoint"
+        ]
+      },
+      "required_guidance_claims": [
+        "三个直径分别估计K，不使用单一全局K",
+        "岩石和煤体工况必须分开建模",
+        "岩石断点是连续折线与BIC口径下的候选区间",
+        "煤体数据不能唯一识别临界预紧力矩",
+        "问题2到问题4因缺少附录2和3而阻断"
+      ],
+      "forbidden_guidance_claims": [
+        "采用行业默认值近似",
+        "使用简化工程经验公式估算",
+        "基于假设简化约束"
+      ],
+      "required_claim_statuses": [
+        "evidence_verified",
+        "chosen_under_prior",
+        "blocked"
+      ],
+      "verification_status": "verified",
+      "guidance_audit_status": "PASS",
+      "numeric_tolerance": {
+        "relative": 1e-8,
+        "absolute": 1e-10
+      }
+    }
+  ]
+}
