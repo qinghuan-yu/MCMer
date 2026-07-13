@@ -14,7 +14,11 @@ from app.config.setting import settings
 from app.artifacts.exporters import DocumentFinalizer
 from app.core.workflow_budget import normalize_workflow_mode
 from app.schemas.enums import TaskStatus
-from app.schemas.response import TaskProgress
+from app.schemas.response import (
+    TaskProgress,
+    extract_capability_coverage,
+    extract_verification_layers,
+)
 from app.services.redis_manager import redis_manager
 from app.utils.common_utils import finalize_markdown_export, normalize_math_markdown
 from app.utils.log_util import logger
@@ -468,6 +472,30 @@ class TaskManager:
                 audit_report = json.loads(audit_report_path.read_text(encoding="utf-8"))
             except Exception as exc:
                 logger.warning("Failed to read guidance audit report for %s: %s", task_id, exc)
+        verification_report: dict = {}
+        verification_report_path = task_dir / "verification_report.json"
+        if verification_report_path.exists():
+            try:
+                verification_report = json.loads(
+                    verification_report_path.read_text(encoding="utf-8")
+                )
+            except Exception as exc:
+                logger.warning("Failed to read verification report for %s: %s", task_id, exc)
+        capability_artifacts: dict[str, dict] = {}
+        for name, filename in (
+            ("approved_model", "approved_model_ir.json"),
+            ("compilation_result", "compilation_result.json"),
+            ("result_registry", "result_registry.json"),
+        ):
+            path = task_dir / filename
+            if not path.exists():
+                capability_artifacts[name] = {}
+                continue
+            try:
+                capability_artifacts[name] = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.warning("Failed to read %s for %s: %s", filename, task_id, exc)
+                capability_artifacts[name] = {}
 
         return {
             "task_id": task_id,
@@ -486,6 +514,8 @@ class TaskManager:
             "audit_status": str(audit_report.get("status") or ""),
             "audit_summary": str(audit_report.get("summary") or ""),
             "audit_blocks": audit_report.get("blocks", []),
+            "verification_layers": extract_verification_layers(verification_report),
+            "capability_coverage": extract_capability_coverage(**capability_artifacts),
         }
 
     def save_revision(

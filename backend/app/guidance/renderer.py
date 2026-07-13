@@ -131,15 +131,13 @@ def render_verified_guidance(
     execution_manifest: dict[str, Any] | None = None,
     calculation_failure: dict[str, Any] | None = None,
 ) -> str:
-    model = approved_model.get("approved_model", {})
+    model = approved_model.get("approved_model_ir", {})
     model = model if isinstance(model, dict) else {}
     status = str(verification_report.get("status") or "blocked")
-    failure = model.get("failure")
-    if status == "blocked" and isinstance(failure, dict) and failure:
-        return _render_blocked_failure_diagnostic(
-            failure=failure,
+    if status == "blocked" and approved_model.get("review_status") != "approved":
+        return _render_model_ir_blocked_diagnostic(
+            model=model,
             verification_report=verification_report,
-            result_registry=result_registry,
         )
     if _is_calculation_failure_without_verified_evidence(
         status=status,
@@ -165,7 +163,11 @@ def render_verified_guidance(
         "",
         "## 可信度摘要",
         "",
-        f"结果复核状态为 `{status}`；仅引用审核通过的模型与已登记结果。",
+        "| 验证层 | 状态 | 说明 |",
+        "| --- | --- | --- |",
+        *_verification_layer_rows(verification_report),
+        "",
+        f"流程聚合状态为 `{status}`；该值只用于流程路由，不代表整题数学结论已经完成。",
         "",
         "## 问题理解",
         "",
@@ -360,7 +362,7 @@ def render_verified_guidance(
         )
 
     lines.extend(["", "## 复核与稳健性", ""])
-    lines.append(f"- 数值复核结论：`{status}`。")
+    lines.extend(f"- {row}" for row in _verification_layer_summaries(verification_report))
     lines.append("- 可辨识性与计算可行性：以模型审核结论和本轮数值复核状态为准。")
     lines.append(
         "- 误差阈值/基线解释：RMSE、残差、目标值和约束裕度只说明结果在 `verification_report.json` "
@@ -405,6 +407,35 @@ def render_verified_guidance(
         else:
             lines.append(f"- `{name}`：`{ref}`")
     return "\n".join(lines) + "\n"
+
+
+def _verification_layer_rows(verification_report: dict[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for label, key in (
+        ("执行正确性", "execution_verified"),
+        ("证据可追溯性", "evidence_supported"),
+        ("模型充分性", "model_adequate"),
+    ):
+        layer = verification_report.get(key)
+        layer = layer if isinstance(layer, dict) else {}
+        layer_status = _cell(layer.get("status") or "not_assessed")
+        reasons = layer.get("reasons")
+        reason_text = _join_claim_items(reasons) or "未登记说明"
+        rows.append(f"| {label} | `{layer_status}` | {_cell(reason_text)} |")
+    return rows
+
+
+def _verification_layer_summaries(verification_report: dict[str, Any]) -> list[str]:
+    summaries: list[str] = []
+    for label, key in (
+        ("执行正确性", "execution_verified"),
+        ("证据可追溯性", "evidence_supported"),
+        ("模型充分性", "model_adequate"),
+    ):
+        layer = verification_report.get(key)
+        layer = layer if isinstance(layer, dict) else {}
+        summaries.append(f"{label}：`{layer.get('status') or 'not_assessed'}`。")
+    return summaries
 
 
 def _is_calculation_failure_without_verified_evidence(
@@ -469,7 +500,7 @@ def _render_calculation_failure_diagnostic(
         f"- 失败操作：`{_cell(failed_operation)}`",
         f"- 错误类型：`{_cell(calculation_failure.get('error_type') or _manifest_error_type(execution_manifest))}`",
         f"- 求解入口：`{_cell(execution_manifest.get('entrypoint'))}`",
-        f"- 恢复入口：`{_cell(calculation_failure.get('resume_from') or 'approved_model_spec.json')}`",
+        f"- 恢复入口：`{_cell(calculation_failure.get('resume_from') or 'execution_plan.json')}`",
         "",
         "## 阻断原因",
         "",
@@ -498,9 +529,9 @@ def _render_calculation_failure_diagnostic(
         "",
         "## 下一步修复动作",
         "",
-        "- 重新生成 `solve.py`，确保它只读取真实附件和题设事实，不使用占位、模拟、随机或兜底数据。",
-        "- 将 `solver_results.json`、`parameter_registry.json`、`result_registry.json` 和 `figure_registry.json` 写到 required output 指定的精确相对路径。",
-        "- 写出 typed solver evidence 后重新执行结果复核；只有复核通过的参数和结果才能进入正式指导方案。",
+        "- 检查 `execution_plan.json` 中失败节点的算子版本、输入引用和输出声明。",
+        "- 修复通用算子或 Model IR 后重跑执行图，重新生成参数、结果、图片和执行清单。",
+        "- 重新执行结果复核；只有通过复核的参数和结果才能进入正式指导方案。",
         "",
         "## 可复现附件说明",
         "",
@@ -509,6 +540,60 @@ def _render_calculation_failure_diagnostic(
         if name == "figures":
             continue
         lines.append(f"- `{name}`：`{ref}`")
+    return "\n".join(lines) + "\n"
+
+
+def _render_model_ir_blocked_diagnostic(
+    *,
+    model: dict[str, Any],
+    verification_report: dict[str, Any],
+) -> str:
+    blocked = [
+        item
+        for item in model.get("subproblems", [])
+        if isinstance(item, dict) and item.get("execution_status") == "blocked"
+    ]
+    lines = [
+        "# 建模链路阻断诊断",
+        "",
+        "## 可信度摘要",
+        "",
+        "仅展示审核合同中已登记为 blocked 的 Model IR 子问题；未执行候选模型不构成恢复依据。",
+        "",
+        "## 阻断位置",
+        "",
+        "- 失败阶段：`model_ir`",
+        f"- 模型 ID：`{_cell(model.get('model_id'))}`",
+        "- 恢复入口：`model_ir.json`",
+        "",
+        "## 阻断原因",
+        "",
+    ]
+    for subproblem in blocked:
+        lines.extend([
+            f"### 子问题 {_cell(subproblem.get('subproblem_id'))}",
+            "",
+            f"- 目标：{_guidance_text(subproblem.get('objective'))}",
+            f"- 阻断原因：{_guidance_text(subproblem.get('blocking_reason'))}",
+            f"- 缺失输入：{_guidance_text(_join_claim_items(subproblem.get('missing_inputs')))}",
+            f"- 恢复后预期输出：{_guidance_text(_join_claim_items(subproblem.get('expected_outputs')))}",
+            "",
+        ])
+    if not blocked:
+        lines.append("- 已批准 Model IR 未登记可引用的 blocked 子问题。")
+    lines.extend(["", "## 下一步修复动作", ""])
+    if blocked:
+        for subproblem in blocked:
+            lines.append(
+                f"- `{_cell(subproblem.get('subproblem_id'))}`："
+                f"{_guidance_text(subproblem.get('recovery_action'))}"
+            )
+    else:
+        lines.append("- 修订 Model IR，为每个不可计算子问题登记真实缺失输入和恢复条件。")
+    lines.extend(["", "## 可复现附件说明", ""])
+    for name, ref in verification_report.get("artifact_refs", {}).items():
+        if name != "figures":
+            lines.append(f"- `{name}`：`{ref}`")
     return "\n".join(lines) + "\n"
 
 
@@ -577,8 +662,8 @@ def _render_verification_failure_diagnostic(
         "",
         "## 下一步修复动作",
         "",
-        "- 回到 `solve.py` 与 `solver_results.json`，修正导致复核失败的 typed solver evidence。",
-        "- 对回归 evidence，`constraint_values` 必须是非负约束裕度或模型中的非负量，不能复用 residuals/errors。",
+        "- 回到 `execution_plan.json`，定位产生未通过复核结果的算子节点和对应 IR 来源。",
+        "- 修正算子输入、数学前提或验证计划后重跑执行图，禁止直接改写结果注册表。",
         "- 将题设常量、单位换算和显式假设补登记到 `parameter_registry.json`，再重新执行结果复核。",
         "",
         "## 可复现附件说明",
@@ -987,74 +1072,6 @@ def _guidance_text(value: Any) -> str:
 
 def _text_has_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle.lower() in text for needle in needles)
-
-
-def _render_blocked_failure_diagnostic(
-    *,
-    failure: dict[str, Any],
-    verification_report: dict[str, Any],
-    result_registry: dict[str, Any],
-) -> str:
-    blocking_issues = verification_report.get("blocking_issues", [])
-    if not isinstance(blocking_issues, list):
-        blocking_issues = []
-    blocked_results = result_registry.get("blocked_results", [])
-    if not isinstance(blocked_results, list):
-        blocked_results = []
-
-    lines = [
-        "# 建模链路阻断诊断",
-        "",
-        "## 可信度摘要",
-        "",
-        "本次任务未形成可发布的建模指导方案；链路在模型审核前被合同校验阻断。",
-        "系统没有审核通过的模型、参数表或数值计算结果，因此不会输出空参数表或伪计算结论。",
-        "",
-        "## 阻断位置",
-        "",
-        f"- 失败阶段：`{_cell(failure.get('failed_stage'))}`",
-        f"- 失败操作：`{_cell(failure.get('failed_operation'))}`",
-        f"- 错误类型：`{_cell(failure.get('error_type'))}`",
-        f"- 输入文件：`{_cell(failure.get('input_ref'))}`",
-        f"- 恢复入口：`{_cell(failure.get('resume_from'))}`",
-        "",
-        "## 阻断原因",
-        "",
-        f"- {failure.get('error') or '未登记详细错误。'}",
-    ]
-    for issue in blocking_issues:
-        if issue and issue != failure.get("error"):
-            lines.append(f"- {issue}")
-
-    lines.extend([
-        "",
-        "## 已登记阻断结果",
-        "",
-    ])
-    if blocked_results:
-        for item in blocked_results:
-            if not isinstance(item, dict):
-                continue
-            lines.append(f"- `{_cell(item.get('id'))}`：{item.get('message') or item.get('reason')}")
-    else:
-        lines.append("- 暂无额外 blocked result；以建模合同失败记录为准。")
-
-    lines.extend([
-        "",
-        "## 下一步修复动作",
-        "",
-        "- 重新生成 `ModelSpec`，并逐个子问题补齐可辨识性计划。",
-        "- 每个子问题至少写明 rank/Jacobian/唯一性检查、固定参数、额外识别约束或设计矩阵满秩条件之一。",
-        "- 修复后从恢复入口重新进入建模阶段，再由独立模型审核决定是否允许进入计算。",
-        "",
-        "## 可复现附件说明",
-        "",
-    ])
-    for name, ref in verification_report.get("artifact_refs", {}).items():
-        if name == "figures":
-            continue
-        lines.append(f"- `{name}`：`{ref}`")
-    return "\n".join(lines) + "\n"
 
 
 def _cell(value: Any) -> str:

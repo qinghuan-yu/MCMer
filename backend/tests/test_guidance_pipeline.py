@@ -116,7 +116,24 @@ def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path
         model_review_stage=RecordingStage(
             "model_review",
             calls,
-            {"review_status": "approved", "model_id": "test-model"},
+            {
+                "review_status": "approved",
+                "model_id": "test-model",
+                "model_ir_ref": "model_ir.json",
+                "approved_model_ir": {
+                    "schema_version": "1.0",
+                    "model_id": "test-model",
+                    "subproblems": [{
+                        "execution_status": "blocked",
+                        "subproblem_id": "problem1",
+                        "objective": "Compile the model.",
+                        "blocking_reason": "The compiler is not implemented yet.",
+                        "missing_inputs": ["ModelIRCompiler"],
+                        "recovery_action": "Implement the compiler in Phase 2.",
+                        "expected_outputs": ["execution plan"],
+                    }],
+                },
+            },
         ),
         calculation_stage=RecordingStage("calculation", calls),
         result_verification_stage=RecordingStage("result_verification", calls),
@@ -137,8 +154,8 @@ def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path
     assert calls == [
         ("decomposition", None),
         ("modeling", "problem_spec.json"),
-        ("model_review", "model_spec.json"),
-        ("calculation", "approved_model_spec.json"),
+        ("model_review", "model_ir.json"),
+        ("calculation", "approved_model_ir.json"),
         ("result_verification", "execution_manifest.json"),
         ("guidance", "verification_report.json"),
     ]
@@ -200,7 +217,7 @@ def test_guidance_pipeline_writes_blocked_guidance_after_modeling_contract_failu
             "modeling",
             calls,
             RuntimeError(
-                "GuidanceModeler failed to generate valid ModelSpec after 2 complete attempts: "
+                "GuidanceModeler failed to generate valid ModelIR after 2 complete attempts: "
                 "JSONDecodeError: Expecting ',' delimiter: line 413 column 18"
             ),
         ),
@@ -227,10 +244,11 @@ def test_guidance_pipeline_writes_blocked_guidance_after_modeling_contract_failu
     assert not (tmp_path / "solve.py").exists()
     assert not (tmp_path / "execution_manifest.json").exists()
     assert (tmp_path / "modeling_failure.json").is_file()
-    assert (tmp_path / "approved_model_spec.json").is_file()
+    assert (tmp_path / "model_ir.json").is_file()
+    assert (tmp_path / "approved_model_ir.json").is_file()
     assert (tmp_path / "guidance.md").is_file()
     guidance = (tmp_path / "guidance.md").read_text(encoding="utf-8")
-    assert "GuidanceModeler failed to generate valid ModelSpec" in guidance
+    assert "GuidanceModeler failed to generate valid ModelIR" in guidance
     assert messages[-1]["data"]["status"] == "blocked"
 
 
@@ -386,6 +404,44 @@ def test_default_guidance_pipeline_uses_only_the_six_new_business_stages() -> No
     source = (Path(__file__).parents[1] / "app" / "guidance" / "pipeline.py").read_text(encoding="utf-8")
     assert "LLMGuidancePlanner" not in source
     assert "run_solve_spec" not in source
+
+
+def test_modeling_failure_contracts_remain_inside_model_ir_boundary(tmp_path: Path) -> None:
+    from app.guidance.pipeline import _write_modeling_failure_contracts
+
+    problem_path = tmp_path / "problem_spec.json"
+    problem_path.write_text(
+        json.dumps(
+            {
+                "task_summary": "Estimate two requested outputs.",
+                "subproblems": [
+                    {"id": "problem1", "objective": "Estimate output one."},
+                    {"id": "problem2", "objective": "Estimate output two."},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    approved_path = _write_modeling_failure_contracts(
+        tmp_path,
+        task_id="task-ir-failure",
+        input_path=problem_path,
+        exc=ValueError("candidate payload is not valid Model IR"),
+    )
+
+    approved = json.loads(approved_path.read_text(encoding="utf-8"))
+    review_text = (tmp_path / "model_review.json").read_text(encoding="utf-8")
+    assert approved_path.name == "approved_model_ir.json"
+    assert [
+        item["subproblem_id"] for item in approved["approved_model_ir"]["subproblems"]
+    ] == ["problem1", "problem2"]
+    assert all(
+        item["execution_status"] == "blocked"
+        for item in approved["approved_model_ir"]["subproblems"]
+    )
+    assert not (tmp_path / "approved_model_spec.json").exists()
+    assert "ModelSpec" not in review_text
 
 
 def test_default_guidance_pipeline_applies_standard_llm_timeout_budget() -> None:

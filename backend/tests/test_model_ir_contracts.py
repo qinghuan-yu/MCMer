@@ -1,6 +1,46 @@
 from pydantic import ValidationError
 
 
+def test_candidate_model_requires_applicability_boundary() -> None:
+    from app.guidance.model_ir import CandidateModel
+
+    try:
+        CandidateModel(
+            id="constant_baseline",
+            role="baseline",
+            operator_node_ids=["fit"],
+            selection_metric="rmse",
+        )
+    except ValidationError as exc:
+        assert "applicability_boundary" in str(exc)
+    else:
+        raise AssertionError("candidate routes must declare an applicability boundary")
+
+
+def test_validation_plan_requires_supported_model_families() -> None:
+    from app.guidance.model_ir import ValidationPlan
+
+    validation = ValidationPlan(
+        model_families=["regression"],
+        identifiability_checks=["design_matrix_rank"],
+        evidence_checks=["residual_recompute"],
+        robustness_checks=["cross_validation"],
+    )
+    assert validation.model_families == ["regression"]
+
+    try:
+        ValidationPlan(
+            model_families=["unsupported_family"],
+            identifiability_checks=["design_matrix_rank"],
+            evidence_checks=["residual_recompute"],
+            robustness_checks=["cross_validation"],
+        )
+    except ValidationError as exc:
+        assert "model_families" in str(exc)
+    else:
+        raise AssertionError("unknown model families must be rejected")
+
+
 def _solvable_payload():
     from app.guidance.model_ir import (
         BinaryExpression,
@@ -78,15 +118,18 @@ def _solvable_payload():
                 role="baseline",
                 operator_node_ids=["fit_branch_slope"],
                 selection_metric="rmse",
+                applicability_boundary="Observed sample range and constant-flow hypothesis.",
             ),
             CandidateModel(
                 id="linear_recommended",
                 role="recommended",
                 operator_node_ids=["fit_branch_slope"],
                 selection_metric="rmse",
+                applicability_boundary="Observed sample range under the declared linear trend.",
             ),
         ],
         validation=ValidationPlan(
+            model_families=["regression"],
             identifiability_checks=["design_matrix_rank"],
             evidence_checks=["residual_recompute", "baseline_comparison"],
             robustness_checks=["leave_one_out"],

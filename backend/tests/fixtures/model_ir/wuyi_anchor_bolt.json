@@ -1,0 +1,664 @@
+{
+  "schema_version": "1.0",
+  "model_id": "fixture_grouped_torque_and_breakpoint",
+  "subproblems": [
+    {
+      "execution_status": "solvable",
+      "subproblem_id": "evidence_available",
+      "objective": "Estimate grouped coefficients and compare linear versus continuous-hinge models.",
+      "variables": [
+        {
+          "id": "standard",
+          "role": "derived",
+          "symbol": "standard",
+          "unit": "unspecified",
+          "shape": [
+            "row",
+            "column",
+            "table"
+          ]
+        },
+        {
+          "id": "rock",
+          "role": "derived",
+          "symbol": "rock",
+          "unit": "unspecified",
+          "shape": [
+            "row",
+            "column",
+            "table"
+          ]
+        },
+        {
+          "id": "coal",
+          "role": "derived",
+          "symbol": "coal",
+          "unit": "unspecified",
+          "shape": [
+            "row",
+            "column",
+            "table"
+          ]
+        },
+        {
+          "id": "param_K_18",
+          "role": "unknown_parameter",
+          "symbol": "param_K_18",
+          "unit": "unspecified",
+          "shape": []
+        },
+        {
+          "id": "param_K_20",
+          "role": "unknown_parameter",
+          "symbol": "param_K_20",
+          "unit": "unspecified",
+          "shape": []
+        },
+        {
+          "id": "param_K_22",
+          "role": "unknown_parameter",
+          "symbol": "param_K_22",
+          "unit": "unspecified",
+          "shape": []
+        },
+        {
+          "id": "param_Tc_rock_candidate",
+          "role": "unknown_parameter",
+          "symbol": "param_Tc_rock_candidate",
+          "unit": "unspecified",
+          "shape": []
+        },
+        {
+          "id": "k18_x",
+          "role": "derived",
+          "symbol": "k18_x",
+          "unit": "unspecified",
+          "shape": [
+            "sample"
+          ]
+        },
+        {
+          "id": "k18_y",
+          "role": "derived",
+          "symbol": "k18_y",
+          "unit": "unspecified",
+          "shape": [
+            "sample"
+          ]
+        },
+        {
+          "id": "rock_grid",
+          "role": "derived",
+          "symbol": "rock_grid",
+          "unit": "unspecified",
+          "shape": [
+            "candidate"
+          ]
+        },
+        {
+          "id": "rock_bic",
+          "role": "derived",
+          "symbol": "rock_bic",
+          "unit": "unspecified",
+          "shape": [
+            "candidate"
+          ]
+        }
+      ],
+      "data": [
+        {
+          "id": "workbook",
+          "source_ref": "data/A-附件.xlsx",
+          "fields": {
+            "observations": "declared sheets"
+          }
+        }
+      ],
+      "equations": [
+        {
+          "id": "declared_identity",
+          "left": {
+            "kind": "literal",
+            "value": 0.0
+          },
+          "right": {
+            "kind": "literal",
+            "value": 0.0
+          }
+        }
+      ],
+      "constraints": [],
+      "operators": [
+        {
+          "node_id": "standard",
+          "operator_id": "data.read_excel_table",
+          "inputs": {
+            "source": "data/A-附件.xlsx"
+          },
+          "outputs": [
+            "standard"
+          ],
+          "parameters": {
+            "sheet": "Sheet1_标准实验数据",
+            "columns": [
+              "锚杆直径\n/mm",
+              "预紧力矩 T \n/N·m",
+              "预紧力 P\n/kN"
+            ],
+            "rename": {
+              "锚杆直径\n/mm": "diameter",
+              "预紧力矩 T \n/N·m": "torque",
+              "预紧力 P\n/kN": "force"
+            },
+            "forward_fill": [
+              "diameter"
+            ]
+          }
+        },
+        {
+          "node_id": "fitk",
+          "operator_id": "regression.zero_intercept_grouped",
+          "inputs": {
+            "table": "standard"
+          },
+          "outputs": [
+            "fitk"
+          ],
+          "parameters": {
+            "group_by": "diameter",
+            "response": "torque",
+            "predictor_product": [
+              "force",
+              "diameter"
+            ]
+          }
+        },
+        {
+          "node_id": "param_K_18",
+          "operator_id": "artifact.extract_scalar",
+          "inputs": {
+            "artifact": "fitk"
+          },
+          "outputs": [
+            "param_K_18"
+          ],
+          "parameters": {
+            "path": "groups.18.coefficient"
+          }
+        },
+        {
+          "node_id": "param_K_20",
+          "operator_id": "artifact.extract_scalar",
+          "inputs": {
+            "artifact": "fitk"
+          },
+          "outputs": [
+            "param_K_20"
+          ],
+          "parameters": {
+            "path": "groups.20.coefficient"
+          }
+        },
+        {
+          "node_id": "param_K_22",
+          "operator_id": "artifact.extract_scalar",
+          "inputs": {
+            "artifact": "fitk"
+          },
+          "outputs": [
+            "param_K_22"
+          ],
+          "parameters": {
+            "path": "groups.22.coefficient"
+          }
+        },
+        {
+          "node_id": "rk18",
+          "operator_id": "artifact.extract_mapping",
+          "inputs": {
+            "artifact": "fitk"
+          },
+          "outputs": [
+            "rk18"
+          ],
+          "parameters": {
+            "fields": {
+              "rmse": "groups.18.metrics.rmse",
+              "max_abs_residual": "groups.18.metrics.max_abs_residual",
+              "K": "groups.18.coefficient"
+            }
+          }
+        },
+        {
+          "node_id": "rk20",
+          "operator_id": "artifact.extract_mapping",
+          "inputs": {
+            "artifact": "fitk"
+          },
+          "outputs": [
+            "rk20"
+          ],
+          "parameters": {
+            "fields": {
+              "rmse": "groups.20.metrics.rmse",
+              "max_abs_residual": "groups.20.metrics.max_abs_residual",
+              "K": "groups.20.coefficient"
+            }
+          }
+        },
+        {
+          "node_id": "rk22",
+          "operator_id": "artifact.extract_mapping",
+          "inputs": {
+            "artifact": "fitk"
+          },
+          "outputs": [
+            "rk22"
+          ],
+          "parameters": {
+            "fields": {
+              "rmse": "groups.22.metrics.rmse",
+              "max_abs_residual": "groups.22.metrics.max_abs_residual",
+              "K": "groups.22.coefficient"
+            }
+          }
+        },
+        {
+          "node_id": "k18_x",
+          "operator_id": "artifact.extract_vector",
+          "inputs": {
+            "artifact": "fitk"
+          },
+          "outputs": [
+            "k18_x"
+          ],
+          "parameters": {
+            "path": "groups.18.x"
+          }
+        },
+        {
+          "node_id": "k18_y",
+          "operator_id": "artifact.extract_vector",
+          "inputs": {
+            "artifact": "fitk"
+          },
+          "outputs": [
+            "k18_y"
+          ],
+          "parameters": {
+            "path": "groups.18.predicted"
+          }
+        },
+        {
+          "node_id": "figk",
+          "operator_id": "plot.xy_evidence",
+          "inputs": {
+            "x": "k18_x",
+            "observed": "k18_y",
+            "predicted": "k18_y"
+          },
+          "outputs": [
+            "figk"
+          ],
+          "parameters": {
+            "path": "figures/torque_coefficient_fits.png",
+            "title": "Grouped zero-intercept fits",
+            "linked_result_ids": [
+              "result_K_18",
+              "result_K_20",
+              "result_K_22"
+            ]
+          }
+        },
+        {
+          "node_id": "rock",
+          "operator_id": "data.read_excel_table",
+          "inputs": {
+            "source": "data/A-附件.xlsx"
+          },
+          "outputs": [
+            "rock"
+          ],
+          "parameters": {
+            "sheet": "Sheet2_岩石工况数据",
+            "columns": [
+              "预紧力矩 \nT /N·m",
+              "测点1-1 预紧力 P/kN",
+              "测点1-2 预紧力 P/kN",
+              "测点1-3 预紧力 P/kN",
+              "测点1-4 预紧力 P/kN",
+              "测点1-5 预紧力 P/kN"
+            ],
+            "rename": {
+              "预紧力矩 \nT /N·m": "torque",
+              "测点1-1 预紧力 P/kN": "m1",
+              "测点1-2 预紧力 P/kN": "m2",
+              "测点1-3 预紧力 P/kN": "m3",
+              "测点1-4 预紧力 P/kN": "m4",
+              "测点1-5 预紧力 P/kN": "m5"
+            },
+            "matrix_columns": [
+              "m1",
+              "m2",
+              "m3",
+              "m4",
+              "m5"
+            ],
+            "matrix_name": "measurements"
+          }
+        },
+        {
+          "node_id": "bic_rock",
+          "operator_id": "model_selection.continuous_hinge_bic",
+          "inputs": {
+            "x": "rock.torque",
+            "y": "rock.measurements"
+          },
+          "outputs": [
+            "bic_rock"
+          ],
+          "parameters": {
+            "candidates": [
+              100,
+              125,
+              150,
+              175,
+              200,
+              225,
+              250
+            ],
+            "support_threshold": 2.0
+          }
+        },
+        {
+          "node_id": "coal",
+          "operator_id": "data.read_excel_table",
+          "inputs": {
+            "source": "data/A-附件.xlsx"
+          },
+          "outputs": [
+            "coal"
+          ],
+          "parameters": {
+            "sheet": "Sheet3_煤体工况数据",
+            "columns": [
+              "预紧力矩 \nT /N·m",
+              "测点1-1 预紧力 P/kN",
+              "测点1-2 预紧力 P/kN",
+              "测点1-3 预紧力 P/kN",
+              "测点1-4 预紧力 P/kN",
+              "测点1-5 预紧力 P/kN"
+            ],
+            "rename": {
+              "预紧力矩 \nT /N·m": "torque",
+              "测点1-1 预紧力 P/kN": "m1",
+              "测点1-2 预紧力 P/kN": "m2",
+              "测点1-3 预紧力 P/kN": "m3",
+              "测点1-4 预紧力 P/kN": "m4",
+              "测点1-5 预紧力 P/kN": "m5"
+            },
+            "matrix_columns": [
+              "m1",
+              "m2",
+              "m3",
+              "m4",
+              "m5"
+            ],
+            "matrix_name": "measurements"
+          }
+        },
+        {
+          "node_id": "bic_coal",
+          "operator_id": "model_selection.continuous_hinge_bic",
+          "inputs": {
+            "x": "coal.torque",
+            "y": "coal.measurements"
+          },
+          "outputs": [
+            "bic_coal"
+          ],
+          "parameters": {
+            "candidates": [
+              100,
+              125,
+              150,
+              175,
+              200,
+              225,
+              250,
+              275,
+              300,
+              325
+            ],
+            "support_threshold": 2.0
+          }
+        },
+        {
+          "node_id": "param_Tc_rock_candidate",
+          "operator_id": "artifact.extract_scalar",
+          "inputs": {
+            "artifact": "bic_rock"
+          },
+          "outputs": [
+            "param_Tc_rock_candidate"
+          ],
+          "parameters": {
+            "path": "best_breakpoint_candidate"
+          }
+        },
+        {
+          "node_id": "rock_grid",
+          "operator_id": "artifact.extract_vector",
+          "inputs": {
+            "artifact": "bic_rock"
+          },
+          "outputs": [
+            "rock_grid"
+          ],
+          "parameters": {
+            "path": "candidate_grid"
+          }
+        },
+        {
+          "node_id": "rock_bic",
+          "operator_id": "artifact.extract_vector",
+          "inputs": {
+            "artifact": "bic_rock"
+          },
+          "outputs": [
+            "rock_bic"
+          ],
+          "parameters": {
+            "path": "candidate_bic"
+          }
+        },
+        {
+          "node_id": "figbic",
+          "operator_id": "plot.xy_evidence",
+          "inputs": {
+            "x": "rock_grid",
+            "observed": "rock_bic",
+            "predicted": "rock_bic"
+          },
+          "outputs": [
+            "figbic"
+          ],
+          "parameters": {
+            "path": "figures/breakpoint_bic_by_condition.png",
+            "title": "Breakpoint BIC comparison",
+            "linked_result_ids": [
+              "result_rock_breakpoint",
+              "result_coal_breakpoint"
+            ]
+          }
+        }
+      ],
+      "candidate_models": [
+        {
+          "id": "simple_baseline",
+          "role": "baseline",
+          "operator_node_ids": [
+            "standard"
+          ],
+          "selection_metric": "residual_error",
+          "applicability_boundary": "题设标准值和直接查表关系范围内的简单参照路线。"
+        },
+        {
+          "id": "recommended_operator_graph",
+          "role": "recommended",
+          "operator_node_ids": [
+            "standard",
+            "fitk",
+            "param_K_18",
+            "param_K_20",
+            "param_K_22",
+            "rk18",
+            "rk20",
+            "rk22",
+            "k18_x",
+            "k18_y",
+            "figk",
+            "rock",
+            "bic_rock",
+            "coal",
+            "bic_coal",
+            "param_Tc_rock_candidate",
+            "rock_grid",
+            "rock_bic",
+            "figbic"
+          ],
+          "selection_metric": "evidence_and_residual_error",
+          "applicability_boundary": "题设材料、标准表、经验关系和给定参数范围内；外推到其他材料或工况前需重新验证。"
+        }
+      ],
+      "validation": {
+        "model_families": [
+          "regression"
+        ],
+        "identifiability_checks": [
+          "design_rank_or_representative_solution"
+        ],
+        "evidence_checks": [
+          "source_trace",
+          "residual_recompute"
+        ],
+        "robustness_checks": [
+          "candidate_or_leave_one_out_sensitivity"
+        ]
+      },
+      "final_answers": [
+        {
+          "id": "result_K_18",
+          "item": "result_K_18",
+          "value_ref": "rk18",
+          "status": "evidence_verified",
+          "evidence_ids": [
+            "fitk",
+            "figk"
+          ]
+        },
+        {
+          "id": "result_K_20",
+          "item": "result_K_20",
+          "value_ref": "rk20",
+          "status": "evidence_verified",
+          "evidence_ids": [
+            "fitk"
+          ]
+        },
+        {
+          "id": "result_K_22",
+          "item": "result_K_22",
+          "value_ref": "rk22",
+          "status": "evidence_verified",
+          "evidence_ids": [
+            "fitk"
+          ]
+        },
+        {
+          "id": "result_rock_breakpoint",
+          "item": "result_rock_breakpoint",
+          "value_ref": "bic_rock",
+          "status": "chosen_under_prior",
+          "evidence_ids": [
+            "figbic"
+          ]
+        },
+        {
+          "id": "result_coal_breakpoint",
+          "item": "result_coal_breakpoint",
+          "value_ref": "bic_coal",
+          "status": "evidence_verified",
+          "evidence_ids": [
+            "figbic"
+          ]
+        }
+      ]
+    },
+    {
+      "execution_status": "blocked",
+      "subproblem_id": "2.1",
+      "objective": "Compute the requested result for 2.1.",
+      "blocking_reason": "Appendix 2 is absent, so the required physical equations and parameters are unavailable.",
+      "missing_inputs": [
+        "Appendix 2 equations and parameter table"
+      ],
+      "recovery_action": "Provide Appendix 2, then rebuild and review the Model IR before computation.",
+      "expected_outputs": [
+        "Numerical answer for 2.1"
+      ]
+    },
+    {
+      "execution_status": "blocked",
+      "subproblem_id": "2.2",
+      "objective": "Compute the requested result for 2.2.",
+      "blocking_reason": "Appendix 2 is absent, so the required physical equations and parameters are unavailable.",
+      "missing_inputs": [
+        "Appendix 2 equations and parameter table"
+      ],
+      "recovery_action": "Provide Appendix 2, then rebuild and review the Model IR before computation.",
+      "expected_outputs": [
+        "Numerical answer for 2.2"
+      ]
+    },
+    {
+      "execution_status": "blocked",
+      "subproblem_id": "3.1",
+      "objective": "Compute the requested result for 3.1.",
+      "blocking_reason": "Appendix 3 is absent, so the required physical equations and parameters are unavailable.",
+      "missing_inputs": [
+        "Appendix 3 equations and parameter table"
+      ],
+      "recovery_action": "Provide Appendix 3, then rebuild and review the Model IR before computation.",
+      "expected_outputs": [
+        "Numerical answer for 3.1"
+      ]
+    },
+    {
+      "execution_status": "blocked",
+      "subproblem_id": "3.2",
+      "objective": "Compute the requested result for 3.2.",
+      "blocking_reason": "Appendix 3 is absent, so the required physical equations and parameters are unavailable.",
+      "missing_inputs": [
+        "Appendix 3 equations and parameter table"
+      ],
+      "recovery_action": "Provide Appendix 3, then rebuild and review the Model IR before computation.",
+      "expected_outputs": [
+        "Numerical answer for 3.2"
+      ]
+    },
+    {
+      "execution_status": "blocked",
+      "subproblem_id": "problem4",
+      "objective": "Compute the requested result for problem4.",
+      "blocking_reason": "Appendices 2 and 3 is absent, so the required physical equations and parameters are unavailable.",
+      "missing_inputs": [
+        "Appendices 2 and 3 equations and parameter table"
+      ],
+      "recovery_action": "Provide Appendices 2 and 3, then rebuild and review the Model IR before computation.",
+      "expected_outputs": [
+        "Numerical answer for problem4"
+      ]
+    }
+  ]
+}

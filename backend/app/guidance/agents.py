@@ -8,11 +8,10 @@ from pathlib import Path
 from app.core.llm.llm import LLM
 from app.guidance.contract_request import StructuredContractRequester
 from app.guidance.contracts import (
-    ModelReview,
-    ModelSpec,
     ProblemSpec,
-    RevisedModelSpec,
 )
+from app.guidance.model_ir import ModelIR, ModelIRReview
+from app.guidance.model_ir_semantics import ModelIRSemanticValidator
 
 
 class LLMProblemDecomposer:
@@ -42,43 +41,43 @@ class LLMModeler:
         data_profile: dict | None = None,
         task: dict,
         work_dir: Path,
-    ) -> ModelSpec:
+    ) -> ModelIR:
         return await _request_model(
             llm=self.llm,
-            model_type=ModelSpec,
-            system_prompt="""你是数学建模方案专家。只输出 ModelSpec JSON。比较候选方法并选择一个。data_profile 是已读取上传文件后生成的权威数据画像：其中列出的文件、工作表、列名、有效列数和样例行均视为实际存在，禁止把这些表误判为缺失；source_requirements 中 status=missing 的来源才属于确定性缺失。subproblem_models 必须逐一覆盖 problem_spec 的全部子问题；输出的 subproblem_id 必须精确使用各输入子问题的 id 字段（如 problem1），不得使用仅供阅读的 subproblem_id 题面编号（如 1.1）。每项必须明确 execution_status。数据与题设足够时使用 solvable，完整给出 objective、selected_method、rationale、equations、parameters、constraints、solve_steps、expected_results；若目标要求不同直径、工况或类别各自给出参数，必须分别估计并逐组输出，禁止只给全局平均参数。题面引用但上传文件中不存在的附录、参数表或观测属于缺失输入，必须使用 blocked，只给 objective、blocking_reason、missing_inputs、recovery_action、expected_results，禁止虚构公式、参数来源或数值把它包装成 solvable。依赖 blocked 子问题结果、缺失物理关系或缺失约束的下游子问题也必须标为 blocked，假设和正则化不能替代缺失信息。允许审核通过一个 coverage_status=partial 的诚实执行方案。输出必须简洁：每个可解子问题最多 8 个核心参数；复杂模型必须用参数组（如 theta_problem4）概括，不要枚举所有标量；长推导留给 solve.py 和 parameter_registry。每个 parameter 必须给出 parameter_id、symbol、meaning、unit、source_type、source_detail、estimation_method 和非空 constraints。每个 solvable 子问题都必须在 constraints、solve_steps 或 parameter.constraints 中写明“可辨识性计划”，并至少包含 rank/Jacobian/设计矩阵满秩/唯一性检查/固定参数/额外识别约束之一；若不可唯一识别，必须给出显式识别约束并披露条件性。执行文件清单由系统管理，不得输出 required_outputs。图片 role 只允许 data_overview、model_explanation、result_fit、verification_diagnostic，并逐图声明 path、source_data 与 linked_result_ids。""",
+            model_type=ModelIR,
+            system_prompt="""你是数学建模 ModelIR 构建器。只输出符合目标 Schema 的 ModelIR JSON。逐一覆盖 problem_spec 的全部子问题，subproblem_id 必须精确使用输入 id。可解子问题必须用强类型表达式 AST 描述方程和约束，声明变量、数据引用、通用算子调用、推荐模型与简单基线、可辨识性/证据/稳健性验证以及证据绑定的最终答案；禁止用 free-text equations 作为数学语义，禁止输出 Python、solve.py 或其他隐式执行代码。operator_id 只能表示可复用数学能力，禁止引用题名或题号。data_profile 中列出的文件、工作表和列视为实际存在；source_requirements 中 status=missing 的来源才是确定缺失。数据、物理关系、约束或算子不足时必须输出 blocked，明确 blocking_reason、missing_inputs、recovery_action 和 expected_outputs；禁止用假设、经验常数或正则化伪造可解性。""",
             payload={
                 **_compact_problem_spec_for_modeling(problem_spec),
                 "data_profile": data_profile or {"files": []},
             },
             agent_name="GuidanceModeler",
             artifact_dir=work_dir,
-            semantic_validator=_validate_model_identifiability_plan,
+            semantic_validator=_validate_model_ir_semantics,
         )
 
     async def revise(
         self,
         *,
         problem_spec: ProblemSpec,
-        previous_model: ModelSpec,
-        review: ModelReview,
+        previous_model_ir: ModelIR,
+        review: ModelIRReview,
         data_profile: dict | None = None,
         task: dict,
         work_dir: Path,
-    ) -> RevisedModelSpec:
+    ) -> ModelIR:
         return await _request_model(
             llm=self.llm,
-            model_type=RevisedModelSpec,
-            system_prompt="""你是数学建模方案修订专家。只输出完整 RevisedModelSpec JSON。严格根据独立审核的每一条 required_revisions 修订旧模型，并在 review_resolutions 中逐条原文填写 requirement，同时说明 resolution、affected_subproblem_ids 和 changed_fields；不得遗漏或添加无关解决项。subproblem_models 必须逐一覆盖全部子问题，subproblem_id 必须精确使用 problem_spec 中各子问题的 id 字段，不得使用题面编号，并明确 execution_status：solvable 项保留非空 equations、parameters、constraints、solve_steps、expected_results；缺少题面所引用附录、参数表或观测的子题必须改为 blocked，只登记 blocking_reason、missing_inputs、recovery_action 和 expected_results，禁止用假设补成伪可解模型；依赖 blocked 子问题结果或缺失物理关系的下游子题也必须 blocked。每个可解子问题最多 8 个核心参数，复杂模型用参数组概括，不要枚举所有标量；每个 solvable 项都必须在子问题约束、求解步骤或参数约束中写明“可辨识性计划”，并至少包含 rank/Jacobian/设计矩阵满秩/唯一性检查/固定参数/额外识别约束之一；每个参数必须保留来源和估计方法。不得回避审核项，也不得虚构数据。执行文件清单由系统管理，不得输出 required_outputs。""",
+            model_type=ModelIR,
+            system_prompt="""你是数学建模 ModelIR 修订器。只输出完整 ModelIR JSON。逐条处理 model_review.required_revisions，并保持所有子问题覆盖。可解项只能使用强类型表达式 AST 和通用算子调用，禁止 free-text equations、Python 或隐式执行代码；无法在现有数据和算子能力下诚实修复的子问题必须改为 blocked。不得通过虚构数据、参数或约束绕过审核。""",
             payload={
                 "problem_spec": problem_spec.model_dump(mode="json"),
-                "previous_model": previous_model.model_dump(mode="json"),
+                "previous_model_ir": previous_model_ir.model_dump(mode="json"),
                 "model_review": review.model_dump(mode="json"),
                 "data_profile": data_profile or {"files": []},
             },
             agent_name="GuidanceModelReviser",
             artifact_dir=work_dir,
-            semantic_validator=_validate_model_identifiability_plan,
+            semantic_validator=_validate_model_ir_semantics,
         )
 
 
@@ -90,17 +89,17 @@ class LLMModelReviewer:
         self,
         *,
         problem_spec: ProblemSpec,
-        model_spec: ModelSpec,
+        model_ir: ModelIR,
         task: dict,
         work_dir: Path,
-    ) -> ModelReview:
+    ) -> ModelIRReview:
         return await _request_model(
             llm=self.llm,
-            model_type=ModelReview,
-            system_prompt="""你是独立模型审核员。只输出 ModelReview JSON。严格检查可辨识性、维度/单位、数据充分性、约束与计算可行性。审核对象是执行方案而不是强迫每题都产出数值：若可解子题契约完整，缺失输入的子题已诚实标记 blocked 且给出恢复动作，可以 approved 一个 coverage_status=partial 的方案；若把缺失附录、参数表或观测虚构成 given/assumption 后继续求解，必须 revision_required 或 blocked。""",
+            model_type=ModelIRReview,
+            system_prompt="""你是独立 ModelIR 审核员。只输出 ModelIRReview JSON。严格审核强类型表达式、可辨识性、维度/单位、数据证据、算子前提、约束和计算可行性。不得把程序可运行等同于模型充分。诚实 blocked 的子问题可以保留；若 IR 虚构输入、缺少基线或证据绑定、依赖自由文本公式或隐式代码，必须 revision_required 或 blocked。""",
             payload={
                 "problem_spec": problem_spec.model_dump(mode="json"),
-                "model_spec": model_spec.model_dump(mode="json"),
+                "model_ir": model_ir.model_dump(mode="json"),
             },
             agent_name="GuidanceModelReviewer",
             artifact_dir=work_dir,
@@ -154,42 +153,13 @@ def _compact_problem_spec_for_modeling(problem_spec: ProblemSpec) -> dict[str, A
     }
 
 
-def _validate_model_identifiability_plan(model_spec: ModelSpec) -> None:
-    keywords = (
-        "identifiability",
-        "identifiable",
-        "unique",
-        "rank",
-        "jacobian",
-        "fixed",
-        "可辨识",
-        "唯一",
-        "秩",
-        "雅可比",
-        "固定",
-        "额外约束",
-        "识别约束",
-    )
-    missing: list[str] = []
-    for subproblem in model_spec.subproblem_models:
-        if subproblem.execution_status == "blocked":
-            continue
-        parameter_constraints = [
-            constraint
-            for parameter in subproblem.parameters
-            for constraint in parameter.constraints
-        ]
-        text = " ".join(
-            [*subproblem.constraints, *subproblem.solve_steps, *parameter_constraints]
-        ).lower()
-        if not any(keyword.lower() in text for keyword in keywords):
-            missing.append(subproblem.subproblem_id)
-    if missing:
-        raise ValueError(
-            "identifiability plan missing for subproblems: "
-            + ", ".join(missing)
-            + "; add explicit rank/Jacobian/uniqueness/fixed-parameter or extra-constraint checks."
+def _validate_model_ir_semantics(model_ir: ModelIR) -> None:
+    diagnostics = ModelIRSemanticValidator().validate(model_ir)
+    if diagnostics:
+        details = "; ".join(
+            f"{item.code} at {item.path}: {item.message}" for item in diagnostics
         )
+        raise ValueError(f"Model IR semantic validation failed: {details}")
 
 
 def _compact_subproblem(item: dict[str, Any]) -> dict[str, Any]:

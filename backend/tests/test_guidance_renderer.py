@@ -1,6 +1,74 @@
 from app.guidance.renderer import render_verified_guidance
 
 
+def test_guidance_summary_renders_three_verification_layers_not_single_status() -> None:
+    markdown = render_verified_guidance(
+        approved_model={
+            "review_status": "approved",
+            "approved_model_ir": {"model_id": "layered-model", "subproblems": []},
+        },
+        verification_report={
+            "status": "partial",
+            "execution_verified": {
+                "status": "passed",
+                "reasons": ["operator graph completed"],
+            },
+            "evidence_supported": {
+                "status": "passed",
+                "reasons": ["results trace to source nodes"],
+            },
+            "model_adequate": {
+                "status": "not_assessed",
+                "reasons": ["cross-validation evidence is missing"],
+            },
+        },
+        parameter_registry={"parameters": []},
+        result_registry={"verified_results": [], "blocked_results": []},
+        execution_manifest={"status": "passed"},
+    )
+
+    assert "| 执行正确性 | `passed` |" in markdown
+    assert "| 证据可追溯性 | `passed` |" in markdown
+    assert "| 模型充分性 | `not_assessed` |" in markdown
+    assert "结果复核状态为" not in markdown
+
+
+def test_verification_failure_recovery_targets_operator_execution_graph() -> None:
+    markdown = render_verified_guidance(
+        approved_model={
+            "review_status": "approved",
+            "model_id": "approved-ir",
+            "approved_model_ir": {
+                "model_id": "approved-ir",
+                "subproblems": [
+                    {
+                        "execution_status": "solvable",
+                        "subproblem_id": "problem1",
+                        "objective": "Fit the observed response.",
+                    }
+                ],
+            },
+        },
+        verification_report={
+            "status": "blocked",
+            "model_id": "approved-ir",
+            "blocking_issues": ["residual check failed"],
+            "artifact_refs": {
+                "approved_model": "approved_model_ir.json",
+                "execution_manifest": "execution_manifest.json",
+            },
+        },
+        parameter_registry={"parameters": []},
+        result_registry={"verified_results": [], "blocked_results": []},
+        execution_manifest={"status": "passed"},
+    )
+
+    assert markdown.startswith("# 结果复核阻断诊断")
+    assert "execution_plan.json" in markdown
+    assert "solve.py" not in markdown
+    assert "ModelSpec" not in markdown
+
+
 def test_renderer_does_not_invent_reader_guidance_when_summary_is_missing() -> None:
     markdown = render_verified_guidance(
         approved_model={

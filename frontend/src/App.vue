@@ -129,6 +129,10 @@ import HistoryView from './components/HistoryView.vue'
 import PaperView from './components/PaperView.vue'
 import SettingsPage from './components/SettingsPage.vue'
 import type { WorkflowMode } from './constants/workflowModes'
+import type {
+  SubproblemCapabilityPayload,
+  VerificationLayerPayload,
+} from './verificationLayers'
 
 type TaskType = 'guidance' | 'writing' | 'polish'
 type TaskMode = 'writing' | 'polish'
@@ -158,6 +162,8 @@ interface RuntimeMessage {
     audit_status?: string
     audit_summary?: string
     audit_blocks?: unknown
+    verification_layers?: VerificationLayerPayload
+    capability_coverage?: SubproblemCapabilityPayload[]
   }
 }
 
@@ -191,6 +197,8 @@ interface TaskContext {
   audit_status?: string
   audit_summary?: string
   audit_blocks?: unknown
+  verification_layers?: VerificationLayerPayload
+  capability_coverage?: SubproblemCapabilityPayload[]
 }
 
 interface TaskResultPayload {
@@ -208,6 +216,8 @@ interface TaskResultPayload {
   audit_status?: string
   audit_summary?: string
   audit_blocks?: unknown
+  verification_layers?: VerificationLayerPayload
+  capability_coverage?: SubproblemCapabilityPayload[]
 }
 
 interface TaskDraftPayload {
@@ -247,7 +257,7 @@ const statusText = computed(() => {
   const map: Record<string, string> = {
     idle: '就绪',
     running: '运行中',
-    completed: '已完成',
+    completed: '流程已结束',
     failed: '失败',
     cancelled: '已停止',
   }
@@ -479,6 +489,8 @@ function buildFallbackResult(task: HistoryTask, detail: TaskDetail | null, conte
     audit_status: context?.audit_status || '',
     audit_summary: context?.audit_summary || '',
     audit_blocks: context?.audit_blocks,
+    verification_layers: context?.verification_layers,
+    capability_coverage: context?.capability_coverage,
   } as TaskResultPayload
 }
 

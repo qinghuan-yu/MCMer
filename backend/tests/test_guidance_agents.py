@@ -107,6 +107,42 @@ def test_contract_request_prompts_for_strict_json_without_markdown_fences() -> N
     assert "Escape every quote inside string values" in retry_system_prompt
 
 
+def test_modeler_requests_typed_model_ir_instead_of_free_text_model_spec(tmp_path) -> None:
+    from app.guidance.agents import LLMModeler
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.model_ir import ModelIR
+
+    blocked_ir = {
+        "schema_version": "1.0",
+        "model_id": "operator-gap",
+        "subproblems": [{
+            "execution_status": "blocked",
+            "subproblem_id": "problem1",
+            "objective": "Estimate the requested model.",
+            "blocking_reason": "No registered operator covers the requested method.",
+            "missing_inputs": ["registered operator"],
+            "recovery_action": "Register and validate the missing operator.",
+            "expected_outputs": ["compiled model result"],
+        }],
+    }
+    llm = StubLLM([blocked_ir, blocked_ir])
+
+    result = asyncio.run(LLMModeler(llm).model(
+        problem_spec=ProblemSpec(
+            task_summary="Estimate the model.",
+            subproblems=[{"id": "problem1"}],
+        ),
+        task={},
+        work_dir=tmp_path,
+    ))
+
+    assert isinstance(result, ModelIR)
+    assert result.subproblems[0].execution_status == "blocked"
+    system_prompt = llm.calls[0]["history"][0]["content"]
+    assert "ModelIR" in system_prompt
+    assert "free-text equations" in system_prompt
+
+
 def test_modeler_regenerates_after_schema_validation_error(tmp_path) -> None:
     from app.guidance.agents import LLMModeler
     from app.guidance.contracts import ProblemSpec

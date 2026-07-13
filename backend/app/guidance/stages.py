@@ -4,34 +4,20 @@ from __future__ import annotations
 
 import json
 import csv
+import hashlib
 import re
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import BaseModel
-
-from app.guidance.artifacts import (
-    FigureRegistry,
-    ParameterRegistry,
-    ResultRegistry,
-    SolverResults,
-    reader_guidance_reference_issues,
-)
 from app.guidance.contracts import (
-    ApprovedModelSpec,
-    GeneratedProgram,
-    ModelReview,
-    ModelSpec,
-    RevisedModelSpec,
     ProblemSpec,
-    ExecutionManifest,
     VerificationReport,
-    execution_required_outputs,
-    validate_review_resolutions,
-    validate_subproblem_coverage,
 )
-from app.guidance.execution import LocalProgramExecutor
-from app.guidance.verification import verify_solver_results
+from app.guidance.model_ir import ApprovedModelIR, ModelIR, ModelIRReview
+from app.guidance.model_ir_compiler import ExecutionPlan, ModelIRCompiler
+from app.guidance.model_ir_semantics import ModelIRSemanticValidator
+from app.guidance.model_validators import build_default_model_validator_registry
+from app.guidance.operator_execution import OperatorExecutionManifest, OperatorGraphExecutor
 from app.artifacts.guidance_audit import build_guidance_audit_report
 from app.guidance.renderer import render_verified_guidance
 
@@ -54,18 +40,18 @@ class Modeler(Protocol):
         data_profile: dict,
         task: dict,
         work_dir: Path,
-    ) -> RevisedModelSpec: ...
+    ) -> ModelIR: ...
 
     async def revise(
         self,
         *,
         problem_spec: ProblemSpec,
-        previous_model: ModelSpec,
-        review: ModelReview,
+        previous_model_ir: ModelIR,
+        review: ModelIRReview,
         data_profile: dict,
         task: dict,
         work_dir: Path,
-    ) -> ModelSpec: ...
+    ) -> ModelIR: ...
 
 
 class ModelReviewer(Protocol):
@@ -73,21 +59,10 @@ class ModelReviewer(Protocol):
         self,
         *,
         problem_spec: ProblemSpec,
-        model_spec: ModelSpec,
+        model_ir: ModelIR,
         task: dict,
         work_dir: Path,
-    ) -> ModelReview: ...
-
-
-class ProgramGenerator(Protocol):
-    async def generate(
-        self,
-        *,
-        approved_model: ApprovedModelSpec,
-        task: dict,
-        work_dir: Path,
-        data_profile: dict,
-    ) -> GeneratedProgram: ...
+    ) -> ModelIRReview: ...
 
 
 class DecompositionStage:
@@ -139,31 +114,36 @@ class ModelingStage:
         )
         if source_path.name == "problem_spec.json":
             problem_spec = ProblemSpec.model_validate_json(source_path.read_text(encoding="utf-8"))
-            model_spec = await self.modeler.model(
+            model_ir = await self.modeler.model(
                 problem_spec=problem_spec,
                 data_profile=data_profile,
                 task=task,
                 work_dir=output_path.parent,
             )
         else:
-            review = ModelReview.model_validate_json(source_path.read_text(encoding="utf-8"))
+            review = ModelIRReview.model_validate_json(source_path.read_text(encoding="utf-8"))
             problem_spec = ProblemSpec.model_validate_json(
                 (output_path.parent / review.problem_spec_ref).read_text(encoding="utf-8")
             )
-            previous_model = ModelSpec.model_validate_json(
-                (output_path.parent / review.model_spec_ref).read_text(encoding="utf-8")
+            previous_model_ir = ModelIR.model_validate_json(
+                (output_path.parent / review.model_ir_ref).read_text(encoding="utf-8")
             )
-            model_spec = await self.modeler.revise(
+            model_ir = await self.modeler.revise(
                 problem_spec=problem_spec,
-                previous_model=previous_model,
+                previous_model_ir=previous_model_ir,
                 review=review,
                 data_profile=data_profile,
                 task=task,
                 work_dir=output_path.parent,
             )
-            validate_review_resolutions(model_spec, review)
-        validate_subproblem_coverage(problem_spec, model_spec)
-        _write_model(output_path, model_spec)
+        _validate_model_ir_coverage(problem_spec, model_ir)
+        diagnostics = ModelIRSemanticValidator().validate(model_ir)
+        if diagnostics:
+            details = "; ".join(
+                f"{item.code} at {item.path}: {item.message}" for item in diagnostics
+            )
+            raise ValueError(f"Model IR semantic validation failed: {details}")
+        _write_model(output_path, model_ir)
         return output_path
 
 
@@ -179,93 +159,45 @@ class ModelReviewStage:
         input_path: Path | None,
         output_path: Path,
     ) -> Path:
-        model_spec = ModelSpec.model_validate_json(_required_input(input_path).read_text(encoding="utf-8"))
+        source_path = _required_input(input_path)
+        model_ir = ModelIR.model_validate_json(source_path.read_text(encoding="utf-8"))
         problem_spec = ProblemSpec.model_validate_json(
-            (output_path.parent / model_spec.problem_spec_ref).read_text(encoding="utf-8")
+            (output_path.parent / "problem_spec.json").read_text(encoding="utf-8")
         )
         review = await self.reviewer.review(
             problem_spec=problem_spec,
-            model_spec=model_spec,
+            model_ir=model_ir,
             task=task,
             work_dir=output_path.parent,
         )
         review = review.model_copy(
             update={
-                "problem_spec_ref": model_spec.problem_spec_ref,
-                "model_spec_ref": input_path.name,
+                "problem_spec_ref": "problem_spec.json",
+                "model_ir_ref": source_path.name,
             }
         )
         _write_model(output_path.parent / "model_review.json", review)
-        approved = ApprovedModelSpec(
+        approved = ApprovedModelIR(
             review_status=review.status,
-            model_id=model_spec.model_id,
-            approved_model=model_spec.model_dump(mode="json"),
-            required_outputs=execution_required_outputs(model_spec),
+            model_id=model_ir.model_id,
+            model_ir_ref=source_path.name,
+            approved_model_ir=model_ir,
         )
         _write_model(output_path, approved)
         return output_path
 
 
 class CalculationStage:
-    """Generate one complete solver and execute it exactly once."""
+    """Compile approved Model IR and execute only registered operators."""
 
     def __init__(
         self,
         *,
-        program_generator: ProgramGenerator,
-        executor: LocalProgramExecutor,
+        compiler: ModelIRCompiler,
+        executor: OperatorGraphExecutor,
     ) -> None:
-        self.program_generator = program_generator
+        self.compiler = compiler
         self.executor = executor
-
-    @staticmethod
-    def _write_failure_artifacts(
-        *,
-        task_id: str,
-        approved_model: ApprovedModelSpec,
-        input_path: Path,
-        output_path: Path,
-        failed_operation: str,
-        exc: Exception,
-    ) -> Path:
-        error_message = f"{type(exc).__name__}: {exc}"
-        work_dir = output_path.parent
-        (work_dir / "calculation_failure.json").write_text(
-            json.dumps(
-                {
-                    "task_id": task_id,
-                    "model_id": approved_model.model_id,
-                    "failed_operation": failed_operation,
-                    "resume_from": input_path.name,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        output_path.write_text(
-            json.dumps(
-                ExecutionManifest(
-                    task_id=task_id,
-                    model_id=approved_model.model_id,
-                    status="failed",
-                    entrypoint="solve.py",
-                    program_sha256="",
-                    execution_count=0,
-                    elapsed_seconds=0.0,
-                    stdout="",
-                    error_message=error_message,
-                    generated_files=[],
-                    missing_required_outputs=list(approved_model.required_outputs),
-                ).model_dump(),
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        return output_path
 
     async def run(
         self,
@@ -275,59 +207,36 @@ class CalculationStage:
         input_path: Path | None,
         output_path: Path,
     ) -> Path:
-        if input_path is None:
-            raise ValueError("CalculationStage requires approved_model_spec.json")
-
-        approved_model = ApprovedModelSpec.model_validate_json(
-            input_path.read_text(encoding="utf-8")
+        source_path = _required_input(input_path)
+        approved = ApprovedModelIR.model_validate_json(
+            source_path.read_text(encoding="utf-8")
         )
+        if approved.review_status != "approved":
+            raise ValueError("CalculationStage requires an approved Model IR")
         work_dir = output_path.parent
-        data_profile = _build_data_profile(work_dir)
-        (work_dir / "data_profile.json").write_text(
-            json.dumps(data_profile, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        compilation = self.compiler.compile_to_file(
+            approved.approved_model_ir,
+            output_path=work_dir / "execution_plan.json",
+            model_ir_ref=f"{source_path.name}#approved_model_ir",
         )
-        try:
-            program = await self.program_generator.generate(
-                approved_model=approved_model,
-                task=task,
+        _write_model(work_dir / "compilation_result.json", compilation)
+        if compilation.execution_plan is None:
+            self.executor.write_blocked(
+                compilation_result=compilation,
+                model_ir=approved.approved_model_ir,
                 work_dir=work_dir,
-                data_profile=data_profile,
             )
-        except Exception as exc:
-            return self._write_failure_artifacts(
-                task_id=task_id,
-                approved_model=approved_model,
-                input_path=input_path,
-                output_path=output_path,
-                failed_operation="program_generation",
-                exc=exc,
-            )
-        try:
-            manifest = await self.executor.execute(
-                task_id=task_id,
-                work_dir=work_dir,
-                approved_model=approved_model,
-                program=program,
-            )
-        except Exception as exc:
-            return self._write_failure_artifacts(
-                task_id=task_id,
-                approved_model=approved_model,
-                input_path=input_path,
-                output_path=output_path,
-                failed_operation="solver_execution",
-                exc=exc,
-            )
-        if manifest.status == "passed":
-            failure_path = work_dir / "calculation_failure.json"
-            if failure_path.exists():
-                failure_path.unlink()
+            return output_path
+        self.executor.execute(
+            execution_plan=compilation.execution_plan,
+            model_ir=approved.approved_model_ir,
+            work_dir=work_dir,
+        )
         return output_path
 
 
 class ResultVerificationStage:
-    """Verify only solver artifacts that satisfy the typed file contracts."""
+    """Verify the operator execution graph without inferring model adequacy."""
 
     async def run(
         self,
@@ -337,82 +246,85 @@ class ResultVerificationStage:
         input_path: Path | None,
         output_path: Path,
     ) -> Path:
-        manifest = ExecutionManifest.model_validate_json(
+        manifest = OperatorExecutionManifest.model_validate_json(
             _required_input(input_path).read_text(encoding="utf-8")
         )
         root = output_path.parent
-        missing = list(dict.fromkeys([
-            *manifest.missing_required_outputs,
-            *[path for path in manifest.generated_files if not (root / path).is_file()],
-        ]))
-        contract_issues: list[str] = []
-        parameters = _load_artifact_contract(
-            root / "parameter_registry.json", ParameterRegistry, contract_issues
+        approved = ApprovedModelIR.model_validate_json(
+            (root / "approved_model_ir.json").read_text(encoding="utf-8")
         )
-        results = _load_artifact_contract(
-            root / "result_registry.json", ResultRegistry, contract_issues
+        execution_plan = ExecutionPlan.model_validate_json(
+            (root / manifest.execution_plan_ref).read_text(encoding="utf-8")
         )
-        figure_registry = _load_artifact_contract(
-            root / "figure_registry.json", FigureRegistry, contract_issues
-        )
-        solver_results = _load_artifact_contract(
-            root / "solver_results.json", SolverResults, contract_issues
-        )
-        result_ids = {item.id for item in results.verified_results} if results else set()
-        figures, figure_issues = _verify_typed_figures(
-            root, manifest, figure_registry, result_ids
-        )
-        numerical_checks = (
-            verify_solver_results(solver_results, results)
-            if solver_results is not None and results is not None
-            else {
-                "equation_checks": [],
-                "constraint_checks": [],
-                "residual_checks": [],
-                "sensitivity_checks": [],
-                "issues": [],
-            }
-        )
-        review = _read_json(root / "model_review.json")
-        units_passed = _is_positive_review_value(review.get("dimensional_consistency"))
+        parameters = _read_json(root / "parameter_registry.json")
+        results = _read_json(root / "result_registry.json")
+        figure_registry = _read_json(root / "figure_registry.json")
 
-        blocking_issues: list[str] = []
+        execution_issues: list[str] = []
         if manifest.status != "passed":
-            blocking_issues.append(f"solver status is {manifest.status}")
+            execution_issues.append(f"operator execution status is {manifest.status}")
+        missing = [
+            path for path in manifest.generated_files if not (root / path).is_file()
+        ]
         if missing:
-            blocking_issues.append(f"missing generated files: {', '.join(missing)}")
-        blocking_issues.extend(contract_issues)
-        if parameters is not None and not parameters.parameters:
-            blocking_issues.append("parameter_registry has no parameter evidence")
-        if results is not None and not results.verified_results:
-            blocking_issues.append("result_registry has no verified results")
-        if results is not None and parameters is not None and results.verified_results:
-            blocking_issues.extend(reader_guidance_reference_issues(results, parameters))
-        blocking_issues.extend(numerical_checks["issues"])
-        blocking_issues.extend(figure_issues)
-        if not units_passed:
-            blocking_issues.append("model review did not pass dimensional consistency")
+            execution_issues.append(f"missing generated files: {', '.join(missing)}")
+        plan_hash = hashlib.sha256(
+            execution_plan.model_dump_json().encode("utf-8")
+        ).hexdigest()
+        if plan_hash != manifest.execution_plan_sha256:
+            execution_issues.append("execution plan hash does not match manifest")
+        expected_node_ids = [node.node_id for node in execution_plan.graph.nodes]
+        if manifest.executed_node_ids != expected_node_ids:
+            execution_issues.append("executed node IDs do not match execution plan order")
+
+        evidence_issues, figures = _operator_evidence_issues(
+            root=root,
+            executed_node_ids=set(manifest.executed_node_ids),
+            parameter_registry=parameters,
+            result_registry=results,
+            figure_registry=figure_registry,
+        )
+        model_adequacy = _assess_model_adequacy(approved, results)
+        if execution_issues or evidence_issues:
+            model_adequacy["status"] = "blocked"
+            model_adequacy["reasons"].append(
+                "model adequacy is blocked until execution and evidence layers pass"
+            )
+        counterevidence_records = _build_counterevidence_records(
+            approved,
+            model_adequacy,
+        )
 
         report = VerificationReport(
             model_id=manifest.model_id,
-            status="verified" if not blocking_issues else "blocked",
+            execution_verified={
+                "status": "passed" if not execution_issues else "failed",
+                "reasons": execution_issues or ["execution plan hash and node coverage verified"],
+                "evidence_refs": [manifest.execution_plan_ref, input_path.name],
+            },
+            evidence_supported={
+                "status": (
+                    "blocked" if execution_issues else "passed" if not evidence_issues else "failed"
+                ),
+                "reasons": evidence_issues or ["registered outputs trace to executed operator nodes"],
+                "evidence_refs": [
+                    "parameter_registry.json",
+                    "result_registry.json",
+                    "figure_registry.json",
+                ],
+            },
+            model_adequate=model_adequacy,
+            counterevidence_records=counterevidence_records,
             input_checks=[{
                 "status": "passed" if not missing else "failed",
                 "checked_files": manifest.generated_files,
                 "missing_files": missing,
             }],
-            equation_checks=numerical_checks["equation_checks"],
-            unit_checks=[{
-                "status": "passed" if units_passed else "failed",
-                "review_value": review.get("dimensional_consistency"),
-            }],
-            constraint_checks=numerical_checks["constraint_checks"],
-            residual_checks=numerical_checks["residual_checks"],
-            sensitivity_checks=numerical_checks["sensitivity_checks"],
-            blocking_issues=blocking_issues,
+            blocking_issues=[*execution_issues, *evidence_issues],
             artifact_refs={
-                "approved_model": "approved_model_spec.json",
+                "approved_model": "approved_model_ir.json",
                 "execution_manifest": input_path.name,
+                "execution_plan": manifest.execution_plan_ref,
                 "parameter_registry": "parameter_registry.json",
                 "result_registry": "result_registry.json",
                 "figure_registry": "figure_registry.json",
@@ -421,6 +333,149 @@ class ResultVerificationStage:
         )
         _write_model(output_path, report)
         return output_path
+
+
+def _assess_model_adequacy(
+    approved: ApprovedModelIR,
+    result_registry: dict,
+) -> dict:
+    registry = build_default_model_validator_registry()
+    verified_results = result_registry.get("verified_results")
+    if not isinstance(verified_results, list):
+        verified_results = []
+
+    candidate_roles: set[str] = set()
+    checks: dict[str, str] = {}
+    reasons: list[str] = []
+    evidence_refs: list[str] = []
+    family_statuses: list[str] = []
+
+    for subproblem in approved.approved_model_ir.subproblems:
+        if subproblem.execution_status != "solvable":
+            continue
+        roles = {candidate.role for candidate in subproblem.candidate_models}
+        candidate_roles.update(roles)
+        subproblem_results = [
+            result
+            for result in verified_results
+            if isinstance(result, dict)
+            and result.get("subproblem_id") == subproblem.subproblem_id
+        ]
+        evidence = [
+            result["value"]
+            for result in subproblem_results
+            if isinstance(result.get("value"), dict)
+        ]
+        for result in subproblem_results:
+            result_id = str(result.get("id") or "")
+            reference = f"result_registry.json#{result_id}"
+            if result_id and reference not in evidence_refs:
+                evidence_refs.append(reference)
+
+        for family in subproblem.validation.model_families:
+            assessment = registry.assess(
+                family=family,
+                candidate_roles=roles,
+                evidence=evidence,
+            )
+            family_statuses.append(assessment.status)
+            prefix = f"{subproblem.subproblem_id}.{family}"
+            for name, check in assessment.checks.items():
+                checks[f"{prefix}.{name}"] = check.status
+            if assessment.reasons:
+                reasons.extend(
+                    f"{prefix}: {reason}" for reason in assessment.reasons
+                )
+
+    if family_statuses and all(status == "passed" for status in family_statuses):
+        status = "passed"
+        reasons.append("all declared model-family validators passed")
+    elif "failed" in family_statuses:
+        status = "failed"
+    else:
+        status = "not_assessed"
+        if not reasons:
+            reasons.append("no assessable model-family evidence was registered")
+
+    return {
+        "status": status,
+        "candidate_roles": sorted(candidate_roles) or ["alternative"],
+        "checks": checks,
+        "reasons": reasons,
+        "evidence_refs": evidence_refs or ["approved_model_ir.json"],
+    }
+
+
+def _build_counterevidence_records(
+    approved: ApprovedModelIR,
+    model_adequacy: dict,
+) -> list[dict]:
+    checks = model_adequacy.get("checks")
+    if not isinstance(checks, dict):
+        checks = {}
+    report_evidence_refs = model_adequacy.get("evidence_refs")
+    if not isinstance(report_evidence_refs, list):
+        report_evidence_refs = []
+
+    records: list[dict] = []
+    for subproblem in approved.approved_model_ir.subproblems:
+        if subproblem.execution_status != "solvable":
+            continue
+        prefix = f"{subproblem.subproblem_id}."
+        subproblem_checks = {
+            name: status
+            for name, status in checks.items()
+            if name.startswith(prefix)
+        }
+        passed_refs = [
+            name for name, status in subproblem_checks.items() if status == "passed"
+        ]
+        failed_refs = [
+            name for name, status in subproblem_checks.items() if status == "failed"
+        ]
+        baseline_comparison_passed = any(
+            name.endswith(".baseline_comparison")
+            for name in passed_refs
+        )
+
+        for candidate in subproblem.candidate_models:
+            if candidate.role == "recommended":
+                continue
+            if (
+                candidate.role == "baseline"
+                and model_adequacy.get("status") == "passed"
+                and baseline_comparison_passed
+            ):
+                status = "excluded"
+                reason = (
+                    "the recommended route passed the registered baseline comparison "
+                    "and every declared model-family validator"
+                )
+                check_refs = passed_refs
+                evidence_refs = list(report_evidence_refs)
+            elif failed_refs:
+                status = "not_excluded"
+                reason = (
+                    "the available validation evidence does not justify excluding "
+                    "this route"
+                )
+                check_refs = failed_refs
+                evidence_refs = list(report_evidence_refs)
+            else:
+                status = "not_assessed"
+                reason = "candidate-specific exclusion evidence was not produced"
+                check_refs = []
+                evidence_refs = []
+            records.append({
+                "subproblem_id": subproblem.subproblem_id,
+                "challenged_candidate_id": candidate.id,
+                "status": status,
+                "exclusion_reason": reason,
+                "check_refs": check_refs,
+                "evidence_refs": evidence_refs,
+                "applicability_boundary": candidate.applicability_boundary,
+            })
+    return records
 
 
 class GuidanceStage:
@@ -436,7 +491,7 @@ class GuidanceStage:
     ) -> Path:
         source_path = _required_input(input_path)
         root = output_path.parent
-        if source_path.name == "approved_model_spec.json":
+        if source_path.name == "approved_model_ir.json":
             report, approved, parameters, results = _build_blocked_guidance_artifacts(
                 root,
                 source_path,
@@ -459,7 +514,7 @@ class GuidanceStage:
                 parameter_registry=parameters,
                 result_registry=results,
             )
-        if source_path.name == "approved_model_spec.json":
+        if source_path.name == "approved_model_ir.json":
             execution_manifest = {}
             calculation_failure = {}
         guidance = render_verified_guidance(
@@ -533,6 +588,17 @@ def _required_input(input_path: Path | None) -> Path:
     if input_path is None:
         raise ValueError("stage requires the previous saved contract")
     return input_path
+
+
+def _validate_model_ir_coverage(problem_spec: ProblemSpec, model_ir: ModelIR) -> None:
+    expected = [str(item.get("id") or "").strip() for item in problem_spec.subproblems]
+    modeled = [item.subproblem_id.strip() for item in model_ir.subproblems]
+    invalid_ids = not all(expected) or not all(modeled)
+    duplicate_ids = len(expected) != len(set(expected)) or len(modeled) != len(set(modeled))
+    if invalid_ids or duplicate_ids or set(expected) != set(modeled):
+        raise ValueError(
+            f"subproblem coverage mismatch: expected={expected}; modeled={modeled}"
+        )
 
 
 def _list_data_files(root: Path) -> list[str]:
@@ -855,69 +921,93 @@ def _has_complete_subproblem_guidance_details(subproblem: object) -> bool:
     return False
 
 
-_FIGURE_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
-
-
-def _load_artifact_contract(
-    path: Path,
-    contract_type: type[BaseModel],
-    issues: list[str],
-) -> BaseModel | None:
-    try:
-        return contract_type.model_validate_json(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        issues.append(f"{path.name} contract missing")
-        return None
-    except OSError as exc:
-        issues.append(f"{path.name} contract invalid: {type(exc).__name__}")
-        return None
-    except ValueError as exc:
-        issues.append(f"{path.name} contract invalid: {exc}")
-        return None
-
-
-def _verify_typed_figures(
+def _operator_evidence_issues(
+    *,
     root: Path,
-    manifest: ExecutionManifest,
-    registry: FigureRegistry | None,
-    result_ids: set[str],
-) -> tuple[list[dict], list[str]]:
-    generated_figures = {
-        path for path in manifest.generated_files if Path(path).suffix.lower() in _FIGURE_SUFFIXES
-    }
-    figures = registry.figures if registry is not None else []
-    registered_paths = {figure.path for figure in figures}
+    executed_node_ids: set[str],
+    parameter_registry: dict,
+    result_registry: dict,
+    figure_registry: dict,
+) -> tuple[list[str], list[dict]]:
     issues: list[str] = []
-
-    for path in sorted(generated_figures - registered_paths):
-        issues.append(f"generated figure is not registered: {path}")
-    for path in sorted(
-        path for path in registered_paths if not (root / path).is_file()
-    ):
-        issues.append(f"registered figure was not generated: {path}")
-    for figure in figures:
-        unknown_ids = set(figure.linked_result_ids) - result_ids
-        if unknown_ids:
+    parameters = parameter_registry.get("parameters")
+    if not isinstance(parameters, list):
+        issues.append("parameter_registry.parameters must be a list")
+        parameters = []
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            issues.append("parameter registry contains a non-object entry")
+            continue
+        source_node = str(parameter.get("source_node") or "")
+        if source_node not in executed_node_ids:
             issues.append(
-                f"figure has invalid result IDs for {figure.path}: {', '.join(sorted(unknown_ids))}"
+                f"parameter {parameter.get('parameter_id')} has an unexecuted source node"
             )
 
-    return [figure.model_dump(mode="json") for figure in figures], issues
+    verified_results = result_registry.get("verified_results")
+    blocked_results = result_registry.get("blocked_results")
+    if not isinstance(verified_results, list):
+        issues.append("result_registry.verified_results must be a list")
+        verified_results = []
+    if not isinstance(blocked_results, list):
+        issues.append("result_registry.blocked_results must be a list")
+    result_ids: set[str] = set()
+    for result in verified_results:
+        if not isinstance(result, dict):
+            issues.append("result registry contains a non-object verified entry")
+            continue
+        result_id = str(result.get("id") or "")
+        result_ids.add(result_id)
+        source_node = str(result.get("source_node") or "")
+        if source_node not in executed_node_ids:
+            issues.append(f"result {result_id} has an unexecuted source node")
+        evidence_ids = result.get("evidence_ids")
+        if not isinstance(evidence_ids, list) or not evidence_ids:
+            issues.append(f"result {result_id} has no evidence node IDs")
+        else:
+            unknown = sorted(set(map(str, evidence_ids)) - executed_node_ids)
+            if unknown:
+                issues.append(
+                    f"result {result_id} references unexecuted evidence nodes: {', '.join(unknown)}"
+                )
+
+    figures = figure_registry.get("figures")
+    if not isinstance(figures, list):
+        issues.append("figure_registry.figures must be a list")
+        figures = []
+    for figure in figures:
+        if not isinstance(figure, dict):
+            issues.append("figure registry contains a non-object entry")
+            continue
+        path = str(figure.get("path") or "")
+        if not path or not (root / path).is_file():
+            issues.append(f"registered figure was not generated: {path or '<missing path>'}")
+        linked_result_ids = figure.get("linked_result_ids")
+        if not isinstance(linked_result_ids, list) or not linked_result_ids:
+            issues.append(f"figure {path or '<missing path>'} has no linked result IDs")
+            continue
+        unknown_ids = set(map(str, linked_result_ids)) - result_ids
+        if unknown_ids:
+            issues.append(
+                f"figure has invalid result IDs for {path}: {', '.join(sorted(unknown_ids))}"
+            )
+
+    return issues, [figure for figure in figures if isinstance(figure, dict)]
 
 
 def _build_blocked_guidance_artifacts(
     root: Path,
     approved_path: Path,
 ) -> tuple[VerificationReport, dict, dict, dict]:
-    approved_model = ApprovedModelSpec.model_validate_json(
+    approved_model = ApprovedModelIR.model_validate_json(
         approved_path.read_text(encoding="utf-8")
     )
-    review = ModelReview.model_validate_json(
-        (root / approved_model.review_ref).read_text(encoding="utf-8")
-    )
-    issues = [*review.blocking_issues, *review.required_revisions]
-    if not issues:
-        issues = [f"model review ended with status {review.status}"]
+    blocked_subproblems = [
+        subproblem
+        for subproblem in approved_model.approved_model_ir.subproblems
+        if subproblem.execution_status == "blocked"
+    ]
+    issues = [subproblem.blocking_reason for subproblem in blocked_subproblems]
 
     parameters = {
         "parameters": [],
@@ -927,12 +1017,16 @@ def _build_blocked_guidance_artifacts(
         "verified_results": [],
         "blocked_results": [
             {
-                "id": f"result_model_review_blocked_{index}",
-                "message": issue,
-                "reason": "model_review_failed",
-                "source_data": [approved_model.model_spec_ref, approved_model.review_ref],
+                "id": f"blocked_{subproblem.subproblem_id.replace('.', '_')}",
+                "message": subproblem.blocking_reason,
+                "reason": "approved_model_ir_blocked",
+                "subproblem_id": subproblem.subproblem_id,
+                "missing_inputs": subproblem.missing_inputs,
+                "recovery_action": subproblem.recovery_action,
+                "expected_outputs": subproblem.expected_outputs,
+                "source_data": [approved_model.model_ir_ref],
             }
-            for index, issue in enumerate(issues, start=1)
+            for subproblem in blocked_subproblems
         ],
         "summary": {
             "coverage_status": "blocked",
@@ -961,18 +1055,4 @@ def _build_blocked_guidance_artifacts(
         json.dumps(results, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return report, _blocked_approved_model_payload(root, approved_model), parameters, results
-
-
-def _blocked_approved_model_payload(root: Path, approved_model: ApprovedModelSpec) -> dict:
-    payload = approved_model.model_dump(mode="json")
-    modeling_failure = _read_json_if_exists(root / "modeling_failure.json")
-    payload["approved_model"] = {
-        "model_id": approved_model.model_id,
-        "selected_method": "blocked_before_model_review",
-        "candidate_methods": [],
-        "assumptions": [],
-        "subproblem_models": [],
-        "failure": modeling_failure,
-    }
-    return payload
+    return report, approved_model.model_dump(mode="json"), parameters, results

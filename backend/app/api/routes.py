@@ -291,6 +291,8 @@ async def get_task_context(task_id: str):
         audit_status=ctx["audit_status"],
         audit_summary=ctx["audit_summary"],
         audit_blocks=ctx["audit_blocks"],
+        verification_layers=ctx["verification_layers"],
+        capability_coverage=ctx["capability_coverage"],
     )
 
 

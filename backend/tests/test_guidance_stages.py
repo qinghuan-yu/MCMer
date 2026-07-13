@@ -1011,6 +1011,7 @@ def test_result_verification_stage_checks_outputs_and_residual_metrics(tmp_path:
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["status"] == "verified"
     assert report["input_checks"][0]["status"] == "passed"
+    assert report["artifact_refs"]["approved_model"] == "approved_model_ir.json"
 
 
 def test_result_verification_accepts_yes_as_positive_model_review_status(tmp_path: Path) -> None:
@@ -1719,6 +1720,63 @@ def test_guidance_stage_writes_blocked_artifacts_from_failed_model_review(tmp_pa
     assert "q_main = q_1 + q_2" not in guidance
     assert audit["status"] == "PASS"
     assert audit["blocks"] == []
+
+
+def test_guidance_stage_uses_only_approved_ir_for_blocked_recovery(tmp_path: Path) -> None:
+    from app.guidance.stages import GuidanceStage
+
+    (tmp_path / "model_review.json").write_text(
+        json.dumps(
+            {
+                "model_id": "partial-model",
+                "status": "blocked",
+                "blocking_issues": ["candidate route was not approved"],
+                "required_revisions": ["Assume an unobserved load of 100 kN."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    approved_path = tmp_path / "approved_model_ir.json"
+    approved_path.write_text(
+        json.dumps(
+            {
+                "review_status": "blocked",
+                "model_id": "partial-model",
+                "approved_model_ir": {
+                    "model_id": "partial-model",
+                    "subproblems": [
+                        {
+                            "execution_status": "blocked",
+                            "subproblem_id": "problem2",
+                            "objective": "Estimate the anchor load.",
+                            "blocking_reason": "The load observations are missing.",
+                            "missing_inputs": ["authenticated load observations"],
+                            "recovery_action": "Supply the observations and rebuild the Model IR.",
+                            "expected_outputs": ["load estimate with uncertainty"],
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = asyncio.run(
+        GuidanceStage().run(
+            task_id="task-blocked-ir",
+            task={"work_dir": str(tmp_path)},
+            input_path=approved_path,
+            output_path=tmp_path / "guidance.md",
+        )
+    )
+
+    guidance = output.read_text(encoding="utf-8")
+    results = json.loads((tmp_path / "result_registry.json").read_text(encoding="utf-8"))
+    assert "The load observations are missing." in guidance
+    assert "Supply the observations and rebuild the Model IR." in guidance
+    assert "Assume an unobserved load of 100 kN." not in guidance
+    assert "candidate route was not approved" not in guidance
+    assert [item["id"] for item in results["blocked_results"]] == ["blocked_problem2"]
 
 
 def test_guidance_stage_renders_modeling_failure_as_diagnostic_not_empty_plan(

@@ -36,6 +36,41 @@
           <p v-if="isGuidanceBlocked" class="result-audit">
             审计未通过：参数来源或数值追踪仍需修复，请先查看方案与审计报告。
           </p>
+          <div v-if="isGuidanceResult" class="verification-layers">
+            <div
+              v-for="layer in verificationLayers"
+              :key="layer.key"
+              class="verification-layer"
+              :class="layer.tone"
+            >
+              <span class="verification-layer-label">{{ layer.label }}</span>
+              <strong>{{ layer.statusLabel }}</strong>
+            </div>
+          </div>
+          <section v-if="capabilityCoverage.length" class="capability-coverage">
+            <h4>逐子问题能力覆盖</h4>
+            <article
+              v-for="item in capabilityCoverage"
+              :key="item.subproblemId"
+              class="capability-item"
+              :class="item.tone"
+            >
+              <div class="capability-heading">
+                <strong>{{ item.subproblemId }}</strong>
+                <span>{{ item.statusLabel }}</span>
+              </div>
+              <p v-if="item.modelFamilies.length">模型族：{{ item.modelFamilies.join(' / ') }}</p>
+              <p v-if="item.missingOperators.length" class="capability-missing">
+                缺失算子：{{ item.missingOperators.join(', ') }}
+              </p>
+              <ul v-if="item.blockingReasons.length">
+                <li v-for="reason in item.blockingReasons" :key="reason">原因：{{ reason }}</li>
+              </ul>
+              <ul v-if="item.recoveryActions.length" class="capability-recovery">
+                <li v-for="action in item.recoveryActions" :key="action">恢复：{{ action }}</li>
+              </ul>
+            </article>
+          </section>
           <div class="result-files">
             <a
               v-if="primaryMarkdownPath"
@@ -127,6 +162,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import {
+  guidanceResultTitle,
+  normalizeCapabilityCoverage,
+  normalizeVerificationLayers,
+} from '../verificationLayers'
 
 type TaskType = 'guidance' | 'writing' | 'polish'
 
@@ -237,13 +277,16 @@ const guidanceDownloadUrl = computed(() => {
 })
 const workspaceDownloadUrl = computed(() => `/api/tasks/${encodeURIComponent(props.taskId)}/workspace.zip`)
 const isGuidanceBlocked = computed(() => isGuidanceResult.value && String(props.result?.audit_status || '').toUpperCase() === 'BLOCK')
+const verificationLayers = computed(() => normalizeVerificationLayers(props.result?.verification_layers))
+const capabilityCoverage = computed(() => normalizeCapabilityCoverage(props.result?.capability_coverage))
 const resultIcon = computed(() => {
   if (isGuidanceBlocked.value) return '!'
   return props.taskType === 'polish' ? 'OK' : 'MD'
 })
 const resultTitle = computed(() => {
   if (isGuidanceBlocked.value) return '方案需返工'
-  return props.taskType === 'polish' ? '润色完成' : '方案完成'
+  if (props.taskType === 'polish') return '润色完成'
+  return guidanceResultTitle(props.result?.verification_layers)
 })
 const showDocxLink = computed(() => Boolean(props.taskType === 'polish' && props.result?.docx_path && props.result?.primary_artifact_type !== 'guidance'))
 
@@ -714,6 +757,93 @@ watch(
   color: #92400e;
   font-size: 0.92rem;
   line-height: 1.6;
+}
+
+.verification-layers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 620px;
+  margin: 0 auto 18px;
+  text-align: left;
+}
+
+.verification-layer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(100, 116, 139, 0.24);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.verification-layer.positive {
+  border-color: rgba(5, 150, 105, 0.35);
+  color: #047857;
+}
+
+.verification-layer.negative {
+  border-color: rgba(220, 38, 38, 0.35);
+  color: #b91c1c;
+}
+
+.verification-layer.pending {
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #92400e;
+}
+
+.verification-layer-label {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.capability-coverage {
+  max-width: 720px;
+  margin: 0 auto 18px;
+  text-align: left;
+}
+
+.capability-coverage h4 {
+  margin: 0 0 10px;
+  color: var(--text-primary);
+}
+
+.capability-item {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgba(100, 116, 139, 0.24);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.capability-item.positive { border-color: rgba(5, 150, 105, 0.35); }
+.capability-item.negative { border-color: rgba(220, 38, 38, 0.35); }
+.capability-item.pending { border-color: rgba(245, 158, 11, 0.4); }
+
+.capability-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.capability-item p,
+.capability-item ul {
+  margin: 7px 0 0;
+  font-size: 0.84rem;
+}
+
+.capability-item ul {
+  padding-left: 18px;
+}
+
+.capability-missing { color: #b91c1c; }
+.capability-recovery { color: #047857; }
+
+@media (max-width: 640px) {
+  .verification-layers {
+    grid-template-columns: 1fr;
+  }
 }
 
 .result-files {

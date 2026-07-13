@@ -87,9 +87,22 @@ class CandidateModel(IRModel):
     role: Literal["baseline", "recommended", "alternative"]
     operator_node_ids: list[str] = Field(min_length=1, max_length=20)
     selection_metric: str = Field(min_length=1, max_length=100)
+    applicability_boundary: str = Field(min_length=1, max_length=500)
 
 
 class ValidationPlan(IRModel):
+    model_families: list[
+        Literal[
+            "regression",
+            "forecast",
+            "optimization",
+            "evaluation",
+            "simulation",
+            "inverse_problem",
+            "graph",
+            "differential_equation",
+        ]
+    ] = Field(min_length=1, max_length=8)
     identifiability_checks: list[str] = Field(min_length=1, max_length=12)
     evidence_checks: list[str] = Field(min_length=1, max_length=12)
     robustness_checks: list[str] = Field(min_length=1, max_length=12)
@@ -157,3 +170,26 @@ class ModelIR(IRModel):
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("subproblem ids must be unique")
         return self
+
+
+class ApprovedModelIR(IRModel):
+    schema_version: Literal["1.0"] = "1.0"
+    review_status: Literal["approved", "revision_required", "blocked"]
+    model_id: str = Field(min_length=1, max_length=120)
+    model_ir_ref: str = Field(default="model_ir.json", min_length=1, max_length=300)
+    review_ref: str = Field(default="model_review.json", min_length=1, max_length=300)
+    approved_model_ir: ModelIR
+
+
+class ModelIRReview(IRModel):
+    schema_version: Literal["1.0"] = "1.0"
+    model_id: str = Field(min_length=1, max_length=120)
+    status: Literal["approved", "revision_required", "blocked"]
+    problem_spec_ref: str = Field(default="problem_spec.json", min_length=1, max_length=300)
+    model_ir_ref: str = Field(default="model_ir.json", min_length=1, max_length=300)
+    identifiability: str = "unknown"
+    dimensional_consistency: str = "unknown"
+    data_sufficiency: str = "unknown"
+    computational_feasibility: str = "unknown"
+    blocking_issues: list[str] = Field(default_factory=list)
+    required_revisions: list[str] = Field(default_factory=list)

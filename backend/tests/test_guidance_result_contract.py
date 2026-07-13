@@ -6,6 +6,80 @@ from app.core.workflow import _build_completed_task_result
 from app.schemas.response import TaskResult
 
 
+def test_guidance_result_exposes_three_verification_layers(tmp_path: Path) -> None:
+    from app.guidance.pipeline import _final_result
+
+    (tmp_path / "guidance.md").write_text("# guidance\n", encoding="utf-8")
+    (tmp_path / "guidance_audit_report.json").write_text(
+        '{"status":"PASS","scores":{},"blocks":[]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "approved_model_ir.json").write_text(
+        '{"review_status":"approved"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "verification_report.json").write_text(
+        """{
+          "status": "partial",
+          "execution_verified": {"status": "passed"},
+          "evidence_supported": {"status": "passed"},
+          "model_adequate": {"status": "not_assessed"}
+        }""",
+        encoding="utf-8",
+    )
+
+    result = list(_final_result("task-layers", tmp_path))[-1]["data"]
+
+    assert result["status"] == "completed"
+    assert result["verification_layers"] == {
+        "execution_verified": "passed",
+        "evidence_supported": "passed",
+        "model_adequate": "not_assessed",
+    }
+
+
+def test_guidance_history_context_preserves_verification_layers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.config.setting import settings
+    from app.services.task_service import TaskManager
+
+    task_id = "task-history-layers"
+    task_dir = tmp_path / task_id
+    task_dir.mkdir()
+    (task_dir / "guidance.md").write_text("# guidance\n", encoding="utf-8")
+    (task_dir / "verification_report.json").write_text(
+        """{
+          "execution_verified": {"status": "passed"},
+          "evidence_supported": {"status": "failed"},
+          "model_adequate": {"status": "not_assessed"}
+        }""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "WORK_DIR", str(tmp_path))
+    manager = TaskManager()
+    monkeypatch.setattr(
+        manager,
+        "get_task",
+        lambda current_id: {
+            "task_id": current_id,
+            "question": "q",
+            "status": "completed",
+            "task_type": "guidance",
+        },
+    )
+
+    context = manager.load_task_context(task_id)
+
+    assert context is not None
+    assert context["verification_layers"] == {
+        "execution_verified": "passed",
+        "evidence_supported": "failed",
+        "model_adequate": "not_assessed",
+    }
+
+
 def test_guidance_completed_result_exposes_guidance_path_and_legacy_paper_path() -> None:
     payload = _build_completed_task_result(
         task_id="task-1",

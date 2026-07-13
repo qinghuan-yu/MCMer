@@ -92,15 +92,18 @@ def test_unknown_capability_is_blocked_as_missing_operator_without_llm() -> None
                         role="baseline",
                         operator_node_ids=["inverse_step"],
                         selection_metric="reconstruction_error",
+                        applicability_boundary="Observed domain under direct inversion.",
                     ),
                     CandidateModel(
                         id="spectral_candidate",
                         role="recommended",
                         operator_node_ids=["inverse_step"],
                         selection_metric="reconstruction_error",
+                        applicability_boundary="Observed domain under the declared spectral basis.",
                     ),
                 ],
                 validation=ValidationPlan(
+                    model_families=["inverse_problem"],
                     identifiability_checks=["operator_rank"],
                     evidence_checks=["reconstruction_error"],
                     robustness_checks=["perturbation"],
