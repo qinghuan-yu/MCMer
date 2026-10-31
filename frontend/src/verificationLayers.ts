@@ -73,7 +73,10 @@ export function normalizeVerificationLayers(
 
 export function guidanceResultTitle(
   payload?: VerificationLayerPayload | null,
+  taskStatus?: string | null,
 ): string {
+  if (taskStatus === 'partial') return '部分子题已完成'
+  if (taskStatus === 'blocked') return '任务已阻断'
   const layers = normalizeVerificationLayers(payload)
   const execution = layers[0]
   const evidence = layers[1]

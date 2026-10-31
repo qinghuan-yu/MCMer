@@ -14,7 +14,7 @@ from app.utils.log_util import logger
 
 router = APIRouter()
 
-TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+TERMINAL_STATUSES = {"blocked", "partial", "completed", "failed", "cancelled"}
 
 
 def _cancel_payload(task_id: str, is_revision: bool = False) -> dict:

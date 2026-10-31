@@ -6,7 +6,35 @@
       "execution_status": "solvable",
       "subproblem_id": "evidence_available",
       "objective": "Estimate grouped coefficients and compare linear versus continuous-hinge models.",
-      "variables": [
+      "assumptions": [],
+      "fact_bindings": [],
+      "data": [
+        {
+          "id": "workbook",
+          "source_ref": "data/A-附件.xlsx",
+          "fields": {
+            "observations": "declared sheets"
+          }
+        }
+      ],
+      "equations": [
+        {
+          "id": "declared_identity",
+          "left": {
+            "kind": "literal",
+            "value": 0.0
+          },
+          "right": {
+            "kind": "literal",
+            "value": 0.0
+          }
+        }
+      ],
+      "constraints": [],
+      "execution_components": [{
+        "kind": "operator_graph",
+        "component_id": "anchor_operator_graph",
+        "variables": [
         {
           "id": "standard",
           "role": "derived",
@@ -105,30 +133,7 @@
           ]
         }
       ],
-      "data": [
-        {
-          "id": "workbook",
-          "source_ref": "data/A-附件.xlsx",
-          "fields": {
-            "observations": "declared sheets"
-          }
-        }
-      ],
-      "equations": [
-        {
-          "id": "declared_identity",
-          "left": {
-            "kind": "literal",
-            "value": 0.0
-          },
-          "right": {
-            "kind": "literal",
-            "value": 0.0
-          }
-        }
-      ],
-      "constraints": [],
-      "operators": [
+        "operators": [
         {
           "node_id": "standard",
           "operator_id": "data.read_excel_table",
@@ -492,7 +497,8 @@
             ]
           }
         }
-      ],
+        ]
+      }],
       "candidate_models": [
         {
           "id": "simple_baseline",

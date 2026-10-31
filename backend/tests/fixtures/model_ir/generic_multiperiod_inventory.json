@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0",
+  "model_id": "generic_multiperiod_inventory",
+  "subproblems": [
+    {
+      "execution_status": "solvable",
+      "subproblem_id": "finite_inventory_policy",
+      "objective": "Minimize convex tiered acquisition, setup, and holding costs under delayed commissioning and stock conservation.",
+      "assumptions": [],
+      "fact_bindings": [],
+      "data": [
+        {"id": "source", "source_ref": "input_catalog.json#table-1", "fields": {"value": "value"}}
+      ],
+      "equations": [
+        {"id": "indexed_state_system", "left": {"kind": "literal", "value": 0.0}, "right": {"kind": "literal", "value": 0.0}}
+      ],
+      "constraints": [],
+      "execution_components": [{
+        "kind": "indexed_linear",
+        "component_id": "inventory_policy",
+        "model": {
+        "index_sets": [
+          {"id": "period", "values": ["p0", "p1", "p2"]},
+          {"id": "transition_period", "values": ["p1", "p2"]}
+        ],
+        "parameters": [
+          {
+            "id": "demand",
+            "index_sets": ["period"],
+            "values": [
+              {"coordinates": ["p0"], "value": 2.0, "source_ref": "input_catalog.json#table-1/r1c2"},
+              {"coordinates": ["p1"], "value": 4.0, "source_ref": "input_catalog.json#table-1/r2c2"},
+              {"coordinates": ["p2"], "value": 3.0, "source_ref": "input_catalog.json#table-1/r3c2"}
+            ]
+          },
+          {
+            "id": "loss",
+            "index_sets": ["period"],
+            "values": [
+              {"coordinates": ["p0"], "value": 1.0, "source_ref": "input_catalog.json#table-1/r1c3"},
+              {"coordinates": ["p1"], "value": 0.0, "source_ref": "input_catalog.json#table-1/r2c3"},
+              {"coordinates": ["p2"], "value": 1.0, "source_ref": "input_catalog.json#table-1/r3c3"}
+            ]
+          },
+          {
+            "id": "maintenance",
+            "index_sets": ["period"],
+            "values": [
+              {"coordinates": ["p0"], "value": 0.0, "source_ref": "input_catalog.json#table-1/r1c4"},
+              {"coordinates": ["p1"], "value": 1.0, "source_ref": "input_catalog.json#table-1/r2c4"},
+              {"coordinates": ["p2"], "value": 0.0, "source_ref": "input_catalog.json#table-1/r3c4"}
+            ]
+          },
+          {"id": "initial_stock", "index_sets": [], "values": [{"coordinates": [], "value": 5.0, "source_ref": "input_catalog.json#table-1/r1c5"}]},
+          {"id": "tier_one_cost", "index_sets": [], "values": [{"coordinates": [], "value": 2.0, "source_ref": "input_catalog.json#table-2/r1c2"}]},
+          {"id": "tier_two_cost", "index_sets": [], "values": [{"coordinates": [], "value": 5.0, "source_ref": "input_catalog.json#table-2/r2c2"}]},
+          {"id": "setup_cost", "index_sets": [], "values": [{"coordinates": [], "value": 1.0, "source_ref": "input_catalog.json#table-2/r3c2"}]},
+          {"id": "holding_cost", "index_sets": [], "values": [{"coordinates": [], "value": 0.5, "source_ref": "input_catalog.json#table-2/r4c2"}]},
+          {"id": "tier_capacity", "index_sets": [], "values": [{"coordinates": [], "value": 2.0, "source_ref": "input_catalog.json#table-2/r5c2"}]},
+          {"id": "setup_capacity", "index_sets": [], "values": [{"coordinates": [], "value": 20.0, "source_ref": "input_catalog.json#table-2/r6c2"}]}
+        ],
+        "variables": [
+          {"id": "purchase", "index_sets": ["period"], "domain": "integer", "lower_bound": 0.0},
+          {"id": "commissioned", "index_sets": ["period"], "domain": "integer", "lower_bound": 0.0},
+          {"id": "inventory", "index_sets": ["period"], "domain": "integer", "lower_bound": 0.0},
+          {"id": "loss_state", "index_sets": ["period"], "domain": "integer", "lower_bound": 0.0},
+          {"id": "maintenance_state", "index_sets": ["period"], "domain": "integer", "lower_bound": 0.0},
+          {"id": "tier_one", "index_sets": ["period"], "domain": "integer", "lower_bound": 0.0},
+          {"id": "tier_two", "index_sets": ["period"], "domain": "integer", "lower_bound": 0.0},
+          {"id": "setup", "index_sets": ["period"], "domain": "binary", "lower_bound": 0.0, "upper_bound": 1.0},
+          {"id": "initial_stock_state", "index_sets": [], "domain": "integer", "lower_bound": 0.0}
+        ],
+        "objective": {
+          "sense": "minimize",
+          "terms": [
+            {"for_each": {"t": "period"}, "coefficient": {"kind": "parameter", "parameter_id": "tier_one_cost", "selectors": []}, "variable": {"variable_id": "tier_one", "selectors": [{"binder": "t"}]}},
+            {"for_each": {"t": "period"}, "coefficient": {"kind": "parameter", "parameter_id": "tier_two_cost", "selectors": []}, "variable": {"variable_id": "tier_two", "selectors": [{"binder": "t"}]}},
+            {"for_each": {"t": "period"}, "coefficient": {"kind": "parameter", "parameter_id": "setup_cost", "selectors": []}, "variable": {"variable_id": "setup", "selectors": [{"binder": "t"}]}},
+            {"for_each": {"t": "period"}, "coefficient": {"kind": "parameter", "parameter_id": "holding_cost", "selectors": []}, "variable": {"variable_id": "inventory", "selectors": [{"binder": "t"}]}}
+          ]
+        },
+        "constraints": [
+          {"id": "fix_initial_stock", "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "initial_stock_state", "selectors": []}}], "relation": "equal", "rhs": {"kind": "parameter", "parameter_id": "initial_stock", "selectors": []}},
+          {"id": "fix_loss", "for_each": {"t": "period"}, "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "loss_state", "selectors": [{"binder": "t"}]}}], "relation": "equal", "rhs": {"kind": "parameter", "parameter_id": "loss", "selectors": [{"binder": "t"}]}},
+          {"id": "fix_maintenance", "for_each": {"t": "period"}, "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "maintenance_state", "selectors": [{"binder": "t"}]}}], "relation": "equal", "rhs": {"kind": "parameter", "parameter_id": "maintenance", "selectors": [{"binder": "t"}]}},
+          {
+            "id": "initial_balance",
+            "terms": [
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "inventory", "selectors": [{"value": "p0"}]}},
+              {"coefficient": {"kind": "constant", "value": -1.0}, "variable": {"variable_id": "initial_stock_state", "selectors": []}},
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "loss_state", "selectors": [{"value": "p0"}]}},
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "maintenance_state", "selectors": [{"value": "p0"}]}}
+            ],
+            "relation": "equal",
+            "rhs": {"kind": "parameter", "parameter_id": "demand", "selectors": [{"value": "p0"}], "multiplier": -1.0}
+          },
+          {
+            "id": "state_balance",
+            "for_each": {"t": "transition_period"},
+            "terms": [
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "inventory", "selectors": [{"binder": "t"}]}},
+              {"coefficient": {"kind": "constant", "value": -1.0}, "variable": {"variable_id": "inventory", "selectors": [{"binder": "t", "offset": -1}]}},
+              {"coefficient": {"kind": "constant", "value": -1.0}, "variable": {"variable_id": "commissioned", "selectors": [{"binder": "t"}]}},
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "loss_state", "selectors": [{"binder": "t"}]}},
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "maintenance_state", "selectors": [{"binder": "t"}]}}
+            ],
+            "relation": "equal",
+            "rhs": {"kind": "parameter", "parameter_id": "demand", "selectors": [{"binder": "t"}], "multiplier": -1.0}
+          },
+          {"id": "initial_commissioned", "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "commissioned", "selectors": [{"value": "p0"}]}}], "relation": "equal", "rhs": {"kind": "constant", "value": 0.0}},
+          {
+            "id": "commissioning_delay",
+            "for_each": {"t": "transition_period"},
+            "terms": [
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "commissioned", "selectors": [{"binder": "t"}]}},
+              {"coefficient": {"kind": "constant", "value": -1.0}, "variable": {"variable_id": "purchase", "selectors": [{"binder": "t", "offset": -1}]}}
+            ],
+            "relation": "equal",
+            "rhs": {"kind": "constant", "value": 0.0}
+          },
+          {
+            "id": "tier_decomposition",
+            "for_each": {"t": "period"},
+            "terms": [
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "purchase", "selectors": [{"binder": "t"}]}},
+              {"coefficient": {"kind": "constant", "value": -1.0}, "variable": {"variable_id": "tier_one", "selectors": [{"binder": "t"}]}},
+              {"coefficient": {"kind": "constant", "value": -1.0}, "variable": {"variable_id": "tier_two", "selectors": [{"binder": "t"}]}}
+            ],
+            "relation": "equal",
+            "rhs": {"kind": "constant", "value": 0.0}
+          },
+          {"id": "tier_capacity", "for_each": {"t": "period"}, "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "tier_one", "selectors": [{"binder": "t"}]}}], "relation": "less_equal", "rhs": {"kind": "parameter", "parameter_id": "tier_capacity", "selectors": []}},
+          {
+            "id": "setup_capacity",
+            "for_each": {"t": "period"},
+            "terms": [
+              {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "purchase", "selectors": [{"binder": "t"}]}},
+              {"coefficient": {"kind": "parameter", "parameter_id": "setup_capacity", "selectors": [], "multiplier": -1.0}, "variable": {"variable_id": "setup", "selectors": [{"binder": "t"}]}}
+            ],
+            "relation": "less_equal",
+            "rhs": {"kind": "constant", "value": 0.0}
+          }
+        ]
+      },
+        "solver_node_id": "solve",
+        "outputs": ["solution"]
+      }],
+      "candidate_models": [
+        {"id": "feasible_baseline", "role": "baseline", "operator_node_ids": ["solve"], "selection_metric": "objective", "applicability_boundary": "Any finite feasible indexed model."},
+        {"id": "milp_policy", "role": "recommended", "operator_node_ids": ["solve"], "selection_metric": "objective", "applicability_boundary": "Finite linear integer state systems."}
+      ],
+      "validation": {
+        "model_families": ["mixed_integer_linear_optimization"],
+        "identifiability_checks": ["finite_index_sets"],
+        "evidence_checks": ["source_cells_registered"],
+        "robustness_checks": ["feasible_baseline"]
+      },
+      "final_answers": [
+        {"id": "policy", "item": "Finite-horizon inventory policy", "value_ref": "solution", "status": "candidate_design", "evidence_ids": ["source"]}
+      ]
+    }
+  ]
+}

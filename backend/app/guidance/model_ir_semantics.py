@@ -4,15 +4,84 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.guidance.contracts import ProblemSpec
 from app.guidance.model_ir import (
     BinaryExpression,
     Expression,
     FunctionExpression,
     LiteralExpression,
     ModelIR,
+    IndexedLinearExecutionComponent,
+    OperatorGraphExecutionComponent,
+    OperatorInvocation,
     SolvableModelIR,
     SymbolExpression,
 )
+
+
+def validate_model_fact_coverage(
+    problem_spec: ProblemSpec,
+    model_ir: ModelIR,
+) -> None:
+    facts_by_id = {fact.fact_id: fact for fact in problem_spec.locked_facts}
+    for subproblem in model_ir.subproblems:
+        if not isinstance(subproblem, SolvableModelIR):
+            continue
+        binding_ids = [binding.fact_id for binding in subproblem.fact_bindings]
+        if len(binding_ids) != len(set(binding_ids)):
+            raise ValueError(
+                f"duplicate fact bindings for subproblem {subproblem.subproblem_id!r}"
+            )
+        unknown = sorted(set(binding_ids) - set(facts_by_id))
+        if unknown:
+            raise ValueError(f"unknown locked fact ids: {unknown!r}")
+        expected = sorted(
+            fact.fact_id
+            for fact in problem_spec.locked_facts
+            if subproblem.subproblem_id in fact.subproblem_ids
+        )
+        modeled = sorted(binding_ids)
+        if expected != modeled:
+            raise ValueError(
+                f"fact coverage mismatch for {subproblem.subproblem_id!r}: "
+                f"expected={expected!r}; modeled={modeled!r}"
+            )
+        allowed_uncertainty_refs = {
+            f"problem_spec.json#uncertainties/{uncertainty.uncertainty_id}"
+            for uncertainty in problem_spec.uncertainties
+            if subproblem.subproblem_id in uncertainty.subproblem_ids
+        }
+        for assumption in subproblem.assumptions:
+            if assumption.basis != "problem_ambiguity":
+                continue
+            invalid_refs = sorted(set(assumption.source_refs) - allowed_uncertainty_refs)
+            if invalid_refs:
+                raise ValueError(
+                    "unknown or out-of-scope uncertainty refs for "
+                    f"{subproblem.subproblem_id!r}: {invalid_refs!r}"
+                )
+        payload = subproblem.model_dump(mode="json")
+        for binding in subproblem.fact_bindings:
+            for path in binding.model_paths:
+                try:
+                    _resolve_json_pointer(payload, path)
+                except (KeyError, IndexError, TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"model path does not exist for fact {binding.fact_id!r}: {path}"
+                    ) from exc
+
+
+def _resolve_json_pointer(document: object, pointer: str) -> object:
+    current = document
+    for raw_token in pointer.removeprefix("/").split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, list):
+            current = current[int(token)]
+        elif isinstance(current, dict):
+            current = current[token]
+        else:
+            raise TypeError("JSON pointer traversed a scalar value")
+    return current
 
 
 @dataclass(frozen=True)
@@ -37,9 +106,35 @@ class ModelIRSemanticValidator:
     ) -> list[SemanticDiagnostic]:
         diagnostics: list[SemanticDiagnostic] = []
         base = f"subproblems[{subproblem.subproblem_id}]"
-        variables = {item.id: item for item in subproblem.variables}
+        graph_components = [
+            (index, component)
+            for index, component in enumerate(subproblem.execution_components)
+            if isinstance(component, OperatorGraphExecutionComponent)
+        ]
+        indexed_components = [
+            (index, component)
+            for index, component in enumerate(subproblem.execution_components)
+            if isinstance(component, IndexedLinearExecutionComponent)
+        ]
+        variables = {
+            item.id: item
+            for _, component in graph_components
+            for item in component.variables
+        }
+        operators = [
+            (component_index, operator_index, invocation)
+            for component_index, component in graph_components
+            for operator_index, invocation in enumerate(component.operators)
+        ]
         data_sources = {item.id: item for item in subproblem.data}
-        operator_nodes = {item.node_id: item for item in subproblem.operators}
+        operator_nodes = {
+            invocation.node_id: invocation
+            for _, _, invocation in operators
+        }
+        operator_nodes.update({
+            component.solver_node_id: component
+            for _, component in indexed_components
+        })
 
         for data_index, data_ref in enumerate(subproblem.data):
             for field_id, override_unit in data_ref.unit_overrides.items():
@@ -55,7 +150,7 @@ class ModelIRSemanticValidator:
                         ),
                     ))
 
-        for operator_index, invocation in enumerate(subproblem.operators):
+        for component_index, operator_index, invocation in operators:
             for input_name, reference in invocation.inputs.items():
                 owner, separator, field = reference.partition(".")
                 data_ref = data_sources.get(owner)
@@ -63,7 +158,10 @@ class ModelIRSemanticValidator:
                     diagnostics.append(SemanticDiagnostic(
                         code="unknown_data_field",
                         subproblem_id=subproblem.subproblem_id,
-                        path=f"{base}.operators[{operator_index}].inputs[{input_name}]",
+                        path=(
+                            f"{base}.execution_components[{component_index}]"
+                            f".operators[{operator_index}].inputs[{input_name}]"
+                        ),
                         message=f"data reference {reference!r} does not name a declared field",
                     ))
 
@@ -90,12 +188,14 @@ class ModelIRSemanticValidator:
                     message=f"equation shapes differ: {left_shape} != {right_shape}",
                 ))
 
-        cycle = self._find_operator_cycle(subproblem)
+        cycle = self._find_operator_cycle([
+            invocation for _, _, invocation in operators
+        ])
         if cycle:
             diagnostics.append(SemanticDiagnostic(
                 code="operator_cycle",
                 subproblem_id=subproblem.subproblem_id,
-                path=f"{base}.operators",
+                path=f"{base}.execution_components",
                 message="operator dependency cycle: " + " -> ".join(cycle),
             ))
 
@@ -110,6 +210,65 @@ class ModelIRSemanticValidator:
                             ".operator_node_ids"
                         ),
                         message=f"candidate references unknown operator node {node_id!r}",
+                    ))
+
+        diagnostics.extend(self._validate_indexed_architecture_coverage(subproblem))
+        return diagnostics
+
+    @staticmethod
+    def _validate_indexed_architecture_coverage(
+        subproblem: SolvableModelIR,
+    ) -> list[SemanticDiagnostic]:
+        base = f"subproblems[{subproblem.subproblem_id}]"
+        produced_artifacts = {
+            artifact
+            for component in subproblem.execution_components
+            if isinstance(component, OperatorGraphExecutionComponent)
+            for operator in component.operators
+            for artifact in operator.outputs
+        }
+        diagnostics: list[SemanticDiagnostic] = []
+        for component_index, component in enumerate(subproblem.execution_components):
+            if not isinstance(component, IndexedLinearExecutionComponent):
+                continue
+            indexed_model = component.model
+            component_path = f"{base}.execution_components[{component_index}].model"
+            used_references = {
+                term.variable.variable_id
+                for term in indexed_model.objective.terms
+            } | {
+                term.variable.variable_id
+                for constraint in indexed_model.constraints
+                for term in constraint.terms
+            }
+            for parameter_index, parameter in enumerate(indexed_model.parameters):
+                source = parameter.runtime_source
+                if (
+                    source is not None
+                    and source.artifact_ref not in produced_artifacts
+                ):
+                    diagnostics.append(SemanticDiagnostic(
+                        code="indexed_runtime_source_unknown_artifact",
+                        subproblem_id=subproblem.subproblem_id,
+                        path=(
+                            f"{component_path}.parameters[{parameter_index}]"
+                            ".runtime_source.artifact_ref"
+                        ),
+                        message=(
+                            f"runtime parameter {parameter.id!r} references an "
+                            f"unknown operator artifact: {source.artifact_ref}"
+                        ),
+                    ))
+            for variable_index, variable in enumerate(indexed_model.variables):
+                if variable.id not in used_references:
+                    diagnostics.append(SemanticDiagnostic(
+                        code="indexed_variable_unused",
+                        subproblem_id=subproblem.subproblem_id,
+                        path=f"{component_path}.variables[{variable_index}]",
+                        message=(
+                            f"indexed variable {variable.id!r} is absent from "
+                            "the objective and every constraint"
+                        ),
                     ))
 
         return diagnostics
@@ -177,8 +336,8 @@ class ModelIRSemanticValidator:
         return None
 
     @staticmethod
-    def _find_operator_cycle(subproblem: SolvableModelIR) -> list[str]:
-        node_ids = {item.node_id for item in subproblem.operators}
+    def _find_operator_cycle(operators: list[OperatorInvocation]) -> list[str]:
+        node_ids = {item.node_id for item in operators}
         dependencies = {
             item.node_id: {
                 reference.partition(".")[0]
@@ -186,7 +345,7 @@ class ModelIRSemanticValidator:
                 if reference.partition(".")[1]
                 and reference.partition(".")[0] in node_ids
             }
-            for item in subproblem.operators
+            for item in operators
         }
         visiting: set[str] = set()
         visited: set[str] = set()

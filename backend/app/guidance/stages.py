@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import csv
 import hashlib
 import re
 from pathlib import Path
@@ -13,12 +12,34 @@ from app.guidance.contracts import (
     ProblemSpec,
     VerificationReport,
 )
-from app.guidance.model_ir import ApprovedModelIR, ModelIR, ModelIRReview
+from app.guidance.model_ir import (
+    ApprovedModelIR,
+    BlockedModelIR,
+    ModelIR,
+    ModelIRReview,
+    ModelReviewSubmission,
+    SolvableModelIR,
+)
 from app.guidance.model_ir_compiler import ExecutionPlan, ModelIRCompiler
-from app.guidance.model_ir_semantics import ModelIRSemanticValidator
+from app.guidance.model_ir_semantics import (
+    ModelIRSemanticValidator,
+    validate_model_fact_coverage,
+)
+from app.guidance.model_review_validation import validate_model_review
 from app.guidance.model_validators import build_default_model_validator_registry
 from app.guidance.operator_execution import OperatorExecutionManifest, OperatorGraphExecutor
 from app.artifacts.guidance_audit import build_guidance_audit_report
+from app.artifacts.evidence_profile import (
+    EvidenceProfile,
+    build_evidence_profile,
+    evidence_matches_reference,
+    load_evidence_profile,
+)
+from app.artifacts.input_catalog import InputCatalog
+from app.guidance.evidence_consistency import (
+    validate_model_evidence_consistency,
+    validate_problem_evidence_consistency,
+)
 from app.guidance.renderer import render_verified_guidance
 
 
@@ -27,7 +48,8 @@ class ProblemDecomposer(Protocol):
         self,
         *,
         question: str,
-        data_files: list[str],
+        evidence_profile: dict,
+        input_catalog: dict,
         task: dict,
     ) -> ProblemSpec: ...
 
@@ -37,7 +59,7 @@ class Modeler(Protocol):
         self,
         *,
         problem_spec: ProblemSpec,
-        data_profile: dict,
+        evidence_profile: dict,
         task: dict,
         work_dir: Path,
     ) -> ModelIR: ...
@@ -48,7 +70,7 @@ class Modeler(Protocol):
         problem_spec: ProblemSpec,
         previous_model_ir: ModelIR,
         review: ModelIRReview,
-        data_profile: dict,
+        evidence_profile: dict,
         task: dict,
         work_dir: Path,
     ) -> ModelIR: ...
@@ -60,6 +82,8 @@ class ModelReviewer(Protocol):
         *,
         problem_spec: ProblemSpec,
         model_ir: ModelIR,
+        revision_request: ModelIRReview | None,
+        evidence_profile: dict,
         task: dict,
         work_dir: Path,
     ) -> ModelIRReview: ...
@@ -79,16 +103,25 @@ class DecompositionStage:
     ) -> Path:
         root = output_path.parent
         question = str(task.get("source_question") or task.get("question") or "").strip()
-        data_files = _list_data_files(root)
+        evidence_profile = build_evidence_profile(root).model_dump(mode="json")
+        input_catalog = InputCatalog.model_validate_json(
+            (root / "input_catalog.json").read_text(encoding="utf-8")
+        ).model_dump(mode="json")
         problem_spec = await self.decomposer.decompose(
             question=question,
-            data_files=data_files,
+            evidence_profile=evidence_profile,
+            input_catalog=input_catalog,
             task=task,
         )
         problem_spec = _reconcile_source_requirements(
             problem_spec,
             question=question,
-            available_files=data_files,
+            evidence_profile=evidence_profile,
+        )
+        validate_problem_evidence_consistency(
+            problem_spec,
+            evidence_profile,
+            input_catalog,
         )
         _write_model(output_path, problem_spec)
         return output_path
@@ -107,16 +140,12 @@ class ModelingStage:
         output_path: Path,
     ) -> Path:
         source_path = _required_input(input_path)
-        data_profile = _build_data_profile(output_path.parent)
-        (output_path.parent / "data_profile.json").write_text(
-            json.dumps(data_profile, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        evidence_profile = load_evidence_profile(output_path.parent).model_dump(mode="json")
         if source_path.name == "problem_spec.json":
             problem_spec = ProblemSpec.model_validate_json(source_path.read_text(encoding="utf-8"))
             model_ir = await self.modeler.model(
                 problem_spec=problem_spec,
-                data_profile=data_profile,
+                evidence_profile=evidence_profile,
                 task=task,
                 work_dir=output_path.parent,
             )
@@ -132,11 +161,13 @@ class ModelingStage:
                 problem_spec=problem_spec,
                 previous_model_ir=previous_model_ir,
                 review=review,
-                data_profile=data_profile,
+                evidence_profile=evidence_profile,
                 task=task,
                 work_dir=output_path.parent,
             )
         _validate_model_ir_coverage(problem_spec, model_ir)
+        validate_model_fact_coverage(problem_spec, model_ir)
+        validate_model_evidence_consistency(problem_spec, model_ir, evidence_profile)
         diagnostics = ModelIRSemanticValidator().validate(model_ir)
         if diagnostics:
             details = "; ".join(
@@ -160,31 +191,99 @@ class ModelReviewStage:
         output_path: Path,
     ) -> Path:
         source_path = _required_input(input_path)
-        model_ir = ModelIR.model_validate_json(source_path.read_text(encoding="utf-8"))
+        submission = ModelReviewSubmission.model_validate_json(
+            source_path.read_text(encoding="utf-8")
+        )
+        model_ir_path = output_path.parent / submission.model_ir_ref
+        model_ir = ModelIR.model_validate_json(model_ir_path.read_text(encoding="utf-8"))
+        revision_request = (
+            ModelIRReview.model_validate_json(
+                (output_path.parent / submission.revision_request_ref).read_text(
+                    encoding="utf-8"
+                )
+            )
+            if submission.revision_request_ref is not None
+            else None
+        )
         problem_spec = ProblemSpec.model_validate_json(
             (output_path.parent / "problem_spec.json").read_text(encoding="utf-8")
         )
+        evidence_profile = load_evidence_profile(output_path.parent).model_dump(mode="json")
         review = await self.reviewer.review(
             problem_spec=problem_spec,
             model_ir=model_ir,
+            revision_request=revision_request,
+            evidence_profile=evidence_profile,
             task=task,
             work_dir=output_path.parent,
         )
         review = review.model_copy(
             update={
                 "problem_spec_ref": "problem_spec.json",
-                "model_ir_ref": source_path.name,
+                "model_ir_ref": model_ir_path.name,
             }
         )
+        validate_model_review(review, model_ir, revision_request=revision_request)
         _write_model(output_path.parent / "model_review.json", review)
+        approved_projection = _build_reviewed_model_projection(model_ir, review)
         approved = ApprovedModelIR(
             review_status=review.status,
             model_id=model_ir.model_id,
-            model_ir_ref=source_path.name,
-            approved_model_ir=model_ir,
+            model_ir_ref=model_ir_path.name,
+            revision_request_ref=submission.revision_request_ref,
+            executable_subproblem_ids=[
+                subproblem.subproblem_id
+                for subproblem in approved_projection.subproblems
+                if isinstance(subproblem, SolvableModelIR)
+            ],
+            approved_model_ir=approved_projection,
         )
         _write_model(output_path, approved)
         return output_path
+
+
+def _build_reviewed_model_projection(
+    model_ir: ModelIR,
+    review: ModelIRReview,
+) -> ModelIR:
+    decisions = {
+        item.subproblem_id: item
+        for item in review.subproblem_reviews
+    }
+    allow_execution = review.status in {"approved", "partial"}
+    projected = []
+    for subproblem in model_ir.subproblems:
+        decision = decisions[subproblem.subproblem_id]
+        if (
+            allow_execution
+            and decision.status == "approved"
+            and isinstance(subproblem, SolvableModelIR)
+        ):
+            projected.append(subproblem)
+            continue
+        if isinstance(subproblem, BlockedModelIR):
+            projected.append(subproblem)
+            continue
+        reasons = decision.blocking_issues or [
+            item.description for item in decision.required_revisions
+        ]
+        if not reasons:
+            reasons = ["Execution is pending completion of the model review."]
+        projected.append(BlockedModelIR(
+            execution_status="blocked",
+            subproblem_id=subproblem.subproblem_id,
+            objective=subproblem.objective,
+            blocking_reason="; ".join(reasons)[:600],
+            missing_inputs=["approved Model IR for this subproblem"],
+            recovery_action=(
+                "Resolve the registered subproblem review issues, then regenerate "
+                "and review this Model IR."
+            ),
+            expected_outputs=[
+                answer.item for answer in subproblem.final_answers
+            ],
+        ))
+    return ModelIR(model_id=model_ir.model_id, subproblems=projected)
 
 
 class CalculationStage:
@@ -211,8 +310,10 @@ class CalculationStage:
         approved = ApprovedModelIR.model_validate_json(
             source_path.read_text(encoding="utf-8")
         )
-        if approved.review_status != "approved":
-            raise ValueError("CalculationStage requires an approved Model IR")
+        if approved.review_status not in {"approved", "partial"}:
+            raise ValueError(
+                "CalculationStage requires an executable approved Model IR projection"
+            )
         work_dir = output_path.parent
         compilation = self.compiler.compile_to_file(
             approved.approved_model_ir,
@@ -284,6 +385,7 @@ class ResultVerificationStage:
             result_registry=results,
             figure_registry=figure_registry,
         )
+        coverage_issues = _blocked_result_issues(results)
         model_adequacy = _assess_model_adequacy(approved, results)
         if execution_issues or evidence_issues:
             model_adequacy["status"] = "blocked"
@@ -297,6 +399,11 @@ class ResultVerificationStage:
 
         report = VerificationReport(
             model_id=manifest.model_id,
+            coverage_status=(
+                "partial"
+                if approved.review_status == "partial" or results.get("blocked_results")
+                else "complete"
+            ),
             execution_verified={
                 "status": "passed" if not execution_issues else "failed",
                 "reasons": execution_issues or ["execution plan hash and node coverage verified"],
@@ -320,9 +427,15 @@ class ResultVerificationStage:
                 "checked_files": manifest.generated_files,
                 "missing_files": missing,
             }],
-            blocking_issues=[*execution_issues, *evidence_issues],
+            blocking_issues=[*execution_issues, *evidence_issues, *coverage_issues],
             artifact_refs={
                 "approved_model": "approved_model_ir.json",
+                "model_review": approved.review_ref,
+                **(
+                    {"revision_request": approved.revision_request_ref}
+                    if approved.revision_request_ref is not None
+                    else {}
+                ),
                 "execution_manifest": input_path.name,
                 "execution_plan": manifest.execution_plan_ref,
                 "parameter_registry": "parameter_registry.json",
@@ -333,6 +446,25 @@ class ResultVerificationStage:
         )
         _write_model(output_path, report)
         return output_path
+
+
+def _blocked_result_issues(result_registry: dict) -> list[str]:
+    blocked_results = result_registry.get("blocked_results")
+    if not isinstance(blocked_results, list):
+        return []
+
+    issues: list[str] = []
+    for item in blocked_results:
+        if not isinstance(item, dict):
+            continue
+        subproblem_id = str(item.get("subproblem_id") or item.get("id") or "unknown")
+        reason = str(item.get("reason") or item.get("message") or "result unavailable")
+        recovery_action = str(item.get("recovery_action") or "").strip()
+        issue = f"subproblem {subproblem_id} blocked: {reason}"
+        if recovery_action:
+            issue += f"; recovery: {recovery_action}"
+        issues.append(issue)
+    return issues
 
 
 def _assess_model_adequacy(
@@ -491,6 +623,7 @@ class GuidanceStage:
     ) -> Path:
         source_path = _required_input(input_path)
         root = output_path.parent
+        problem_spec = _read_json_if_exists(root / "problem_spec.json")
         if source_path.name == "approved_model_ir.json":
             report, approved, parameters, results = _build_blocked_guidance_artifacts(
                 root,
@@ -524,6 +657,7 @@ class GuidanceStage:
             result_registry=results,
             execution_manifest=execution_manifest,
             calculation_failure=calculation_failure,
+            problem_spec=problem_spec,
         )
         context = {
             "artifact_type": "guidance",
@@ -591,7 +725,7 @@ def _required_input(input_path: Path | None) -> Path:
 
 
 def _validate_model_ir_coverage(problem_spec: ProblemSpec, model_ir: ModelIR) -> None:
-    expected = [str(item.get("id") or "").strip() for item in problem_spec.subproblems]
+    expected = [item.id for item in problem_spec.subproblems]
     modeled = [item.subproblem_id.strip() for item in model_ir.subproblems]
     invalid_ids = not all(expected) or not all(modeled)
     duplicate_ids = len(expected) != len(set(expected)) or len(modeled) != len(set(modeled))
@@ -601,41 +735,31 @@ def _validate_model_ir_coverage(problem_spec: ProblemSpec, model_ir: ModelIR) ->
         )
 
 
-def _list_data_files(root: Path) -> list[str]:
-    data_dir = root / "data"
-    if not data_dir.is_dir():
-        return []
-    return sorted(path.relative_to(root).as_posix() for path in data_dir.rglob("*") if path.is_file())
-
-
 def _reconcile_source_requirements(
     problem_spec: ProblemSpec,
     *,
     question: str,
-    available_files: list[str],
+    evidence_profile: dict,
 ) -> ProblemSpec:
+    profile = EvidenceProfile.model_validate(evidence_profile)
     references = list(
         dict.fromkeys(
             re.sub(r"\s+", "", match.group(0))
-            for match in re.finditer(r"(?i)(?:附录\s*\d+|appendix\s*[a-z0-9]+)", question)
+            for match in re.finditer(
+                r"(?i)(?:(?:附件|附录)\s*[a-z0-9一二三四五六七八九十]+|appendix\s*[a-z0-9]+)",
+                question,
+            )
         )
     )
     requirements = []
     missing_references: list[str] = []
     for reference in references:
-        normalized_reference = re.sub(r"\s+", "", reference).casefold()
         matched_files = [
-            path
-            for path in available_files
-            if normalized_reference in re.sub(r"\s+", "", Path(path).stem).casefold()
+            item.source_ref
+            for item in profile.evidence
+            if evidence_matches_reference(item, reference)
         ]
-        embedded_heading = bool(
-            re.search(
-                rf"(?im)^\s*{re.escape(reference)}\s*(?:[:：]|$)",
-                question,
-            )
-        )
-        status = "available" if matched_files or embedded_heading else "missing"
+        status = "available" if matched_files else "missing"
         if status == "missing":
             missing_references.append(reference)
         requirements.append(
@@ -644,9 +768,9 @@ def _reconcile_source_requirements(
                 "status": status,
                 "matched_files": matched_files,
                 "note": (
-                    "Matched an uploaded file or an embedded appendix heading."
+                    "Matched registered evidence in evidence_profile.json."
                     if status == "available"
-                    else "Referenced by the problem statement but absent from uploaded files."
+                    else "Referenced by the problem statement but absent from registered evidence."
                 ),
             }
         )
@@ -654,164 +778,44 @@ def _reconcile_source_requirements(
     locked_facts = [
         fact
         for fact in problem_spec.locked_facts
-        if not any(reference in fact for reference in missing_references)
+        if not any(reference in fact.statement for reference in missing_references)
+    ]
+    surviving_fact_ids = {fact.fact_id for fact in locked_facts}
+    surviving_source_refs = {
+        source_ref
+        for record in [*locked_facts, *problem_spec.uncertainties]
+        for source_ref in record.source_refs
+    }
+    subproblems = [
+        {
+            **subproblem.model_dump(mode="json"),
+            "required_fact_ids": [
+                fact_id
+                for fact_id in subproblem.required_fact_ids
+                if fact_id in surviving_fact_ids
+            ],
+        }
+        for subproblem in problem_spec.subproblems
     ]
     data_sources = [
-        _remove_missing_source_claims(source, missing_references)
+        source.model_copy(update={
+            "description": f"Registered evidence source: {source.source_ref}."
+        })
+        if any(reference in source.description for reference in missing_references)
+        else source
         for source in problem_spec.data_sources
+        if source.source_ref in surviving_source_refs
     ]
-    uncertainties = list(problem_spec.uncertainties)
-    for reference in missing_references:
-        message = f"{reference}在题面中被引用但未上传；依赖该来源的子问题必须标记 blocked。"
-        if message not in uncertainties:
-            uncertainties.append(message)
     return ProblemSpec.model_validate(
         {
             **problem_spec.model_dump(mode="json"),
             "data_sources": data_sources,
             "source_requirements": requirements,
+            "subproblems": subproblems,
             "locked_facts": locked_facts,
-            "uncertainties": uncertainties,
+            "uncertainties": problem_spec.uncertainties,
         }
     )
-
-
-def _remove_missing_source_claims(source: dict, missing_references: list[str]) -> dict:
-    cleaned: dict = {}
-    for key, value in source.items():
-        if isinstance(value, str):
-            if not any(reference in value for reference in missing_references):
-                cleaned[key] = value
-        elif isinstance(value, list):
-            cleaned[key] = [
-                item
-                for item in value
-                if not isinstance(item, str)
-                or not any(reference in item for reference in missing_references)
-            ]
-        else:
-            cleaned[key] = value
-    return cleaned
-
-
-def _build_data_profile(root: Path) -> dict:
-    files: list[dict] = []
-    for path in (root / "data").rglob("*") if (root / "data").is_dir() else []:
-        if not path.is_file():
-            continue
-        relative = path.relative_to(root).as_posix()
-        profile: dict = {
-            "path": relative,
-            "suffix": path.suffix.lower(),
-            "size_bytes": path.stat().st_size,
-        }
-        if path.suffix.lower() in {".xlsx", ".xlsm"}:
-            profile["workbook"] = _profile_workbook(path)
-        elif path.suffix.lower() == ".csv":
-            profile["table"] = _profile_csv(path)
-        files.append(profile)
-    return {"files": files}
-
-
-def _profile_workbook(path: Path) -> dict:
-    from openpyxl import load_workbook
-
-    workbook = load_workbook(path, read_only=False, data_only=True)
-    try:
-        sheets: list[dict] = []
-        for sheet in workbook.worksheets:
-            effective_max_column = max(
-                (
-                    cell.column
-                    for row in sheet.iter_rows()
-                    for cell in row
-                    if cell.value is not None
-                ),
-                default=0,
-            )
-            sampled_rows = [
-                (row_number, list(values))
-                for row_number, values in enumerate(
-                    sheet.iter_rows(
-                        min_row=1,
-                        max_row=min(sheet.max_row or 0, 6),
-                        max_col=effective_max_column,
-                        values_only=True,
-                    ),
-                    start=1,
-                )
-                if any(value is not None for value in values)
-            ]
-            header_row = sampled_rows[0][0] if sampled_rows else 0
-            header_values = sampled_rows[0][1] if sampled_rows else []
-            columns = [str(value) for value in header_values]
-            merged_ranges = [
-                merged
-                for merged in sheet.merged_cells.ranges
-                if merged.min_col <= effective_max_column
-            ]
-            vertical_group_ranges = [
-                merged
-                for merged in merged_ranges
-                if merged.min_col == merged.max_col
-                and merged.max_row > merged.min_row
-                and merged.min_row > header_row
-                and sheet.cell(merged.min_row, merged.min_col).value is not None
-            ]
-            forward_fill_columns = list(
-                dict.fromkeys(
-                    columns[merged.min_col - 1]
-                    for merged in vertical_group_ranges
-                    if merged.min_col <= len(columns)
-                )
-            )
-            sample_rows: list[list] = []
-            for row_number, raw_values in sampled_rows[1:5]:
-                values = list(raw_values)
-                for merged in vertical_group_ranges:
-                    column_index = merged.min_col - 1
-                    if merged.min_row <= row_number <= merged.max_row and values[column_index] is None:
-                        values[column_index] = sheet.cell(merged.min_row, merged.min_col).value
-                sample_rows.append([_json_safe_cell(value) for value in values])
-            sheets.append(
-                {
-                    "name": sheet.title,
-                    "max_row": sheet.max_row,
-                    "max_column": sheet.max_column,
-                    "effective_max_column": effective_max_column,
-                    "ignored_trailing_empty_columns": max(
-                        (sheet.max_column or 0) - effective_max_column,
-                        0,
-                    ),
-                    "columns": columns,
-                    "merged_ranges": [str(merged) for merged in merged_ranges],
-                    "forward_fill_columns": forward_fill_columns,
-                    "sample_rows": sample_rows,
-                }
-            )
-        return {"sheets": sheets}
-    finally:
-        workbook.close()
-
-
-def _profile_csv(path: Path) -> dict:
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.reader(handle)
-        rows = []
-        for index, row in enumerate(reader):
-            if index >= 6:
-                break
-            rows.append(row)
-    return {
-        "columns": rows[0] if rows else [],
-        "sample_rows": rows[1:5],
-    }
-
-
-def _json_safe_cell(value):
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)
 
 
 def _is_positive_review_value(value) -> bool:
@@ -1034,17 +1038,10 @@ def _build_blocked_guidance_artifacts(
             "blocked_count": len(issues),
         },
     }
-    report = VerificationReport(
-        model_id=approved_model.model_id,
-        status="blocked",
+    report = _build_preexecution_blocked_report(
+        approved_model=approved_model,
+        approved_path=approved_path,
         blocking_issues=issues,
-        artifact_refs={
-            "approved_model": approved_path.name,
-            "model_review": approved_model.review_ref,
-            "parameter_registry": "parameter_registry.json",
-            "result_registry": "result_registry.json",
-            "figures": [],
-        },
     )
     _write_model(root / "verification_report.json", report)
     (root / "parameter_registry.json").write_text(
@@ -1056,3 +1053,53 @@ def _build_blocked_guidance_artifacts(
         encoding="utf-8",
     )
     return report, approved_model.model_dump(mode="json"), parameters, results
+
+
+def _build_preexecution_blocked_report(
+    *,
+    approved_model: ApprovedModelIR,
+    approved_path: Path,
+    blocking_issues: list[str],
+) -> VerificationReport:
+    model_refs = [approved_model.model_ir_ref, approved_model.review_ref]
+    if approved_model.revision_request_ref is not None:
+        model_refs.append(approved_model.revision_request_ref)
+    reasons = blocking_issues or ["model review blocked execution"]
+    return VerificationReport(
+        model_id=approved_model.model_id,
+        coverage_status="blocked",
+        execution_verified={
+            "status": "not_assessed",
+            "reasons": [
+                "operator graph was not compiled or executed because model review blocked"
+            ],
+            "evidence_refs": model_refs,
+        },
+        evidence_supported={
+            "status": "blocked",
+            "reasons": [
+                "result evidence cannot be assessed before an approved model is executed"
+            ],
+            "evidence_refs": model_refs,
+        },
+        model_adequate={
+            "status": "blocked",
+            "candidate_roles": [],
+            "checks": {},
+            "reasons": reasons,
+            "evidence_refs": model_refs,
+        },
+        blocking_issues=blocking_issues,
+        artifact_refs={
+            "approved_model": approved_path.name,
+            "model_review": approved_model.review_ref,
+            **(
+                {"revision_request": approved_model.revision_request_ref}
+                if approved_model.revision_request_ref is not None
+                else {}
+            ),
+            "parameter_registry": "parameter_registry.json",
+            "result_registry": "result_registry.json",
+            "figures": [],
+        },
+    )

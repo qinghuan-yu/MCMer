@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import shutil
 import zipfile
@@ -34,7 +35,7 @@ def test_guidance_result_exposes_three_verification_layers(tmp_path: Path) -> No
 
     result = list(_final_result("task-layers", tmp_path))[-1]["data"]
 
-    assert result["status"] == "completed"
+    assert result["status"] == "partial"
     assert result["verification_layers"] == {
         "execution_verified": "passed",
         "evidence_supported": "passed",
@@ -142,11 +143,48 @@ def test_guidance_download_returns_markdown_attachment(tmp_path: Path, monkeypat
 
 def _write_complete_guidance_workspace(root: Path) -> None:
     (root / "data").mkdir()
+    (root / "inputs").mkdir()
     (root / "figures").mkdir()
     (root / "data" / "input.xlsx").write_bytes(b"original-input")
+    problem_bytes = b"original-problem-source"
+    (root / "inputs" / "problem.docx").write_bytes(problem_bytes)
+    problem_sha256 = hashlib.sha256(problem_bytes).hexdigest()
+    (root / "input_catalog.json").write_text(
+        json.dumps({
+            "schema_version": "1.0",
+            "source_path": "inputs/problem.docx",
+            "source_sha256": problem_sha256,
+            "blocks": [],
+        }),
+        encoding="utf-8",
+    )
+    (root / "evidence_profile.json").write_text(
+        json.dumps({
+            "schema_version": "1.0",
+            "input_catalog_ref": "input_catalog.json",
+            "evidence": [{
+                "evidence_id": "question-source",
+                "source_ref": "inputs/problem.docx",
+                "sha256": problem_sha256,
+            }],
+        }),
+        encoding="utf-8",
+    )
     (root / "model_ir.json").write_text('{"model_id":"model-1"}', encoding="utf-8")
     (root / "approved_model_ir.json").write_text(
         '{"model_id":"model-1"}',
+        encoding="utf-8",
+    )
+    (root / "problem_spec.json").write_text(
+        '{"locked_facts":[],"uncertainties":[]}',
+        encoding="utf-8",
+    )
+    (root / "model_review.json").write_text(
+        '{"model_id":"model-1","status":"approved"}',
+        encoding="utf-8",
+    )
+    (root / "model_review_submission.json").write_text(
+        '{"schema_version":"1.0","model_ir_ref":"model_ir.json"}',
         encoding="utf-8",
     )
     (root / "execution_plan.json").write_text(
@@ -199,8 +237,18 @@ def test_workspace_download_returns_complete_evidence_zip(tmp_path: Path, monkey
         names = set(archive.namelist())
         manifest = json.loads(archive.read("workspace_manifest.json"))
         groups = manifest["artifact_groups"]
-        assert groups["original_inputs"] == ["data/input.xlsx"]
+        assert groups["original_inputs"] == ["data/input.xlsx", "inputs/problem.docx"]
+        assert groups["input_catalog"] == ["input_catalog.json"]
+        assert groups["evidence_profile"] == ["evidence_profile.json"]
         assert groups["model_ir"] == ["approved_model_ir.json", "model_ir.json"]
+        assert groups["fact_traceability"] == [
+            "approved_model_ir.json",
+            "problem_spec.json",
+        ]
+        assert groups["model_reviews"] == [
+            "model_review.json",
+            "model_review_submission.json",
+        ]
         assert groups["execution_plan"] == ["execution_plan.json"]
         assert groups["operator_versions"] == [{
             "node_id": "node-1",
@@ -221,6 +269,11 @@ def test_workspace_download_returns_complete_evidence_zip(tmp_path: Path, monkey
         assert groups["guidance"] == ["guidance.md"]
         assert manifest["completeness_status"] == "complete"
         assert manifest["missing_required_groups"] == []
+        file_hashes = {item["path"]: item["sha256"] for item in manifest["files"]}
+        input_catalog = json.loads(archive.read("input_catalog.json"))
+        evidence_profile = json.loads(archive.read("evidence_profile.json"))
+        assert input_catalog["source_sha256"] == file_hashes["inputs/problem.docx"]
+        assert evidence_profile["evidence"][0]["sha256"] == file_hashes["inputs/problem.docx"]
         assert {item["path"] for item in manifest["files"]} == names - {"workspace_manifest.json"}
         assert "workspace.zip" not in names
 
@@ -291,11 +344,46 @@ def test_real_attachment_execution_exports_complete_reproducibility_zip(
     fixture_path = repo_root / "backend/tests/fixtures/model_ir/wuyi_traffic_flow.json"
     work_dir = tmp_path / "real-workspace"
     (work_dir / "data").mkdir(parents=True)
-    shutil.copy2(source_attachment, work_dir / "data" / source_attachment.name)
+    copied_attachment = work_dir / "data" / source_attachment.name
+    shutil.copy2(source_attachment, copied_attachment)
+    source_sha256 = hashlib.sha256(copied_attachment.read_bytes()).hexdigest()
+    (work_dir / "input_catalog.json").write_text(
+        json.dumps({
+            "schema_version": "1.0",
+            "source_path": f"data/{source_attachment.name}",
+            "source_sha256": source_sha256,
+            "blocks": [],
+        }),
+        encoding="utf-8",
+    )
+    (work_dir / "evidence_profile.json").write_text(
+        json.dumps({
+            "schema_version": "1.0",
+            "input_catalog_ref": "input_catalog.json",
+            "evidence": [{
+                "evidence_id": "uploaded-workbook",
+                "source_ref": f"data/{source_attachment.name}",
+                "sha256": source_sha256,
+            }],
+        }),
+        encoding="utf-8",
+    )
     model_ir = ModelIR.model_validate_json(fixture_path.read_text(encoding="utf-8"))
     serialized_ir = model_ir.model_dump_json(indent=2)
     (work_dir / "model_ir.json").write_text(serialized_ir, encoding="utf-8")
     (work_dir / "approved_model_ir.json").write_text(serialized_ir, encoding="utf-8")
+    (work_dir / "problem_spec.json").write_text(
+        '{"locked_facts":[],"uncertainties":[]}',
+        encoding="utf-8",
+    )
+    (work_dir / "model_review.json").write_text(
+        '{"model_id":"wuyi-traffic-flow","status":"approved"}',
+        encoding="utf-8",
+    )
+    (work_dir / "model_review_submission.json").write_text(
+        '{"schema_version":"1.0","model_ir_ref":"model_ir.json"}',
+        encoding="utf-8",
+    )
 
     registry = build_default_operator_registry()
     compilation = ModelIRCompiler(registry=registry).compile_to_file(
@@ -444,3 +532,45 @@ def test_guidance_workflow_persists_blocked_final_status(monkeypatch) -> None:
 
     assert messages[-1]["data"]["status"] == "blocked"
     assert status_updates == ["running", "blocked"]
+
+
+def test_guidance_workflow_persists_partial_final_status(monkeypatch) -> None:
+    from app.guidance import workflow
+
+    status_updates: list[str] = []
+
+    class RecordingTaskManager:
+        def update_status(self, task_id, status):
+            status_updates.append(status.value)
+
+    class PartialPipeline:
+        async def run(self, task_id, task):
+            yield {
+                "type": "result",
+                "data": {
+                    "task_id": task_id,
+                    "status": "partial",
+                    "task_type": "guidance",
+                },
+            }
+
+    monkeypatch.setattr(workflow, "task_manager", RecordingTaskManager())
+    monkeypatch.setattr(
+        workflow,
+        "build_default_guidance_pipeline",
+        lambda workflow_mode="standard": PartialPipeline(),
+    )
+
+    async def collect_messages():
+        return [
+            message
+            async for message in workflow.run_guidance_workflow(
+                "task-partial",
+                {"task_id": "task-partial", "task_type": "guidance"},
+            )
+        ]
+
+    messages = asyncio.run(collect_messages())
+
+    assert messages[-1]["data"]["status"] == "partial"
+    assert status_updates == ["running", "partial"]

@@ -28,9 +28,18 @@ class WriterStageBudget:
 
 
 @dataclass(frozen=True)
+class GuidanceStageBudget:
+    decomposition: int
+    architecture: int
+    indexed_core: int
+    indexed_constraints: int
+    review: int
+
+
+@dataclass(frozen=True)
 class WorkflowBudget:
     mode: str
-    llm_timeout: int
+    guidance: GuidanceStageBudget
     coder: CoderStageBudget
     solver: CoderStageBudget
     writer: WriterStageBudget
@@ -42,7 +51,13 @@ def resolve_workflow_budget(mode: str) -> WorkflowBudget:
     if normalized == "fast":
         return WorkflowBudget(
             mode="fast",
-            llm_timeout=90,
+            guidance=GuidanceStageBudget(
+                decomposition=60,
+                architecture=90,
+                indexed_core=120,
+                indexed_constraints=180,
+                review=90,
+            ),
             coder=CoderStageBudget(
                 max_chat_turns=min(settings.MAX_CHAT_TURNS, 12),
                 max_retries=min(settings.MAX_RETRIES, 3),
@@ -66,7 +81,13 @@ def resolve_workflow_budget(mode: str) -> WorkflowBudget:
     if normalized == "strict":
         return WorkflowBudget(
             mode="strict",
-            llm_timeout=max(300, settings.LLM_REQUEST_TIMEOUT),
+            guidance=GuidanceStageBudget(
+                decomposition=max(300, settings.LLM_REQUEST_TIMEOUT),
+                architecture=max(420, settings.LLM_REQUEST_TIMEOUT),
+                indexed_core=max(600, settings.LLM_REQUEST_TIMEOUT),
+                indexed_constraints=max(720, settings.LLM_REQUEST_TIMEOUT),
+                review=max(420, settings.LLM_REQUEST_TIMEOUT),
+            ),
             coder=CoderStageBudget(
                 max_chat_turns=max(48, settings.MAX_CHAT_TURNS),
                 max_retries=max(8, settings.MAX_RETRIES),
@@ -89,7 +110,13 @@ def resolve_workflow_budget(mode: str) -> WorkflowBudget:
 
     return WorkflowBudget(
         mode="standard",
-        llm_timeout=settings.LLM_REQUEST_TIMEOUT,
+        guidance=GuidanceStageBudget(
+            decomposition=max(120, settings.LLM_REQUEST_TIMEOUT),
+            architecture=max(180, settings.LLM_REQUEST_TIMEOUT),
+            indexed_core=max(240, settings.LLM_REQUEST_TIMEOUT),
+            indexed_constraints=max(360, settings.LLM_REQUEST_TIMEOUT),
+            review=max(180, settings.LLM_REQUEST_TIMEOUT),
+        ),
         coder=CoderStageBudget(
             max_chat_turns=max(36, settings.MAX_CHAT_TURNS),
             max_retries=max(6, settings.MAX_RETRIES),

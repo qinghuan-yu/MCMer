@@ -36,12 +36,32 @@ def _case_model(case: dict) -> ModelIR:
             "execution_status": "solvable",
             "subproblem_id": f'{case["id"]}_subproblem',
             "objective": "Execute an unseen cross-family benchmark through the common graph.",
-            "variables": [{
-                "id": "table",
-                "role": "derived",
-                "symbol": "D",
-                "unit": "unspecified",
-                "shape": ["row", "column", "table"],
+            "execution_components": [{
+                "kind": "operator_graph",
+                "component_id": "blind_operator_graph",
+                "variables": [{
+                    "id": "table",
+                    "role": "derived",
+                    "symbol": "D",
+                    "unit": "unspecified",
+                    "shape": ["row", "column", "table"],
+                }],
+                "operators": [
+                    {
+                        "node_id": "table",
+                        "operator_id": "data.read_excel_table",
+                        "inputs": {"source": "data/blind_inputs.xlsx"},
+                        "outputs": ["table"],
+                        "parameters": case["table_parameters"],
+                    },
+                    {
+                        "node_id": "solve",
+                        "operator_id": case["operator_id"],
+                        "inputs": case["inputs"],
+                        "outputs": ["answer"],
+                        "parameters": case["parameters"],
+                    },
+                ],
             }],
             "data": [{
                 "id": "blind_workbook",
@@ -54,22 +74,8 @@ def _case_model(case: dict) -> ModelIR:
                 "right": {"kind": "literal", "value": 0.0},
             }],
             "constraints": [],
-            "operators": [
-                {
-                    "node_id": "table",
-                    "operator_id": "data.read_excel_table",
-                    "inputs": {"source": "data/blind_inputs.xlsx"},
-                    "outputs": ["table"],
-                    "parameters": case["table_parameters"],
-                },
-                {
-                    "node_id": "solve",
-                    "operator_id": case["operator_id"],
-                    "inputs": case["inputs"],
-                    "outputs": ["answer"],
-                    "parameters": case["parameters"],
-                },
-            ],
+            "assumptions": [],
+            "fact_bindings": [],
             "candidate_models": [
                 {
                     "id": "declared_baseline",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Mapping
+from statistics import NormalDist
 from typing import Any, Literal
 
 import numpy as np
@@ -97,6 +98,11 @@ def build_default_model_validator_registry() -> ModelValidatorRegistry:
         registry.register(family, "extreme_inputs", _extreme_inputs)
     registry.register("forecast", "temporal_leakage", _temporal_leakage)
     registry.register("forecast", "prediction_interval", _prediction_interval)
+    registry.register("future_forecast", "rolling_origin_recompute", _future_rolling_origin)
+    registry.register("future_forecast", "future_index_check", _future_index)
+    registry.register("future_forecast", "error_and_baseline_recompute", _future_errors)
+    registry.register("future_forecast", "interval_recompute", _future_interval)
+    registry.register("future_forecast", "sensitivity_recompute", _future_sensitivity)
 
     registry.register("optimization", "baseline_comparison", _optimization_baseline)
     registry.register("optimization", "sensitivity", _sensitivity)
@@ -104,6 +110,15 @@ def build_default_model_validator_registry() -> ModelValidatorRegistry:
     registry.register("optimization", "multistart", _multistart)
     registry.register("optimization", "feasibility_certificate", _optimization_feasibility)
     registry.register("optimization", "bound_certificate", _optimization_bounds)
+    registry.register("mixed_integer_linear_optimization", "objective_recompute", _milp_objective)
+    registry.register(
+        "mixed_integer_linear_optimization",
+        "feasibility_and_conservation",
+        _milp_feasibility,
+    )
+    registry.register("mixed_integer_linear_optimization", "integrality_recompute", _milp_integrality)
+    registry.register("mixed_integer_linear_optimization", "bound_and_gap", _milp_bounds)
+    registry.register("mixed_integer_linear_optimization", "baseline_comparison", _milp_baseline)
     registry.register("evaluation", "normalization_recompute", _evaluation_normalization)
     registry.register("evaluation", "weight_recompute", _evaluation_weights)
     registry.register("evaluation", "ranking_recompute", _evaluation_ranking)
@@ -424,6 +439,206 @@ def _optimization_bounds(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     if certificate.get("valid") is not valid or not valid:
         return _failed("optimization lower and upper bounds are inconsistent")
     return _passed("global objective lower bound and feasible upper bound were independently recomputed")
+
+
+def _milp_problem(nodes: list[Mapping[str, Any]]) -> tuple | None:
+    node = _find(
+        nodes,
+        "x",
+        "objective_value",
+        "compiled_model",
+        "baseline",
+        "solver",
+        "bound_certificate",
+    )
+    if node is None or not isinstance(node["compiled_model"], Mapping):
+        return None
+    model = node["compiled_model"]
+    try:
+        x = np.asarray(node["x"], dtype=float)
+        objective = np.asarray(model["objective"], dtype=float)
+        integrality = np.asarray(model["integrality"], dtype=int)
+        matrix = np.asarray(model["matrix"], dtype=float)
+        lower = model["lower_bounds"]
+        upper = model["upper_bounds"]
+        constraint_lower = model["constraint_lower"]
+        constraint_upper = model["constraint_upper"]
+        sense = model["objective_sense"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        x.ndim != 1
+        or objective.shape != x.shape
+        or integrality.shape != x.shape
+        or matrix.ndim != 2
+        or matrix.shape[1] != x.size
+        or len(lower) != x.size
+        or len(upper) != x.size
+        or len(constraint_lower) != matrix.shape[0]
+        or len(constraint_upper) != matrix.shape[0]
+        or not np.all(np.isfinite(x))
+        or not np.all(np.isfinite(objective))
+        or not np.all(np.isfinite(matrix))
+        or sense not in {"minimize", "maximize"}
+    ):
+        return None
+    return (
+        node,
+        model,
+        x,
+        objective,
+        integrality,
+        matrix,
+        lower,
+        upper,
+        constraint_lower,
+        constraint_upper,
+        sense,
+    )
+
+
+def _milp_constraint_violation(parsed: tuple, x: np.ndarray) -> float | None:
+    _, _, _, _, _, matrix, lower, upper, constraint_lower, constraint_upper, _ = parsed
+    violation = 0.0
+    for value, low, high in zip(x, lower, upper):
+        if low is not None:
+            if not _finite_number(low):
+                return None
+            violation = max(violation, float(low) - float(value))
+        if high is not None:
+            if not _finite_number(high):
+                return None
+            violation = max(violation, float(value) - float(high))
+    activity = matrix @ x
+    for value, low, high in zip(activity, constraint_lower, constraint_upper):
+        if low is not None:
+            if not _finite_number(low):
+                return None
+            violation = max(violation, float(low) - float(value))
+        if high is not None:
+            if not _finite_number(high):
+                return None
+            violation = max(violation, float(value) - float(high))
+    return max(0.0, violation)
+
+
+def _milp_integrality_violation(parsed: tuple, x: np.ndarray) -> float | None:
+    integrality = parsed[4]
+    if any(value not in (0, 1) for value in integrality):
+        return None
+    positions = np.flatnonzero(integrality)
+    if not positions.size:
+        return 0.0
+    return float(np.max(np.abs(x[positions] - np.rint(x[positions]))))
+
+
+def _milp_objective(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    parsed = _milp_problem(nodes)
+    if parsed is None:
+        return _not_assessed("compiled MILP objective evidence was not recorded")
+    node, _, x, objective, *_ = parsed
+    recorded = node["objective_value"]
+    recomputed = float(objective @ x)
+    if not _finite_number(recorded) or not math.isclose(
+        float(recorded), recomputed, rel_tol=1e-9, abs_tol=1e-9
+    ):
+        return _failed("MILP objective does not match independent matrix recomputation")
+    return _passed("MILP objective was independently recomputed from c and x")
+
+
+def _milp_feasibility(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    parsed = _milp_problem(nodes)
+    if parsed is None:
+        return _not_assessed("compiled MILP feasibility evidence was not recorded")
+    node, _, x, *_ = parsed
+    violation = _milp_constraint_violation(parsed, x)
+    certificate = node.get("feasibility_certificate")
+    recorded = certificate.get("max_constraint_violation") if isinstance(certificate, Mapping) else None
+    if violation is None or not _finite_number(recorded):
+        return _failed("MILP bounds or conservation rows are malformed")
+    if not math.isclose(float(recorded), violation, rel_tol=1e-9, abs_tol=1e-9):
+        return _failed("MILP constraint certificate disagrees with independent recomputation")
+    if violation > 1e-7:
+        return _failed("MILP solution violates variable bounds or linear conservation constraints")
+    return _passed("MILP bounds and all linear conservation rows were independently verified")
+
+
+def _milp_integrality(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    parsed = _milp_problem(nodes)
+    if parsed is None:
+        return _not_assessed("compiled MILP integrality evidence was not recorded")
+    node, _, x, *_ = parsed
+    violation = _milp_integrality_violation(parsed, x)
+    certificate = node.get("feasibility_certificate")
+    recorded = certificate.get("max_integrality_violation") if isinstance(certificate, Mapping) else None
+    if violation is None or not _finite_number(recorded):
+        return _failed("MILP integrality codes or certificate are malformed")
+    if not math.isclose(float(recorded), violation, rel_tol=1e-9, abs_tol=1e-9):
+        return _failed("MILP integrality certificate disagrees with independent recomputation")
+    if violation > 1e-7:
+        return _failed("MILP solution contains non-integral integer decisions")
+    return _passed("MILP integer decisions were independently checked")
+
+
+def _milp_bounds(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    parsed = _milp_problem(nodes)
+    if parsed is None:
+        return _not_assessed("compiled MILP bound evidence was not recorded")
+    node, _, _, _, _, _, _, _, _, _, sense = parsed
+    objective_value = node["objective_value"]
+    certificate = node["bound_certificate"]
+    solver = node["solver"]
+    if not isinstance(certificate, Mapping) or not isinstance(solver, Mapping):
+        return _failed("MILP solver bound evidence is malformed")
+    primal = certificate.get("primal_bound")
+    dual = certificate.get("dual_bound")
+    gap = solver.get("mip_gap")
+    if not all(_finite_number(value) for value in (objective_value, primal, dual, gap)):
+        return _failed("MILP primal bound, dual bound, or gap is non-finite")
+    if not math.isclose(float(primal), float(objective_value), rel_tol=1e-9, abs_tol=1e-9):
+        return _failed("MILP primal bound disagrees with the objective")
+    if sense == "minimize" and float(dual) > float(primal) + 1e-7:
+        return _failed("MILP minimization dual bound exceeds the primal bound")
+    if sense == "maximize" and float(dual) < float(primal) - 1e-7:
+        return _failed("MILP maximization dual bound is below the primal bound")
+    recomputed_gap = abs(float(primal) - float(dual)) / max(abs(float(primal)), 1e-10)
+    if not math.isclose(float(gap), recomputed_gap, rel_tol=1e-6, abs_tol=1e-8):
+        return _failed("MILP solver gap disagrees with bound recomputation")
+    return _passed("MILP primal bound, dual bound, and relative gap were independently checked")
+
+
+def _milp_baseline(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    parsed = _milp_problem(nodes)
+    if parsed is None:
+        return _not_assessed("compiled MILP baseline evidence was not recorded")
+    node, _, _, objective, _, _, _, _, _, _, sense = parsed
+    baseline = node["baseline"]
+    if not isinstance(baseline, Mapping):
+        return _failed("MILP baseline evidence is malformed")
+    try:
+        baseline_x = np.asarray(baseline["x"], dtype=float)
+    except (KeyError, TypeError, ValueError):
+        return _failed("MILP baseline vector is malformed")
+    if baseline_x.shape != objective.shape or not np.all(np.isfinite(baseline_x)):
+        return _failed("MILP baseline vector has invalid dimensions or values")
+    feasibility = _milp_constraint_violation(parsed, baseline_x)
+    integrality = _milp_integrality_violation(parsed, baseline_x)
+    recorded = baseline.get("objective_value")
+    recomputed = float(objective @ baseline_x)
+    if feasibility is None or integrality is None or max(feasibility, integrality) > 1e-7:
+        return _failed("MILP baseline is not independently feasible")
+    if baseline.get("feasible") is not True:
+        return _failed("MILP baseline is not declared feasible")
+    if not _finite_number(recorded) or not math.isclose(
+        float(recorded), recomputed, rel_tol=1e-9, abs_tol=1e-9
+    ):
+        return _failed("MILP baseline objective disagrees with independent recomputation")
+    recommended = float(node["objective_value"])
+    if sense == "minimize" and recommended > recomputed + 1e-7:
+        return _failed("recommended MILP objective is worse than the feasible baseline")
+    if sense == "maximize" and recommended < recomputed - 1e-7:
+        return _failed("recommended MILP objective is worse than the feasible baseline")
+    return _passed("recommended MILP result was compared with an independently feasible baseline")
 
 
 def _evaluation_evidence(
@@ -1136,6 +1351,322 @@ def _graph_min_cut(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     if not math.isclose(flow_value, capacity, rel_tol=1e-10, abs_tol=1e-10):
         return _failed("max-flow value does not equal the certified cut capacity")
     return _passed("flow-cut equality independently certifies maximum-flow optimality")
+
+
+def _future_evidence(nodes: list[Mapping[str, Any]]) -> tuple | None:
+    node = _find(
+        nodes,
+        "history_time",
+        "history_target",
+        "future_time",
+        "future_predictions",
+        "candidates",
+        "selected_model",
+        "rolling_origin",
+        "baseline",
+        "prediction_interval",
+        "sensitivity",
+    )
+    if node is None:
+        return None
+    try:
+        history_time = np.asarray(node["history_time"], dtype=float)
+        history_target = np.asarray(node["history_target"], dtype=float)
+        future_time = np.asarray(node["future_time"], dtype=float)
+        future_predictions = np.asarray(node["future_predictions"], dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if (
+        history_time.ndim != 1
+        or history_target.shape != history_time.shape
+        or future_time.ndim != 1
+        or future_predictions.shape != future_time.shape
+        or not len(history_time)
+        or not len(future_time)
+        or not all(np.all(np.isfinite(values)) for values in (
+            history_time,
+            history_target,
+            future_time,
+            future_predictions,
+        ))
+    ):
+        return None
+    return node, history_time, history_target, future_time, future_predictions
+
+
+def _future_design(time: np.ndarray, period: float | None) -> np.ndarray:
+    columns = [np.ones_like(time), time]
+    if period is not None:
+        angle = 2.0 * np.pi * time / period
+        columns.extend([np.sin(angle), np.cos(angle)])
+    return np.column_stack(columns)
+
+
+def _future_fit(
+    time: np.ndarray,
+    target: np.ndarray,
+    predict_time: np.ndarray,
+    period: float | None,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    design = _future_design(time, period)
+    coefficients, _, rank, _ = np.linalg.lstsq(design, target, rcond=None)
+    return coefficients, _future_design(predict_time, period) @ coefficients, int(rank)
+
+
+def _future_seasonal(target: np.ndarray, season_length: int, horizon: int) -> np.ndarray:
+    extended = target.tolist()
+    predictions: list[float] = []
+    for _ in range(horizon):
+        value = float(extended[-season_length])
+        predictions.append(value)
+        extended.append(value)
+    return np.asarray(predictions, dtype=float)
+
+
+def _future_rmse(actual: np.ndarray, predicted: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(np.square(actual - predicted))))
+
+
+def _future_candidate_predictions(
+    evidence: tuple,
+) -> tuple[dict[str, tuple[np.ndarray, float | None, float]], list[int]] | None:
+    node, time, target, _, _ = evidence
+    rolling = node["rolling_origin"]
+    candidates = node["candidates"]
+    if not isinstance(rolling, Mapping) or not isinstance(candidates, list):
+        return None
+    initial = rolling.get("initial_train_size")
+    origins = rolling.get("origins")
+    if not isinstance(initial, int) or isinstance(initial, bool):
+        return None
+    expected_origins = list(range(initial, len(target)))
+    if origins != expected_origins:
+        return None
+    result: dict[str, tuple[np.ndarray, float | None, float]] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            return None
+        identifier = candidate.get("id")
+        period = candidate.get("period")
+        if not isinstance(identifier, str) or not identifier:
+            return None
+        if period is not None and not _finite_number(period):
+            return None
+        predictions: list[float] = []
+        for origin in expected_origins:
+            _, predicted, _ = _future_fit(
+                time[:origin],
+                target[:origin],
+                time[origin : origin + 1],
+                None if period is None else float(period),
+            )
+            predictions.append(float(predicted[0]))
+        array = np.asarray(predictions)
+        score = _future_rmse(target[expected_origins], array)
+        result[identifier] = (array, None if period is None else float(period), score)
+    return result, expected_origins
+
+
+def _future_rolling_origin(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    evidence = _future_evidence(nodes)
+    parsed = _future_candidate_predictions(evidence) if evidence is not None else None
+    if evidence is None or parsed is None:
+        return _not_assessed("complete rolling-origin forecast evidence was not recorded")
+    node, time, target, _, _ = evidence
+    candidates, origins = parsed
+    rolling = node["rolling_origin"]
+    folds = rolling.get("folds")
+    actual = rolling.get("actual")
+    if not isinstance(folds, list) or len(folds) != len(origins):
+        return _failed("rolling-origin fold count is inconsistent")
+    if not isinstance(actual, list) or not np.allclose(actual, target[origins], rtol=1e-9, atol=1e-9):
+        return _failed("rolling-origin actual values disagree with history")
+    for fold, origin in zip(folds, origins):
+        if not isinstance(fold, Mapping) or (
+            fold.get("origin_index") != origin
+            or not math.isclose(float(fold.get("max_train_time", math.nan)), float(time[origin - 1]))
+            or not math.isclose(float(fold.get("validation_time", math.nan)), float(time[origin]))
+            or float(fold.get("max_train_time", math.inf)) >= float(fold.get("validation_time", -math.inf))
+        ):
+            return _failed("rolling-origin fold boundary is inconsistent or leaks future data")
+    recorded_candidates = {item.get("id"): item for item in node["candidates"] if isinstance(item, Mapping)}
+    for identifier, (predictions, _, score) in candidates.items():
+        recorded = recorded_candidates[identifier]
+        try:
+            recorded_predictions = np.asarray(recorded["rolling_predictions"], dtype=float)
+            recorded_score = float(recorded["rolling_rmse"])
+        except (KeyError, TypeError, ValueError):
+            return _failed("candidate rolling evidence is malformed")
+        if not np.allclose(recorded_predictions, predictions, rtol=1e-8, atol=1e-8):
+            return _failed(f"candidate {identifier} rolling predictions do not recompute")
+        if not math.isclose(recorded_score, score, rel_tol=1e-8, abs_tol=1e-8):
+            return _failed(f"candidate {identifier} rolling RMSE does not recompute")
+    return _passed("all rolling-origin boundaries and candidate predictions were independently recomputed")
+
+
+def _future_index(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    evidence = _future_evidence(nodes)
+    if evidence is None:
+        return _not_assessed("future forecast indices were not recorded")
+    node, time, target, future_time, future_predictions = evidence
+    if np.any(np.diff(time) <= 0.0) or np.any(np.diff(future_time) <= 0.0) or future_time[0] <= time[-1]:
+        return _failed("future indices are not strictly ordered after history")
+    selected = node["selected_model"]
+    if not isinstance(selected, Mapping) or not isinstance(selected.get("id"), str):
+        return _failed("selected future model is malformed")
+    identifier = selected["id"]
+    if identifier == "seasonal_naive":
+        baseline = node["baseline"]
+        season = baseline.get("season_length") if isinstance(baseline, Mapping) else None
+        if not isinstance(season, int) or season <= 0 or season > len(target):
+            return _failed("seasonal future model has invalid season length")
+        expected = _future_seasonal(target, season, len(future_time))
+        expected_coefficients = np.asarray([])
+        expected_rank = 0
+    else:
+        candidates = {
+            item.get("id"): item
+            for item in node["candidates"]
+            if isinstance(item, Mapping)
+        }
+        candidate = candidates.get(identifier)
+        if candidate is None:
+            return _failed("selected future model is not a recorded candidate")
+        period = candidate.get("period")
+        period = None if period is None else float(period)
+        expected_coefficients, expected, expected_rank = _future_fit(
+            time, target, future_time, period
+        )
+    try:
+        coefficients = np.asarray(selected["coefficients"], dtype=float)
+        rank = int(selected["design_rank"])
+    except (KeyError, TypeError, ValueError):
+        return _failed("selected model coefficients are malformed")
+    if not np.allclose(future_predictions, expected, rtol=1e-8, atol=1e-8):
+        return _failed("future predictions do not match the selected model refit")
+    if not np.allclose(coefficients, expected_coefficients, rtol=1e-8, atol=1e-8) or rank != expected_rank:
+        return _failed("selected model coefficients or rank do not recompute")
+    return _passed("future indices and selected-model extrapolation were independently verified")
+
+
+def _future_errors(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    evidence = _future_evidence(nodes)
+    parsed = _future_candidate_predictions(evidence) if evidence is not None else None
+    if evidence is None or parsed is None:
+        return _not_assessed("future forecast error evidence was not recorded")
+    node, _, target, _, _ = evidence
+    candidates, origins = parsed
+    actual = target[origins]
+    baseline = node["baseline"]
+    if not isinstance(baseline, Mapping):
+        return _failed("seasonal baseline evidence is malformed")
+    season = baseline.get("season_length")
+    if not isinstance(season, int) or season <= 0 or season > origins[0]:
+        return _failed("seasonal baseline length is invalid")
+    baseline_predictions = np.asarray([target[origin - season] for origin in origins])
+    baseline_rmse = _future_rmse(actual, baseline_predictions)
+    try:
+        recorded_baseline = np.asarray(baseline["rolling_predictions"], dtype=float)
+        recorded_baseline_rmse = float(node["baseline_metrics"]["rmse"])
+        observed = np.asarray(node["observed"], dtype=float)
+        predicted = np.asarray(node["predicted"], dtype=float)
+        residuals = np.asarray(node["residuals"], dtype=float)
+        recorded_rmse = float(node["metrics"]["rmse"])
+    except (KeyError, TypeError, ValueError):
+        return _failed("forecast error arrays are malformed")
+    if not np.allclose(recorded_baseline, baseline_predictions, rtol=1e-9, atol=1e-9):
+        return _failed("seasonal baseline predictions do not recompute")
+    if not math.isclose(recorded_baseline_rmse, baseline_rmse, rel_tol=1e-9, abs_tol=1e-9):
+        return _failed("seasonal baseline RMSE does not recompute")
+    best_id, (best_predictions, _, best_score) = min(
+        candidates.items(), key=lambda item: (item[1][2], item[0])
+    )
+    if baseline_rmse <= best_score:
+        best_id, best_predictions, best_score = "seasonal_naive", baseline_predictions, baseline_rmse
+    if node["selected_model"].get("id") != best_id:
+        return _failed("selected model is not the lowest rolling-origin RMSE candidate")
+    expected_residuals = actual - best_predictions
+    if (
+        not np.allclose(observed, actual, rtol=1e-9, atol=1e-9)
+        or not np.allclose(predicted, best_predictions, rtol=1e-9, atol=1e-9)
+        or not np.allclose(residuals, expected_residuals, rtol=1e-9, atol=1e-9)
+        or not math.isclose(recorded_rmse, best_score, rel_tol=1e-9, abs_tol=1e-9)
+    ):
+        return _failed("selected forecast errors or RMSE do not independently recompute")
+    return _passed("selected and seasonal-baseline rolling errors were independently recomputed")
+
+
+def _future_interval(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    evidence = _future_evidence(nodes)
+    if evidence is None:
+        return _not_assessed("future prediction interval evidence was not recorded")
+    node, _, _, _, predictions = evidence
+    interval = node["prediction_interval"]
+    try:
+        residuals = np.asarray(node["residuals"], dtype=float)
+        level = float(interval["level"])
+        lower = np.asarray(interval["lower"], dtype=float)
+        upper = np.asarray(interval["upper"], dtype=float)
+        scale = float(interval["residual_scale"])
+    except (KeyError, TypeError, ValueError):
+        return _failed("future prediction interval evidence is malformed")
+    if not 0.0 < level < 1.0 or lower.shape != predictions.shape or upper.shape != predictions.shape:
+        return _failed("future prediction interval level or dimensions are invalid")
+    expected_scale = float(np.sqrt(np.sum(np.square(residuals)) / max(len(residuals) - 1, 1)))
+    margin = NormalDist().inv_cdf(0.5 + level / 2.0) * expected_scale
+    if not math.isclose(scale, expected_scale, rel_tol=1e-9, abs_tol=1e-9):
+        return _failed("future interval residual scale does not recompute")
+    if not np.allclose(lower, predictions - margin, rtol=1e-8, atol=1e-8) or not np.allclose(
+        upper, predictions + margin, rtol=1e-8, atol=1e-8
+    ):
+        return _failed("future prediction interval bounds do not recompute")
+    return _passed("future prediction interval scale and bounds were independently recomputed")
+
+
+def _future_sensitivity(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    evidence = _future_evidence(nodes)
+    if evidence is None:
+        return _not_assessed("future forecast sensitivity evidence was not recorded")
+    node, time, target, future_time, predictions = evidence
+    selected = node["selected_model"]
+    sensitivity = node["sensitivity"]
+    if not isinstance(selected, Mapping) or not isinstance(sensitivity, Mapping):
+        return _failed("future sensitivity evidence is malformed")
+    if selected.get("id") == "seasonal_naive":
+        season = node["baseline"].get("season_length")
+        perturbed = target.copy()
+        perturbed[-1] += max(abs(float(perturbed[-1])) * 0.01, 1e-6)
+        reference_predictions = _future_seasonal(perturbed, season, len(future_time))
+        reference_coefficients = np.asarray([])
+        expected_method = "last_observation_perturbation"
+    else:
+        period = selected.get("period")
+        period = None if period is None else float(period)
+        reference_coefficients, reference_predictions, _ = _future_fit(
+            time[:-1], target[:-1], future_time, period
+        )
+        expected_method = "drop_last_observation"
+    expected_change = float(np.max(
+        np.abs(reference_predictions - predictions) / np.maximum(np.abs(predictions), 1e-10)
+    ))
+    try:
+        recorded_change = float(sensitivity["max_relative_change"])
+        threshold = float(sensitivity["threshold"])
+        recorded_coefficients = np.asarray(sensitivity["reference_coefficients"], dtype=float)
+    except (KeyError, TypeError, ValueError):
+        return _failed("future sensitivity values are malformed")
+    if sensitivity.get("method") != expected_method:
+        return _failed("future sensitivity method disagrees with selected model")
+    if not np.allclose(recorded_coefficients, reference_coefficients, rtol=1e-8, atol=1e-8):
+        return _failed("future sensitivity reference fit does not recompute")
+    if not math.isclose(recorded_change, expected_change, rel_tol=1e-8, abs_tol=1e-8):
+        return _failed("future sensitivity magnitude does not recompute")
+    expected_passed = expected_change <= threshold
+    if sensitivity.get("passed") is not expected_passed:
+        return _failed("future sensitivity pass status disagrees with threshold")
+    if not expected_passed:
+        return _failed("future sensitivity change exceeds its declared threshold")
+    return _passed("future forecast parameter sensitivity was independently recomputed")
 
 
 def _temporal_leakage(nodes: list[Mapping[str, Any]]) -> ValidationCheck:

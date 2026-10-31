@@ -1,3 +1,7 @@
+import json
+from pathlib import Path
+
+import pytest
 from pydantic import ValidationError
 
 
@@ -49,6 +53,7 @@ def _solvable_payload():
         EquationSpec,
         FinalAnswerSpec,
         OperatorInvocation,
+        OperatorGraphExecutionComponent,
         SolvableModelIR,
         SymbolExpression,
         ValidationPlan,
@@ -59,29 +64,45 @@ def _solvable_payload():
         execution_status="solvable",
         subproblem_id="problem1",
         objective="Estimate branch-flow parameters from aggregate observations.",
-        variables=[
-            VariableSpec(
-                id="sample",
-                role="observed",
-                symbol="k",
-                unit="sample",
-                shape=["sample"],
-            ),
-            VariableSpec(
-                id="main_flow",
-                role="observed",
-                symbol="F",
-                unit="vehicles/2min",
-                shape=["sample"],
-            ),
-            VariableSpec(
-                id="branch_slope",
-                role="unknown_parameter",
-                symbol="a",
-                unit="vehicles/2min/sample",
-                shape=[],
-            ),
-        ],
+        fact_bindings=[],
+        execution_components=[OperatorGraphExecutionComponent(
+            kind="operator_graph",
+            component_id="branch_fit_graph",
+            variables=[
+                VariableSpec(
+                    id="sample",
+                    role="observed",
+                    symbol="k",
+                    unit="sample",
+                    shape=["sample"],
+                ),
+                VariableSpec(
+                    id="main_flow",
+                    role="observed",
+                    symbol="F",
+                    unit="vehicles/2min",
+                    shape=["sample"],
+                ),
+                VariableSpec(
+                    id="branch_slope",
+                    role="unknown_parameter",
+                    symbol="a",
+                    unit="vehicles/2min/sample",
+                    shape=[],
+                ),
+            ],
+            operators=[
+                OperatorInvocation(
+                    node_id="fit_branch_slope",
+                    operator_id="regression.constrained_least_squares",
+                    inputs={
+                        "x": "traffic_sheet.sample",
+                        "y": "traffic_sheet.main_flow",
+                    },
+                    outputs=["branch_slope", "fit_result"],
+                )
+            ],
+        )],
         data=[
             DataReference(
                 id="traffic_sheet",
@@ -101,17 +122,7 @@ def _solvable_payload():
                 ),
             )
         ],
-        operators=[
-            OperatorInvocation(
-                node_id="fit_branch_slope",
-                operator_id="regression.constrained_least_squares",
-                inputs={
-                    "x": "traffic_sheet.sample",
-                    "y": "traffic_sheet.main_flow",
-                },
-                outputs=["branch_slope", "fit_result"],
-            )
-        ],
+        assumptions=[],
         candidate_models=[
             CandidateModel(
                 id="constant_baseline",
@@ -165,6 +176,55 @@ def test_model_ir_serializes_typed_expression_and_evidence_bound_answer() -> Non
     assert answer["evidence_ids"] == ["fit_result", "branch_slope"]
 
 
+def test_canonical_indexed_component_owns_its_variables_without_flat_duplicates() -> None:
+    from app.guidance.model_ir import ModelIR
+
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "model_ir"
+        / "generic_multiperiod_inventory.json"
+    )
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    model_ir = ModelIR.model_validate(payload)
+
+    component = model_ir.subproblems[0].execution_components[0]
+    assert component.kind == "indexed_linear"
+    assert component.model.variables[0].id == "purchase"
+
+
+def test_canonical_model_ir_rejects_legacy_flat_execution_fields() -> None:
+    from app.guidance.model_ir import ModelIR
+
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "model_ir"
+        / "generic_multiperiod_inventory.json"
+    )
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    subproblem = payload["subproblems"][0]
+    component = subproblem.pop("execution_components")[0]
+    subproblem["variables"] = []
+    subproblem["indexed_linear_model"] = component["model"]
+    subproblem["operators"] = [{
+        "node_id": component["solver_node_id"],
+        "operator_id": "optimization.milp",
+        "outputs": component["outputs"],
+    }]
+
+    with pytest.raises(ValidationError) as exc_info:
+        ModelIR.model_validate(payload)
+
+    rejected_fields = {
+        error["loc"][-1]
+        for error in exc_info.value.errors()
+        if error["type"] == "extra_forbidden"
+    }
+    assert {"variables", "operators", "indexed_linear_model"} <= rejected_fields
+
+
 def test_final_answer_without_evidence_is_rejected() -> None:
     from app.guidance.model_ir import FinalAnswerSpec
 
@@ -211,9 +271,10 @@ def test_semantic_validator_localizes_unit_field_dimension_and_cycle_errors() ->
     from app.guidance.model_ir_semantics import ModelIRSemanticValidator
 
     subproblem = _solvable_payload().model_copy(deep=True)
+    graph = subproblem.execution_components[0]
     subproblem.data[0].unit_overrides["main_flow"] = "N*m"
-    subproblem.operators[0].inputs["y"] = "traffic_sheet.missing_flow"
-    subproblem.variables.append(
+    graph.operators[0].inputs["y"] = "traffic_sheet.missing_flow"
+    graph.variables.append(
         VariableSpec(
             id="matrix_state",
             role="state",
@@ -223,8 +284,8 @@ def test_semantic_validator_localizes_unit_field_dimension_and_cycle_errors() ->
         )
     )
     subproblem.equations[0].right = SymbolExpression(symbol="matrix_state")
-    subproblem.operators[0].inputs["x"] = "postprocess.result"
-    subproblem.operators.append(
+    graph.operators[0].inputs["x"] = "postprocess.result"
+    graph.operators.append(
         OperatorInvocation(
             node_id="postprocess",
             operator_id="transform.identity",
@@ -242,6 +303,57 @@ def test_semantic_validator_localizes_unit_field_dimension_and_cycle_errors() ->
     assert "operator_cycle" in by_code
     assert all(item.subproblem_id == "problem1" for item in diagnostics)
     assert all(item.path.startswith("subproblems[problem1]") for item in diagnostics)
+
+
+def test_semantic_validator_rejects_incomplete_indexed_architecture_coverage() -> None:
+    from app.guidance.model_ir import (
+        ConstantLinearValue,
+        IndexedLinearConstraint,
+        IndexedLinearModelSpec,
+        IndexedLinearExecutionComponent,
+        IndexedLinearObjective,
+        IndexedLinearTerm,
+        IndexedVariableReference,
+        IndexedVariableSpec,
+        IndexSetSpec,
+    )
+    from app.guidance.model_ir_semantics import ModelIRSemanticValidator
+
+    subproblem = _solvable_payload().model_copy(deep=True)
+    purchase_term = IndexedLinearTerm(
+        coefficient=ConstantLinearValue(value=1.0),
+        variable=IndexedVariableReference(variable_id="purchase"),
+    )
+    subproblem.execution_components.append(IndexedLinearExecutionComponent(
+        kind="indexed_linear",
+        component_id="purchase_policy",
+        solver_node_id="solve",
+        outputs=["solution"],
+        model=IndexedLinearModelSpec(
+            index_sets=[IndexSetSpec(id="period", values=[1])],
+            variables=[
+                IndexedVariableSpec(id="purchase", domain="integer"),
+                IndexedVariableSpec(id="idle_capacity", domain="continuous"),
+            ],
+            objective=IndexedLinearObjective(
+                sense="minimize",
+                terms=[purchase_term],
+            ),
+            constraints=[
+                IndexedLinearConstraint(
+                    id="purchase_limit",
+                    terms=[purchase_term],
+                    relation="less_equal",
+                    rhs=ConstantLinearValue(value=10.0),
+                )
+            ],
+        ),
+    ))
+
+    diagnostics = ModelIRSemanticValidator().validate_subproblem(subproblem)
+    codes = {item.code for item in diagnostics}
+
+    assert "indexed_variable_unused" in codes
 
 
 def test_free_text_formula_is_rejected_instead_of_becoming_model_semantics() -> None:

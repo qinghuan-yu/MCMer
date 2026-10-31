@@ -8,7 +8,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.guidance.model_ir import BlockedModelIR, ModelIR, SolvableModelIR
+from app.guidance.indexed_linear import (
+    expand_indexed_linear_model,
+    validate_indexed_linear_model_structure,
+)
+from app.guidance.model_ir import (
+    BlockedModelIR,
+    IndexedLinearExecutionComponent,
+    ModelIR,
+    OperatorGraphExecutionComponent,
+    OperatorInvocation,
+    SolvableModelIR,
+)
 from app.guidance.operators import OperatorDefinition, OperatorPort, OperatorRegistry
 
 
@@ -140,10 +151,14 @@ class ModelIRCompiler:
         model_ir_ref: str,
     ) -> tuple[list[CompilationDiagnostic], list[ExecutionNode], list[str]]:
         diagnostics: list[CompilationDiagnostic] = []
+        variables, invocation_list, indexed_component, ir_sources = _execution_parts(
+            subproblem,
+            model_ir_ref=model_ir_ref,
+        )
         definitions: dict[str, OperatorDefinition] = {}
         missing = sorted({
             invocation.operator_id
-            for invocation in subproblem.operators
+            for invocation in invocation_list
             if self.registry.get(invocation.operator_id) is None
         })
         for operator_id in missing:
@@ -152,13 +167,94 @@ class ModelIRCompiler:
                 subproblem_id=subproblem.subproblem_id,
                 message=f"operator is not registered: {operator_id}",
             ))
-        for invocation in subproblem.operators:
+        for invocation in invocation_list:
             definition = self.registry.get(invocation.operator_id)
             if definition is not None:
                 definitions[invocation.node_id] = definition
 
         diagnostics.extend(self._data_reference_diagnostics(subproblem))
-        order, cycle = _topological_order(subproblem)
+        compiled_indexed_model: dict | None = None
+        indexed_model_template: dict | None = None
+        indexed_node_id: str | None = None
+        runtime_parameter_inputs: dict[str, str] = {}
+        extra_dependencies: dict[str, set[str]] = {}
+        graph_milp_invocations = [
+            invocation
+            for invocation in invocation_list
+            if invocation.operator_id == "optimization.milp"
+            and (
+                indexed_component is None
+                or invocation.node_id != indexed_component.solver_node_id
+            )
+        ]
+        if indexed_component is not None:
+            indexed_model = indexed_component.model
+            indexed_node_id = indexed_component.solver_node_id
+            runtime_parameters = [
+                parameter
+                for parameter in indexed_model.parameters
+                if parameter.runtime_source is not None
+            ]
+            if runtime_parameters:
+                indexed_model_template = indexed_model.model_dump(mode="json")
+                diagnostics.extend(
+                    CompilationDiagnostic(
+                        code=issue.code,
+                        subproblem_id=subproblem.subproblem_id,
+                        node_id=indexed_node_id,
+                        message=issue.message,
+                    )
+                    for issue in validate_indexed_linear_model_structure(indexed_model)
+                )
+                artifact_producers = _artifact_producers(invocation_list)
+                runtime_parameter_inputs = {
+                    parameter.id: parameter.runtime_source.artifact_ref
+                    for parameter in runtime_parameters
+                    if parameter.runtime_source is not None
+                }
+                for parameter_id, artifact in runtime_parameter_inputs.items():
+                    if artifact not in artifact_producers:
+                        diagnostics.append(CompilationDiagnostic(
+                            code="indexed_runtime_source_unknown_artifact",
+                            subproblem_id=subproblem.subproblem_id,
+                            node_id=indexed_node_id,
+                            message=(
+                                f"runtime parameter {parameter_id!r} references "
+                                f"an unknown operator artifact: {artifact}"
+                            ),
+                        ))
+                extra_dependencies[indexed_node_id] = {
+                    artifact_producers[artifact]
+                    for artifact in runtime_parameter_inputs.values()
+                    if artifact in artifact_producers
+                }
+            else:
+                compiled_indexed_model, indexed_issues = expand_indexed_linear_model(
+                    indexed_model
+                )
+                diagnostics.extend(
+                    CompilationDiagnostic(
+                        code=issue.code,
+                        subproblem_id=subproblem.subproblem_id,
+                        node_id=indexed_node_id,
+                        message=issue.message,
+                    )
+                    for issue in indexed_issues
+                )
+        elif graph_milp_invocations:
+            diagnostics.append(CompilationDiagnostic(
+                code="indexed_model_required",
+                subproblem_id=subproblem.subproblem_id,
+                node_id=graph_milp_invocations[0].node_id,
+                message=(
+                    "optimization.milp must be owned by an indexed_linear "
+                    "execution component"
+                ),
+            ))
+        order, cycle = _topological_order(
+            invocation_list,
+            extra_dependencies=extra_dependencies,
+        )
         if cycle:
             diagnostics.append(CompilationDiagnostic(
                 code="operator_cycle",
@@ -166,20 +262,21 @@ class ModelIRCompiler:
                 message="operator dependency cycle: " + " -> ".join(cycle),
             ))
 
-        variables = {item.id: item for item in subproblem.variables}
+        variables = {item.id: item for item in variables}
         data = {item.id: item for item in subproblem.data}
-        invocations = {item.node_id: item for item in subproblem.operators}
-        declared_artifacts = set(variables)
-        for answer in subproblem.final_answers:
-            declared_artifacts.add(answer.value_ref)
-            declared_artifacts.update(answer.evidence_ids)
+        invocations = {item.node_id: item for item in invocation_list}
+        declared_artifacts = _referenced_artifacts(
+            subproblem,
+            variables=list(variables.values()),
+            indexed_component=indexed_component,
+        )
         satisfied_preconditions = {
             *subproblem.validation.identifiability_checks,
             *subproblem.validation.evidence_checks,
             *subproblem.validation.robustness_checks,
         }
 
-        for invocation in subproblem.operators:
+        for invocation in invocation_list:
             definition = definitions.get(invocation.node_id)
             if definition is None:
                 continue
@@ -275,22 +372,29 @@ class ModelIRCompiler:
                 compiled_nodes.append(ExecutionNode(
                     node_id=node_id,
                     subproblem_id=subproblem.subproblem_id,
-                    ir_source=(
-                        f"{model_ir_ref}#subproblems[{subproblem.subproblem_id}]"
-                        f".operators[{node_id}]"
-                    ),
+                    ir_source=ir_sources[node_id],
                     operator_id=definition.operator_id,
                     operator_version=definition.version,
-                    inputs=invocation.inputs,
+                    inputs=(
+                        {**invocation.inputs, **runtime_parameter_inputs}
+                        if node_id == indexed_node_id
+                        else invocation.inputs
+                    ),
                     outputs=invocation.outputs,
-                    parameters=invocation.parameters,
+                    parameters=(
+                        {"compiled_model": compiled_indexed_model}
+                        if node_id == indexed_node_id and compiled_indexed_model is not None
+                        else {"indexed_model_template": indexed_model_template}
+                        if node_id == indexed_node_id and indexed_model_template is not None
+                        else invocation.parameters
+                    ),
                     random_seed=invocation.random_seed,
                     validator_id=definition.validator_id,
                     dependencies=sorted(_node_dependencies(
                         invocation,
                         node_ids=set(invocations),
-                        artifact_producers=_artifact_producers(subproblem),
-                    )),
+                        artifact_producers=_artifact_producers(invocation_list),
+                    ) | extra_dependencies.get(node_id, set())),
                 ))
         return diagnostics, compiled_nodes, missing
 
@@ -357,12 +461,33 @@ def _reference_port(
     return OperatorPort(value_kind=_value_kind(variable.shape), unit=variable.unit)
 
 
-def _artifact_producers(subproblem: SolvableModelIR) -> dict[str, str]:
+def _artifact_producers(
+    invocations: list[OperatorInvocation],
+) -> dict[str, str]:
     return {
         artifact: invocation.node_id
-        for invocation in subproblem.operators
+        for invocation in invocations
         for artifact in invocation.outputs
     }
+
+
+def _referenced_artifacts(
+    subproblem: SolvableModelIR,
+    *,
+    variables: list,
+    indexed_component: IndexedLinearExecutionComponent | None,
+) -> set[str]:
+    artifacts = {variable.id for variable in variables}
+    for answer in subproblem.final_answers:
+        artifacts.add(answer.value_ref)
+        artifacts.update(answer.evidence_ids)
+    if indexed_component is not None:
+        artifacts.update(
+            parameter.runtime_source.artifact_ref
+            for parameter in indexed_component.model.parameters
+            if parameter.runtime_source is not None
+        )
+    return artifacts
 
 
 def _node_dependencies(
@@ -384,15 +509,20 @@ def _node_dependencies(
 
 
 def _topological_order(
-    subproblem: SolvableModelIR,
+    invocation_list: list[OperatorInvocation],
+    *,
+    extra_dependencies: dict[str, set[str]] | None = None,
 ) -> tuple[list[str] | None, list[str]]:
-    invocations = {item.node_id: item for item in subproblem.operators}
-    artifact_producers = _artifact_producers(subproblem)
+    invocations = {item.node_id: item for item in invocation_list}
+    artifact_producers = _artifact_producers(invocation_list)
     dependencies = {
-        node_id: _node_dependencies(
-            invocation,
-            node_ids=set(invocations),
-            artifact_producers=artifact_producers,
+        node_id: (
+            _node_dependencies(
+                invocation,
+                node_ids=set(invocations),
+                artifact_producers=artifact_producers,
+            )
+            | (extra_dependencies or {}).get(node_id, set())
         )
         for node_id, invocation in invocations.items()
     }
@@ -424,3 +554,41 @@ def _topological_order(
         if cycle:
             return None, cycle
     return order, []
+
+
+def _execution_parts(
+    subproblem: SolvableModelIR,
+    *,
+    model_ir_ref: str,
+) -> tuple[
+    list,
+    list[OperatorInvocation],
+    IndexedLinearExecutionComponent | None,
+    dict[str, str],
+]:
+    variables = []
+    invocations: list[OperatorInvocation] = []
+    indexed_component: IndexedLinearExecutionComponent | None = None
+    ir_sources: dict[str, str] = {}
+    for component_index, component in enumerate(subproblem.execution_components):
+        component_path = (
+            f"{model_ir_ref}#/subproblems/{subproblem.subproblem_id}"
+            f"/execution_components/{component_index}"
+        )
+        if isinstance(component, OperatorGraphExecutionComponent):
+            variables.extend(component.variables)
+            for operator_index, invocation in enumerate(component.operators):
+                invocations.append(invocation)
+                ir_sources[invocation.node_id] = (
+                    f"{component_path}/operators/{operator_index}"
+                )
+            continue
+        indexed_component = component
+        invocation = OperatorInvocation(
+            node_id=component.solver_node_id,
+            operator_id="optimization.milp",
+            outputs=component.outputs,
+        )
+        invocations.append(invocation)
+        ir_sources[invocation.node_id] = component_path
+    return variables, invocations, indexed_component, ir_sources

@@ -7,7 +7,17 @@ from pathlib import Path
 from typing import AsyncGenerator, Protocol
 
 from app.guidance.contracts import ProblemSpec
-from app.guidance.model_ir import ApprovedModelIR, BlockedModelIR, ModelIR, ModelIRReview
+from app.guidance.failure_contracts import (
+    bounded_failure_summary,
+    bounded_subproblem_objective,
+)
+from app.guidance.model_ir import (
+    ApprovedModelIR,
+    BlockedModelIR,
+    ModelIR,
+    ModelIRReview,
+    ModelReviewSubmission,
+)
 from app.schemas.response import (
     TaskProgress,
     TaskResult,
@@ -84,14 +94,19 @@ class GuidancePipeline:
             return
 
         yield _progress(task_id, "model_review", 0.40, "正在独立审核模型")
+        review_submission_path = _write_review_submission(root, model_path)
         approved_path = await self._run_stage(
-            "model_review", task_id, task, model_path, root / "approved_model_ir.json"
+            "model_review",
+            task_id,
+            task,
+            review_submission_path,
+            root / "approved_model_ir.json",
         )
         approved = _load_approved_model(approved_path)
 
         if approved.review_status == "revision_required":
             yield _progress(task_id, "modeling", 0.46, "正在根据审核意见修订模型")
-            review_path = root / "model_review.json"
+            review_path = _preserve_revision_request(root, model_path)
             try:
                 model_path = await self._run_stage(
                     "modeling", task_id, task, review_path, root / "model_ir.json"
@@ -116,12 +131,21 @@ class GuidancePipeline:
                     yield payload
                 return
             yield _progress(task_id, "model_review", 0.52, "正在复审修订后的模型")
+            review_submission_path = _write_review_submission(
+                root,
+                model_path,
+                revision_request_path=review_path,
+            )
             approved_path = await self._run_stage(
-                "model_review", task_id, task, model_path, root / "approved_model_ir.json"
+                "model_review",
+                task_id,
+                task,
+                review_submission_path,
+                root / "approved_model_ir.json",
             )
 
         approved = _load_approved_model(approved_path)
-        if approved.review_status == "approved":
+        if approved.review_status in {"approved", "partial"}:
             yield _progress(task_id, "calculation", 0.62, "正在编译并执行算子图")
             manifest_path = await self._run_stage(
                 "calculation", task_id, task, approved_path, root / "execution_manifest.json"
@@ -160,6 +184,36 @@ class GuidancePipeline:
             input_path=input_path,
             output_path=output_path,
         )
+
+
+def _write_review_submission(
+    root: Path,
+    model_path: Path,
+    *,
+    revision_request_path: Path | None = None,
+) -> Path:
+    submission = ModelReviewSubmission(
+        model_ir_ref=model_path.name,
+        revision_request_ref=(
+            revision_request_path.name if revision_request_path is not None else None
+        ),
+    )
+    path = root / "model_review_submission.json"
+    path.write_text(submission.model_dump_json(indent=2), encoding="utf-8")
+    return path
+
+
+def _preserve_revision_request(root: Path, model_path: Path) -> Path:
+    initial_model = ModelIR.model_validate_json(model_path.read_text(encoding="utf-8"))
+    initial_model_path = root / "model_ir_initial.json"
+    initial_model_path.write_text(initial_model.model_dump_json(indent=2), encoding="utf-8")
+
+    review = ModelIRReview.model_validate_json(
+        (root / "model_review.json").read_text(encoding="utf-8")
+    ).model_copy(update={"model_ir_ref": initial_model_path.name})
+    path = root / "revision_request.json"
+    path.write_text(review.model_dump_json(indent=2), encoding="utf-8")
+    return path
 
 
 def _final_result(task_id: str, root: Path):
@@ -203,12 +257,15 @@ def _resolve_final_status(root: Path, audit: dict) -> str:
     if str(audit.get("status") or "").upper() == "BLOCK":
         return "blocked"
     verification = _read_json(root / "verification_report.json")
-    if str(verification.get("status") or "").lower() == "blocked":
+    verification_status = str(verification.get("status") or "").lower()
+    if verification_status == "blocked":
         return "blocked"
     approved = _read_json(root / "approved_model_ir.json")
     review_status = str(approved.get("review_status") or "").lower()
-    if review_status and review_status != "approved":
+    if review_status in {"blocked", "revision_required"}:
         return "blocked"
+    if review_status == "partial" or verification_status == "partial":
+        return "partial"
     return "completed"
 
 
@@ -252,6 +309,7 @@ def _write_modeling_failure_contracts(
     exc: Exception,
 ) -> Path:
     message = str(exc)
+    blocking_summary = bounded_failure_summary(message, "modeling_failure.json")
     failure = {
         "task_id": task_id,
         "failed_stage": "modeling",
@@ -271,13 +329,11 @@ def _write_modeling_failure_contracts(
         subproblems=[
             BlockedModelIR(
                 execution_status="blocked",
-                subproblem_id=str(subproblem["id"]),
-                objective=str(
-                    subproblem.get("objective")
-                    or subproblem.get("goal")
-                    or problem_spec.task_summary
+                subproblem_id=subproblem.id,
+                objective=bounded_subproblem_objective(
+                    subproblem.model_dump(mode="python")
                 ),
-                blocking_reason=message,
+                blocking_reason=blocking_summary,
                 missing_inputs=["valid Model IR contract"],
                 recovery_action=(
                     "Correct the Model IR contract using only the stated problem and "
@@ -291,15 +347,19 @@ def _write_modeling_failure_contracts(
     (root / "model_ir.json").write_text(model_ir.model_dump_json(indent=2), encoding="utf-8")
     review = ModelIRReview(
         model_id=model_ir.model_id,
-        status="blocked",
         model_ir_ref="model_ir.json",
         identifiability="not_reviewed",
         dimensional_consistency="not_reviewed",
         data_sufficiency="not_reviewed",
         computational_feasibility="blocked",
-        blocking_issues=[message],
-        required_revisions=[
-            "Regenerate a syntactically valid Model IR contract before model review."
+        assumption_checks=[],
+        subproblem_reviews=[
+            {
+                "subproblem_id": subproblem.subproblem_id,
+                "status": "blocked",
+                "blocking_issues": [blocking_summary],
+            }
+            for subproblem in model_ir.subproblems
         ],
     )
     (root / "model_review.json").write_text(review.model_dump_json(indent=2), encoding="utf-8")
@@ -307,6 +367,7 @@ def _write_modeling_failure_contracts(
         review_status="blocked",
         model_id=model_ir.model_id,
         model_ir_ref="model_ir.json",
+        executable_subproblem_ids=[],
         approved_model_ir=model_ir,
     )
     approved_path = root / "approved_model_ir.json"

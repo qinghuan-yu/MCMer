@@ -65,6 +65,7 @@ def test_model_adequacy_routes_registered_validators_by_declared_family() -> Non
     approved = ApprovedModelIR(
         review_status="approved",
         model_id=model_ir.model_id,
+        executable_subproblem_ids=["aggregate_flow_tasks"],
         approved_model_ir=model_ir,
     )
     result_registry = {
@@ -271,6 +272,7 @@ def test_result_verification_consumes_operator_execution_contract(tmp_path: Path
         ApprovedModelIR(
             review_status="approved",
             model_id=model_ir.model_id,
+            executable_subproblem_ids=["aggregate_flow_tasks"],
             approved_model_ir=model_ir,
         ).model_dump_json(indent=2),
         encoding="utf-8",
@@ -323,6 +325,7 @@ def test_result_verification_consumes_failed_operator_artifacts_without_crashing
         ApprovedModelIR(
             review_status="approved",
             model_id=model_ir.model_id,
+            executable_subproblem_ids=["aggregate_flow_tasks"],
             approved_model_ir=model_ir,
         ).model_dump_json(indent=2),
         encoding="utf-8",

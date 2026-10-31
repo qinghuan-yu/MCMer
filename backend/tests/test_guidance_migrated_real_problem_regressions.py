@@ -49,15 +49,6 @@ def test_real_attachment_forecast_runs_compiled_graph_and_independent_validation
             "execution_status": "solvable",
             "subproblem_id": "table1_forecast",
             "objective": "Evaluate a robust regularized forecast on a strict temporal holdout.",
-            "variables": [
-                {
-                    "id": "table1",
-                    "role": "derived",
-                    "symbol": "D",
-                    "unit": "unspecified",
-                    "shape": ["row", "column", "table"],
-                },
-            ],
             "data": [{
                 "id": "workbook",
                 "source_ref": "data/附件(Attachment).xlsx",
@@ -69,7 +60,19 @@ def test_real_attachment_forecast_runs_compiled_graph_and_independent_validation
                 "right": {"kind": "literal", "value": 0.0},
             }],
             "constraints": [],
-            "operators": [
+            "execution_components": [{
+                "kind": "operator_graph",
+                "component_id": "forecast_operator_graph",
+                "variables": [
+                {
+                    "id": "table1",
+                    "role": "derived",
+                    "symbol": "D",
+                    "unit": "unspecified",
+                    "shape": ["row", "column", "table"],
+                },
+            ],
+                "operators": [
                 {
                     "node_id": "table1",
                     "operator_id": "data.read_excel_table",
@@ -107,9 +110,12 @@ def test_real_attachment_forecast_runs_compiled_graph_and_independent_validation
                         "max_iterations": 100,
                         "tolerance": 1e-8,
                     },
-                },
-            ],
-            "candidate_models": [
+                    },
+                ],
+            }],
+                "assumptions": [],
+                "fact_bindings": [],
+                "candidate_models": [
                 {
                     "id": "last_observation_baseline",
                     "role": "baseline",
@@ -194,13 +200,6 @@ def test_real_attachment_dynamics_runs_compiled_graph_and_independent_validation
             "execution_status": "solvable",
             "subproblem_id": "table1_affine_dynamics",
             "objective": "Estimate and audit an affine ODE on the first 30 observed flow samples.",
-            "variables": [{
-                "id": "table1",
-                "role": "derived",
-                "symbol": "D",
-                "unit": "unspecified",
-                "shape": ["row", "column", "table"],
-            }],
             "data": [{
                 "id": "workbook",
                 "source_ref": "data/附件(Attachment).xlsx",
@@ -212,7 +211,17 @@ def test_real_attachment_dynamics_runs_compiled_graph_and_independent_validation
                 "right": {"kind": "literal", "value": 0.0},
             }],
             "constraints": [],
-            "operators": [
+            "execution_components": [{
+                "kind": "operator_graph",
+                "component_id": "dynamics_operator_graph",
+                "variables": [{
+                "id": "table1",
+                "role": "derived",
+                "symbol": "D",
+                "unit": "unspecified",
+                "shape": ["row", "column", "table"],
+            }],
+                "operators": [
                 {
                     "node_id": "table1",
                     "operator_id": "data.read_excel_table",
@@ -247,9 +256,12 @@ def test_real_attachment_dynamics_runs_compiled_graph_and_independent_validation
                         "integration_substeps": 1,
                         "step_sensitivity_threshold": 1e-8,
                     },
-                },
-            ],
-            "candidate_models": [
+                    },
+                ],
+            }],
+                "assumptions": [],
+                "fact_bindings": [],
+                "candidate_models": [
                 {
                     "id": "constant_state_baseline",
                     "role": "baseline",
@@ -328,13 +340,6 @@ def test_real_attachment_graph_runs_compiled_time_expanded_network_and_certifica
             "execution_status": "solvable",
             "subproblem_id": "table1_time_expanded_graph",
             "objective": "Audit a declared time-expanded graph using observed times and capacities.",
-            "variables": [{
-                "id": "table1",
-                "role": "derived",
-                "symbol": "D",
-                "unit": "unspecified",
-                "shape": ["row", "column", "table"],
-            }],
             "data": [{
                 "id": "workbook",
                 "source_ref": "data/附件(Attachment).xlsx",
@@ -346,7 +351,17 @@ def test_real_attachment_graph_runs_compiled_time_expanded_network_and_certifica
                 "right": {"kind": "literal", "value": 0.0},
             }],
             "constraints": [],
-            "operators": [
+            "execution_components": [{
+                "kind": "operator_graph",
+                "component_id": "graph_operator_graph",
+                "variables": [{
+                "id": "table1",
+                "role": "derived",
+                "symbol": "D",
+                "unit": "unspecified",
+                "shape": ["row", "column", "table"],
+            }],
+                "operators": [
                 {
                     "node_id": "table1",
                     "operator_id": "data.read_excel_table",
@@ -378,9 +393,12 @@ def test_real_attachment_graph_runs_compiled_time_expanded_network_and_certifica
                         "sink": 5,
                         "endpoints": [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]],
                     },
-                },
-            ],
-            "candidate_models": [
+                    },
+                ],
+            }],
+                "assumptions": [],
+                "fact_bindings": [],
+                "candidate_models": [
                 {
                     "id": "shortest_hop_baseline",
                     "role": "baseline",
@@ -459,13 +477,6 @@ def test_real_attachment_optimization_runs_compiled_graph_and_independent_certif
             "execution_status": "solvable",
             "subproblem_id": "anchor_design_optimization",
             "objective": "Minimize a quadratic anchor design objective under measured limits.",
-            "variables": [{
-                "id": "table4",
-                "role": "derived",
-                "symbol": "D",
-                "unit": "unspecified",
-                "shape": ["row", "column", "table"],
-            }],
             "data": [{
                 "id": "workbook",
                 "source_ref": "data/A-附件.xlsx",
@@ -477,7 +488,17 @@ def test_real_attachment_optimization_runs_compiled_graph_and_independent_certif
                 "right": {"kind": "literal", "value": 0.0},
             }],
             "constraints": [],
-            "operators": [
+            "execution_components": [{
+                "kind": "operator_graph",
+                "component_id": "optimization_operator_graph",
+                "variables": [{
+                "id": "table4",
+                "role": "derived",
+                "symbol": "D",
+                "unit": "unspecified",
+                "shape": ["row", "column", "table"],
+            }],
+                "operators": [
                 {
                     "node_id": "table4",
                     "operator_id": "data.read_excel_table",
@@ -521,9 +542,12 @@ def test_real_attachment_optimization_runs_compiled_graph_and_independent_certif
                         "constraint_tolerance": 1e-7,
                         "multistart_tolerance": 1e-5,
                     },
-                },
-            ],
-            "candidate_models": [
+                    },
+                ],
+            }],
+                "assumptions": [],
+                "fact_bindings": [],
+                "candidate_models": [
                 {
                     "id": "feasible_anchor_baseline",
                     "role": "baseline",
@@ -603,13 +627,6 @@ def test_real_attachment_evaluation_runs_compiled_graph_and_ranking_audit(
             "execution_status": "solvable",
             "subproblem_id": "anchor_torque_evaluation",
             "objective": "Rank declared torque alternatives under an explicit benefit-cost preference.",
-            "variables": [{
-                "id": "table1",
-                "role": "derived",
-                "symbol": "D",
-                "unit": "unspecified",
-                "shape": ["row", "column", "table"],
-            }],
             "data": [{
                 "id": "workbook",
                 "source_ref": "data/A-附件.xlsx",
@@ -621,7 +638,17 @@ def test_real_attachment_evaluation_runs_compiled_graph_and_ranking_audit(
                 "right": {"kind": "literal", "value": 0.0},
             }],
             "constraints": [],
-            "operators": [
+            "execution_components": [{
+                "kind": "operator_graph",
+                "component_id": "evaluation_operator_graph",
+                "variables": [{
+                "id": "table1",
+                "role": "derived",
+                "symbol": "D",
+                "unit": "unspecified",
+                "shape": ["row", "column", "table"],
+            }],
+                "operators": [
                 {
                     "node_id": "table1",
                     "operator_id": "data.read_excel_table",
@@ -651,9 +678,12 @@ def test_real_attachment_evaluation_runs_compiled_graph_and_ranking_audit(
                         "perturbation_fraction": 0.02,
                         "stability_threshold": 0.8,
                     },
-                },
-            ],
-            "candidate_models": [
+                    },
+                ],
+            }],
+                "assumptions": [],
+                "fact_bindings": [],
+                "candidate_models": [
                 {
                     "id": "unweighted_data_baseline",
                     "role": "baseline",

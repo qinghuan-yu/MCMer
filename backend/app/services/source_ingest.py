@@ -9,6 +9,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from app.artifacts.input_catalog import build_input_catalog
+
 
 QUESTION_SOURCE_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 PAPER_SOURCE_EXTENSIONS = {".zip", ".md", ".docx", ".pdf"}
@@ -191,9 +193,15 @@ def ingest_question_source(saved_path: str, task: dict) -> dict[str, Any]:
     new_score = _score_question_source(saved_path, text)
 
     if not current_source_file or new_score >= current_score:
+        build_input_catalog(
+            saved_path,
+            work_dir=task["work_dir"],
+            extracted_text=text,
+        )
         updates.update({
             "source_question_text": text,
             "source_question_file": saved_path,
+            "input_catalog_ref": "input_catalog.json",
         })
     if not (task.get("question") or "").strip():
         updates["question"] = text

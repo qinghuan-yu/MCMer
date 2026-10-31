@@ -57,27 +57,22 @@ def test_result_registry_rejects_summary_that_cannot_render_final_answers() -> N
         })
 
 
-def test_problem_spec_assigns_stable_ids_to_blank_subproblems() -> None:
+def test_problem_spec_rejects_blank_canonical_subproblem_ids() -> None:
+    from pydantic import ValidationError
+
     from app.guidance.contracts import ProblemSpec
 
-    problem_spec = ProblemSpec(
-        task_summary="Solve five decomposed modeling tasks.",
-        subproblems=[
-            {"objective": "Analyze the first task."},
-            {"id": "", "objective": "Analyze the second task."},
-            {"id": "   ", "objective": "Analyze the third task."},
-            {"id": None, "objective": "Analyze the fourth task."},
-            {"id": "problem5", "objective": "Analyze the fifth task."},
-        ],
-    )
-
-    assert [item["id"] for item in problem_spec.subproblems] == [
-        "problem1",
-        "problem2",
-        "problem3",
-        "problem4",
-        "problem5",
-    ]
+    with pytest.raises(ValidationError, match=r"subproblems\.0\.id"):
+        ProblemSpec(
+            task_summary="Reject an unaddressable canonical subproblem.",
+            subproblems=[{
+                "id": "",
+                "objective": "Analyze the task.",
+                "required_fact_ids": [],
+                "required_uncertainty_ids": [],
+                "depends_on_subproblem_ids": [],
+            }],
+        )
 
 
 def test_problem_spec_canonicalizes_prefixed_subproblem_ids() -> None:
@@ -86,13 +81,31 @@ def test_problem_spec_canonicalizes_prefixed_subproblem_ids() -> None:
     problem_spec = ProblemSpec(
         task_summary="Solve decomposed modeling tasks.",
         subproblems=[
-            {"id": "P1", "objective": "Analyze task 1."},
-            {"id": "problem 2", "objective": "Analyze task 2."},
-            {"id": "subproblem_3", "objective": "Analyze task 3."},
+            {
+                "id": "P1",
+                "objective": "Analyze task 1.",
+                "required_fact_ids": [],
+                "required_uncertainty_ids": [],
+                "depends_on_subproblem_ids": [],
+            },
+            {
+                "id": "problem 2",
+                "objective": "Analyze task 2.",
+                "required_fact_ids": [],
+                "required_uncertainty_ids": [],
+                "depends_on_subproblem_ids": [],
+            },
+            {
+                "id": "subproblem_3",
+                "objective": "Analyze task 3.",
+                "required_fact_ids": [],
+                "required_uncertainty_ids": [],
+                "depends_on_subproblem_ids": [],
+            },
         ],
     )
 
-    assert [item["id"] for item in problem_spec.subproblems] == [
+    assert [item.id for item in problem_spec.subproblems] == [
         "problem1",
         "problem2",
         "problem3",

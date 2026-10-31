@@ -988,11 +988,11 @@ def _merge_audit_reports(primary: dict | None, fallback: dict) -> dict:
 
 def _build_models(budget: WorkflowBudget) -> dict[str, LLM]:
     return {
-        "breakdown": LLM(model=config_manager.get_effective_model("COORDINATOR_MODEL"), temperature=0.2, max_tokens=8192, request_timeout=budget.llm_timeout),
-        "modeling": LLM(model=config_manager.get_effective_model("MODELER_MODEL"), temperature=0.35, max_tokens=12288, request_timeout=budget.llm_timeout),
-        "review": LLM(model=config_manager.get_effective_model("MODELER_MODEL"), temperature=0.2, max_tokens=8192, request_timeout=budget.llm_timeout),
-        "coder": LLM(model=config_manager.get_effective_model("CODER_MODEL"), temperature=0.2, max_tokens=12288, request_timeout=budget.llm_timeout),
-        "analysis": LLM(model=config_manager.get_effective_model("WRITER_MODEL"), temperature=0.35, max_tokens=12288, request_timeout=budget.llm_timeout),
+        "breakdown": LLM(model=config_manager.get_effective_model("COORDINATOR_MODEL"), temperature=0.2, max_tokens=8192, request_timeout=budget.guidance.decomposition),
+        "modeling": LLM(model=config_manager.get_effective_model("MODELER_MODEL"), temperature=0.35, max_tokens=12288, request_timeout=budget.guidance.architecture),
+        "review": LLM(model=config_manager.get_effective_model("MODELER_MODEL"), temperature=0.2, max_tokens=8192, request_timeout=budget.guidance.review),
+        "coder": LLM(model=config_manager.get_effective_model("CODER_MODEL"), temperature=0.2, max_tokens=12288, request_timeout=budget.guidance.indexed_core),
+        "analysis": LLM(model=config_manager.get_effective_model("WRITER_MODEL"), temperature=0.35, max_tokens=12288, request_timeout=budget.writer.request_timeout),
         "writer": LLM(model=config_manager.get_effective_model("WRITER_MODEL"), temperature=0.45, max_tokens=16384, request_timeout=budget.writer.request_timeout),
     }
 

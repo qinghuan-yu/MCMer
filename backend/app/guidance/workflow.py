@@ -12,7 +12,7 @@ from app.guidance.agents import (
     LLMProblemDecomposer,
 )
 from app.guidance.model_ir_compiler import ModelIRCompiler
-from app.guidance.operator_catalog import build_default_operator_registry
+from app.guidance.operator_catalog import DEFAULT_OPERATOR_IDS, build_default_operator_registry
 from app.guidance.operator_execution import OperatorGraphExecutor
 from app.guidance.pipeline import GuidancePipeline
 from app.guidance.stages import (
@@ -31,29 +31,46 @@ from app.services.task_service import task_manager
 
 def build_default_guidance_pipeline(workflow_mode: str = "standard") -> GuidancePipeline:
     budget = resolve_workflow_budget(workflow_mode)
+    guidance_budget = budget.guidance
     decomposition_llm = LLM(
         model=config_manager.get_effective_model("COORDINATOR_MODEL"),
         temperature=0.1,
         max_tokens=8192,
-        request_timeout=budget.llm_timeout,
+        request_timeout=guidance_budget.decomposition,
     )
     modeling_llm = LLM(
         model=config_manager.get_effective_model("MODELER_MODEL"),
         temperature=0.15,
         max_tokens=12288,
-        request_timeout=budget.llm_timeout,
+        request_timeout=max(
+            guidance_budget.architecture,
+            guidance_budget.indexed_core,
+            guidance_budget.indexed_constraints,
+        ),
     )
     review_llm = LLM(
         model=config_manager.get_effective_model("MODELER_MODEL"),
         temperature=0.0,
         max_tokens=8192,
-        request_timeout=budget.llm_timeout,
+        request_timeout=guidance_budget.review,
     )
     operator_registry = build_default_operator_registry()
     return GuidancePipeline(
-        decomposition_stage=DecompositionStage(decomposer=LLMProblemDecomposer(decomposition_llm)),
-        modeling_stage=ModelingStage(modeler=LLMModeler(modeling_llm)),
-        model_review_stage=ModelReviewStage(reviewer=LLMModelReviewer(review_llm)),
+        decomposition_stage=DecompositionStage(decomposer=LLMProblemDecomposer(
+            decomposition_llm,
+            request_timeout=guidance_budget.decomposition,
+        )),
+        modeling_stage=ModelingStage(modeler=LLMModeler(
+            modeling_llm,
+            available_operator_ids=sorted(DEFAULT_OPERATOR_IDS),
+            architecture_timeout=guidance_budget.architecture,
+            indexed_core_timeout=guidance_budget.indexed_core,
+            indexed_constraints_timeout=guidance_budget.indexed_constraints,
+        )),
+        model_review_stage=ModelReviewStage(reviewer=LLMModelReviewer(
+            review_llm,
+            request_timeout=guidance_budget.review,
+        )),
         calculation_stage=CalculationStage(
             compiler=ModelIRCompiler(registry=operator_registry),
             executor=OperatorGraphExecutor(registry=operator_registry),
@@ -74,10 +91,11 @@ async def run_guidance_workflow(task_id: str, task: dict) -> AsyncGenerator[dict
             if payload.get("type") == "result" and isinstance(payload.get("data"), dict):
                 final_status = str(payload["data"].get("status") or final_status)
             yield payload
-        task_manager.update_status(
-            task_id,
-            TaskStatus.BLOCKED if final_status == "blocked" else TaskStatus.COMPLETED,
-        )
+        terminal_status = {
+            "blocked": TaskStatus.BLOCKED,
+            "partial": TaskStatus.PARTIAL,
+        }.get(final_status, TaskStatus.COMPLETED)
+        task_manager.update_status(task_id, terminal_status)
     except Exception as exc:
         task_manager.update_status(task_id, TaskStatus.FAILED)
         yield {

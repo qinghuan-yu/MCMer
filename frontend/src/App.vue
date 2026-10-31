@@ -253,10 +253,20 @@ const currentTaskType = ref<TaskType>('writing')
 let activeSocket: WebSocket | null = null
 let messagePoller: number | null = null
 
+const terminalTaskStatuses = new Set([
+  'blocked',
+  'partial',
+  'completed',
+  'failed',
+  'cancelled',
+])
+
 const statusText = computed(() => {
   const map: Record<string, string> = {
     idle: '就绪',
     running: '运行中',
+    partial: '部分子题已完成',
+    blocked: '流程已阻断',
     completed: '流程已结束',
     failed: '失败',
     cancelled: '已停止',
@@ -347,8 +357,8 @@ function prepareRuntimeView(
   isRunning.value = status === 'running' || status === 'pending'
   currentView.value = 'running'
   messages.value = []
-  progress.value = status === 'completed' ? 1 : 0
-  currentStage.value = status === 'completed' ? 'done' : ''
+  progress.value = terminalTaskStatuses.has(status) ? 1 : 0
+  currentStage.value = terminalTaskStatuses.has(status) ? 'done' : ''
   taskResult.value = null
   reconnectAttempts.value = 0
 }
@@ -415,7 +425,7 @@ function hydrateRuntimeState(runtimeMessages: RuntimeMessage[]) {
     }
     if (terminalMessage.type === 'result') {
       taskResult.value = terminalMessage.data as TaskResultPayload
-      taskStatus.value = 'completed'
+      taskStatus.value = String(terminalMessage.data.status || 'completed')
       progress.value = 1
       currentStage.value = 'done'
     } else if (terminalMessage.type === 'error') {
@@ -468,7 +478,12 @@ function startMessagePolling(taskId: string) {
 
 function buildFallbackResult(task: HistoryTask, detail: TaskDetail | null, context: TaskContext | null = null) {
   if (!detail?.work_dir) return null
-  if (!task.has_paper && !task.has_notebook && task.status !== 'failed' && task.status !== 'completed') {
+  if (
+    !task.has_paper
+    && !task.has_guidance
+    && !task.has_notebook
+    && !terminalTaskStatuses.has(task.status)
+  ) {
     return null
   }
 
@@ -568,10 +583,10 @@ async function handleOpenProject(task: HistoryTask) {
     taskResult.value = buildFallbackResult(task, detail, context)
   }
 
-  if (task.status === 'completed' && progress.value < 1) {
+  if (terminalTaskStatuses.has(task.status) && progress.value < 1) {
     progress.value = 1
     currentStage.value = currentStage.value || 'done'
-    taskStatus.value = 'completed'
+    taskStatus.value = task.status
   }
 
   if (task.status === 'running' || task.status === 'pending') {
@@ -652,7 +667,7 @@ function startWebSocket(
     } else if (msg.type === 'result') {
       taskResult.value = msg.data as TaskResultPayload
       currentTaskType.value = (msg.data?.task_type as TaskType) || currentTaskType.value
-      taskStatus.value = 'completed'
+      taskStatus.value = String(msg.data?.status || 'completed')
       progress.value = 1
       currentStage.value = 'done'
       isRunning.value = false

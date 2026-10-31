@@ -30,7 +30,11 @@ class OperatorVersionRecord(WorkspaceArchiveContract):
 
 class WorkspaceArtifactGroups(WorkspaceArchiveContract):
     original_inputs: list[str] = Field(default_factory=list)
+    input_catalog: list[str] = Field(default_factory=list)
+    evidence_profile: list[str] = Field(default_factory=list)
+    fact_traceability: list[str] = Field(default_factory=list)
     model_ir: list[str] = Field(default_factory=list)
+    model_reviews: list[str] = Field(default_factory=list)
     execution_plan: list[str] = Field(default_factory=list)
     operator_versions: list[OperatorVersionRecord] = Field(default_factory=list)
     code_exports: list[str] = Field(default_factory=list)
@@ -118,7 +122,22 @@ def _artifact_groups(
         for path in relative_paths
         if path.split("/", 1)[0] in {"data", "inputs", "source_bundle"}
     )
-    model_ir = sorted(available & {"model_ir.json", "approved_model_ir.json"})
+    input_catalog = ["input_catalog.json"] if "input_catalog.json" in available else []
+    evidence_profile = ["evidence_profile.json"] if "evidence_profile.json" in available else []
+    fact_traceability = sorted(available & {
+        "approved_model_ir.json",
+        "problem_spec.json",
+    })
+    model_ir = sorted(available & {
+        "model_ir.json",
+        "model_ir_initial.json",
+        "approved_model_ir.json",
+    })
+    model_reviews = sorted(available & {
+        "model_review.json",
+        "model_review_submission.json",
+        "revision_request.json",
+    })
     execution_plan = ["execution_plan.json"] if "execution_plan.json" in available else []
     operator_versions, versions_complete = _operator_versions(work_dir / "execution_plan.json")
     code_exports = sorted(
@@ -144,7 +163,11 @@ def _artifact_groups(
     guidance = ["guidance.md"] if "guidance.md" in available else []
     return WorkspaceArtifactGroups(
         original_inputs=original_inputs,
+        input_catalog=input_catalog,
+        evidence_profile=evidence_profile,
+        fact_traceability=fact_traceability,
         model_ir=model_ir,
+        model_reviews=model_reviews,
         execution_plan=execution_plan,
         operator_versions=operator_versions,
         code_exports=code_exports,
@@ -187,8 +210,18 @@ def _missing_required_groups(
     missing: list[str] = []
     if not groups.original_inputs:
         missing.append("original_inputs")
-    if set(groups.model_ir) != {"model_ir.json", "approved_model_ir.json"}:
+    if groups.input_catalog != ["input_catalog.json"]:
+        missing.append("input_catalog")
+    if groups.evidence_profile != ["evidence_profile.json"]:
+        missing.append("evidence_profile")
+    if groups.fact_traceability != ["approved_model_ir.json", "problem_spec.json"]:
+        missing.append("fact_traceability")
+    if not {"model_ir.json", "approved_model_ir.json"}.issubset(groups.model_ir):
         missing.append("model_ir")
+    if not {"model_review.json", "model_review_submission.json"}.issubset(
+        groups.model_reviews
+    ):
+        missing.append("model_reviews")
     if groups.execution_plan != ["execution_plan.json"]:
         missing.append("execution_plan")
     if not operator_versions_complete:

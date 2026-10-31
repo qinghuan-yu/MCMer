@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -9,6 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class IRModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+def _require_unique_source_fact_ids(source_fact_ids: list[str]) -> list[str]:
+    if len(source_fact_ids) != len(set(source_fact_ids)):
+        raise ValueError("source_fact_ids must be unique")
+    return source_fact_ids
 
 
 class SymbolExpression(IRModel):
@@ -73,6 +80,173 @@ class ConstraintSpec(IRModel):
     right: Expression
 
 
+IndexValue = str | int
+
+
+class IndexSetSpec(IRModel):
+    id: str = Field(min_length=1, max_length=100)
+    values: list[IndexValue] = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_unique_values(self) -> IndexSetSpec:
+        if any(isinstance(value, bool) for value in self.values):
+            raise ValueError("index values cannot be booleans")
+        if len(self.values) != len(set(self.values)):
+            raise ValueError(f"index set {self.id!r} contains duplicate values")
+        return self
+
+
+class IndexedParameterValue(IRModel):
+    coordinates: list[IndexValue] = Field(default_factory=list, max_length=4)
+    value: float
+    source_ref: str = Field(min_length=1, max_length=300)
+
+
+class RuntimeIndexedParameterSource(IRModel):
+    artifact_ref: str = Field(min_length=1, max_length=100)
+    field_path: list[str] = Field(min_length=1, max_length=8)
+
+
+class IndexedParameterSpec(IRModel):
+    id: str = Field(min_length=1, max_length=100)
+    index_sets: list[str] = Field(default_factory=list, max_length=4)
+    source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
+    values: list[IndexedParameterValue] = Field(default_factory=list, max_length=10000)
+    dense_values: list[float] = Field(default_factory=list, max_length=10000)
+    dense_source_ref: str | None = Field(default=None, min_length=1, max_length=300)
+    runtime_source: RuntimeIndexedParameterSource | None = None
+
+    @model_validator(mode="after")
+    def require_one_value_encoding(self) -> IndexedParameterSpec:
+        _require_unique_source_fact_ids(self.source_fact_ids)
+        source_count = sum((
+            bool(self.values),
+            bool(self.dense_values),
+            self.runtime_source is not None,
+        ))
+        if source_count != 1:
+            raise ValueError(
+                "parameter requires exactly one of values, dense_values, or runtime_source"
+            )
+        if self.dense_values and self.dense_source_ref is None:
+            raise ValueError("dense_values require dense_source_ref")
+        if not self.dense_values and self.dense_source_ref is not None:
+            raise ValueError("dense_source_ref is only valid with dense_values")
+        return self
+
+
+class IndexedVariableSpec(IRModel):
+    id: str = Field(min_length=1, max_length=100)
+    index_sets: list[str] = Field(default_factory=list, max_length=4)
+    domain: Literal["continuous", "integer", "binary"]
+    lower_bound: float | None = 0.0
+    upper_bound: float | None = None
+
+    @model_validator(mode="after")
+    def require_ordered_bounds(self) -> IndexedVariableSpec:
+        if (
+            self.lower_bound is not None
+            and self.upper_bound is not None
+            and self.lower_bound > self.upper_bound
+        ):
+            raise ValueError(f"variable {self.id!r} lower bound exceeds upper bound")
+        if self.domain == "binary" and (
+            self.lower_bound not in (None, 0.0)
+            or self.upper_bound not in (None, 1.0)
+        ):
+            raise ValueError("binary variable bounds must be zero and one when specified")
+        return self
+
+
+class IndexSelector(IRModel):
+    binder: str | None = Field(default=None, min_length=1, max_length=100)
+    value: IndexValue | None = None
+    offset: int = Field(default=0, ge=-10000, le=10000)
+
+    @model_validator(mode="after")
+    def require_one_selector_source(self) -> IndexSelector:
+        if (self.binder is None) == (self.value is None):
+            raise ValueError("index selector requires exactly one of binder or value")
+        return self
+
+
+class ConstantLinearValue(IRModel):
+    kind: Literal["constant"] = "constant"
+    value: float
+
+
+class ParameterLinearValue(IRModel):
+    kind: Literal["parameter"] = "parameter"
+    parameter_id: str = Field(min_length=1, max_length=100)
+    selectors: list[IndexSelector] = Field(default_factory=list, max_length=4)
+    multiplier: float = 1.0
+
+
+LinearValue = Annotated[
+    ConstantLinearValue | ParameterLinearValue,
+    Field(discriminator="kind"),
+]
+
+
+class IndexedVariableReference(IRModel):
+    variable_id: str = Field(min_length=1, max_length=100)
+    selectors: list[IndexSelector] = Field(default_factory=list, max_length=4)
+
+
+class IndexedLinearTerm(IRModel):
+    for_each: dict[str, str] = Field(default_factory=dict, max_length=4)
+    coefficient: LinearValue
+    variable: IndexedVariableReference
+
+
+class IndexedLinearObjective(IRModel):
+    sense: Literal["minimize", "maximize"]
+    terms: list[IndexedLinearTerm] = Field(min_length=1, max_length=1000)
+
+
+class IndexedLinearConstraint(IRModel):
+    id: str = Field(min_length=1, max_length=100)
+    source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
+    for_each: dict[str, str] = Field(default_factory=dict, max_length=4)
+    terms: list[IndexedLinearTerm] = Field(min_length=1, max_length=1000)
+    relation: Literal["equal", "less_equal", "greater_equal"]
+    rhs: LinearValue
+
+    @model_validator(mode="after")
+    def require_unique_source_fact_ids(self) -> IndexedLinearConstraint:
+        _require_unique_source_fact_ids(self.source_fact_ids)
+        return self
+
+
+class IndexedLinearCoreSpec(IRModel):
+    index_sets: list[IndexSetSpec] = Field(min_length=1, max_length=20)
+    parameters: list[IndexedParameterSpec] = Field(default_factory=list, max_length=100)
+    variables: list[IndexedVariableSpec] = Field(min_length=1, max_length=100)
+    objective: IndexedLinearObjective
+
+    @model_validator(mode="after")
+    def require_unique_identifiers(self) -> IndexedLinearCoreSpec:
+        for label, identifiers in (
+            ("index set", [item.id for item in self.index_sets]),
+            ("parameter", [item.id for item in self.parameters]),
+            ("indexed variable", [item.id for item in self.variables]),
+        ):
+            if len(identifiers) != len(set(identifiers)):
+                raise ValueError(f"{label} ids must be unique")
+        return self
+
+
+class IndexedLinearModelSpec(IndexedLinearCoreSpec):
+    constraints: list[IndexedLinearConstraint] = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_unique_constraint_ids(self) -> IndexedLinearModelSpec:
+        identifiers = [item.id for item in self.constraints]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("indexed constraint ids must be unique")
+        return self
+
+
 class OperatorInvocation(IRModel):
     node_id: str = Field(min_length=1, max_length=100)
     operator_id: str = Field(min_length=1, max_length=160)
@@ -80,6 +254,33 @@ class OperatorInvocation(IRModel):
     outputs: list[str] = Field(min_length=1, max_length=20)
     parameters: dict[str, Any] = Field(default_factory=dict)
     random_seed: int | None = None
+    source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def require_unique_source_fact_ids(self) -> OperatorInvocation:
+        _require_unique_source_fact_ids(self.source_fact_ids)
+        return self
+
+
+class OperatorGraphExecutionComponent(IRModel):
+    kind: Literal["operator_graph"]
+    component_id: str = Field(min_length=1, max_length=100)
+    variables: list[VariableSpec] = Field(min_length=1, max_length=100)
+    operators: list[OperatorInvocation] = Field(min_length=1, max_length=100)
+
+
+class IndexedLinearExecutionComponent(IRModel):
+    kind: Literal["indexed_linear"]
+    component_id: str = Field(min_length=1, max_length=100)
+    model: IndexedLinearModelSpec
+    solver_node_id: str = Field(min_length=1, max_length=100)
+    outputs: list[str] = Field(min_length=1, max_length=20)
+
+
+ExecutionComponent = Annotated[
+    OperatorGraphExecutionComponent | IndexedLinearExecutionComponent,
+    Field(discriminator="kind"),
+]
 
 
 class CandidateModel(IRModel):
@@ -90,12 +291,46 @@ class CandidateModel(IRModel):
     applicability_boundary: str = Field(min_length=1, max_length=500)
 
 
+class CandidateModelDraft(CandidateModel):
+    operator_node_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ModelingAssumptionSpec(IRModel):
+    id: str = Field(min_length=1, max_length=100)
+    statement: str = Field(min_length=1, max_length=600)
+    basis: Literal[
+        "problem_ambiguity",
+        "standard_modeling_convention",
+        "scenario_choice",
+    ]
+    source_refs: list[str] = Field(min_length=1, max_length=20)
+    affected_model_elements: list[str] = Field(min_length=1, max_length=30)
+    alternative_scenarios: list[str] = Field(min_length=1, max_length=12)
+    sensitivity_checks: list[str] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def require_uncertainty_source_for_ambiguity(self) -> ModelingAssumptionSpec:
+        if self.basis == "problem_ambiguity" and not all(
+            re.fullmatch(
+                r"problem_spec\.json#uncertainties/[A-Za-z][A-Za-z0-9_.-]*",
+                reference,
+            )
+            for reference in self.source_refs
+        ):
+            raise ValueError(
+                "problem_ambiguity assumptions must reference stable problem_spec uncertainty ids"
+            )
+        return self
+
+
 class ValidationPlan(IRModel):
     model_families: list[
         Literal[
             "regression",
             "forecast",
+            "future_forecast",
             "optimization",
+            "mixed_integer_linear_optimization",
             "evaluation",
             "simulation",
             "inverse_problem",
@@ -121,15 +356,71 @@ class FinalAnswerSpec(IRModel):
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
 
 
+class FactBindingSpec(IRModel):
+    fact_id: str = Field(min_length=1, max_length=120)
+    model_paths: list[str] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def require_json_pointers(self) -> FactBindingSpec:
+        invalid = [path for path in self.model_paths if not path.startswith("/")]
+        if invalid:
+            raise ValueError("fact binding model_paths must be JSON pointers")
+        if len(self.model_paths) != len(set(self.model_paths)):
+            raise ValueError("fact binding model_paths must be unique")
+        return self
+
+
+def _build_fact_bindings(
+    execution_components: list[ExecutionComponent],
+) -> list[FactBindingSpec]:
+    paths_by_fact: dict[str, list[str]] = {}
+    for component_index, component in enumerate(execution_components):
+        component_path = f"/execution_components/{component_index}"
+        if isinstance(component, OperatorGraphExecutionComponent):
+            nodes = (
+                (operator.source_fact_ids, f"{component_path}/operators/{operator_index}")
+                for operator_index, operator in enumerate(component.operators)
+            )
+        else:
+            nodes = (
+                *(
+                    (
+                        parameter.source_fact_ids,
+                        f"{component_path}/model/parameters/{parameter_index}",
+                    )
+                    for parameter_index, parameter in enumerate(
+                        component.model.parameters
+                    )
+                ),
+                *(
+                    (
+                        constraint.source_fact_ids,
+                        f"{component_path}/model/constraints/{constraint_index}",
+                    )
+                    for constraint_index, constraint in enumerate(
+                        component.model.constraints
+                    )
+                ),
+            )
+        for source_fact_ids, model_path in nodes:
+            for fact_id in source_fact_ids:
+                paths_by_fact.setdefault(fact_id, []).append(model_path)
+    return [
+        FactBindingSpec(fact_id=fact_id, model_paths=model_paths)
+        for fact_id, model_paths in paths_by_fact.items()
+    ]
+
+
 class SolvableModelIR(IRModel):
     execution_status: Literal["solvable"]
     subproblem_id: str = Field(min_length=1, max_length=100)
     objective: str = Field(min_length=1, max_length=500)
-    variables: list[VariableSpec] = Field(min_length=1, max_length=100)
+    execution_components: list[ExecutionComponent] = Field(min_length=1, max_length=2)
     data: list[DataReference] = Field(min_length=1, max_length=30)
-    equations: list[EquationSpec] = Field(min_length=1, max_length=50)
+    equations: list[EquationSpec] = Field(default_factory=list, max_length=50)
     constraints: list[ConstraintSpec] = Field(default_factory=list, max_length=50)
-    operators: list[OperatorInvocation] = Field(min_length=1, max_length=100)
+    assumptions: list[ModelingAssumptionSpec] = Field(max_length=30)
+    fact_bindings: list[FactBindingSpec] = Field(max_length=100)
     candidate_models: list[CandidateModel] = Field(min_length=2, max_length=12)
     validation: ValidationPlan
     final_answers: list[FinalAnswerSpec] = Field(min_length=1, max_length=30)
@@ -140,6 +431,33 @@ class SolvableModelIR(IRModel):
         missing = {"baseline", "recommended"} - roles
         if missing:
             raise ValueError(f"candidate_models missing roles: {sorted(missing)}")
+        component_ids = [component.component_id for component in self.execution_components]
+        if len(component_ids) != len(set(component_ids)):
+            raise ValueError("execution component ids must be unique")
+        component_kinds = [component.kind for component in self.execution_components]
+        if len(component_kinds) != len(set(component_kinds)):
+            raise ValueError("execution component kinds must be unique")
+        node_ids = [
+            node_id
+            for component in self.execution_components
+            for node_id in (
+                [operator.node_id for operator in component.operators]
+                if isinstance(component, OperatorGraphExecutionComponent)
+                else [component.solver_node_id]
+            )
+        ]
+        if len(node_ids) != len(set(node_ids)):
+            raise ValueError("execution node ids must be unique across components")
+        unknown_nodes = sorted({
+            node_id
+            for candidate in self.candidate_models
+            for node_id in candidate.operator_node_ids
+            if node_id not in node_ids
+        })
+        if unknown_nodes:
+            raise ValueError(
+                f"candidate_models reference unknown execution nodes: {unknown_nodes}"
+            )
         return self
 
 
@@ -169,27 +487,598 @@ class ModelIR(IRModel):
         identifiers = [item.subproblem_id for item in self.subproblems]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("subproblem ids must be unique")
+        assumption_ids = [
+            assumption.id
+            for item in self.subproblems
+            if isinstance(item, SolvableModelIR)
+            for assumption in item.assumptions
+        ]
+        if len(assumption_ids) != len(set(assumption_ids)):
+            raise ValueError("modeling assumption ids must be globally unique")
         return self
+
+
+class SolvableModelIRDraft(IRModel):
+    """Compact LLM contract promoted into canonical executable ModelIR."""
+
+    execution_status: Literal["solvable"]
+    execution_components: list[
+        Literal["indexed_linear_model", "operator_graph"]
+    ] = Field(min_length=1, max_length=2)
+    subproblem_id: str = Field(min_length=1, max_length=100)
+    objective: str = Field(min_length=1, max_length=500)
+    variables: list[VariableSpec] = Field(default_factory=list, max_length=100)
+    data: list[DataReference] = Field(min_length=1, max_length=30)
+    operators: list[OperatorInvocation] = Field(default_factory=list, max_length=100)
+    assumptions: list[ModelingAssumptionSpec] = Field(max_length=30)
+    candidate_models: list[CandidateModelDraft] = Field(min_length=2, max_length=12)
+    validation: ValidationPlan
+    final_answers: list[FinalAnswerSpec] = Field(min_length=1, max_length=30)
+
+    @model_validator(mode="after")
+    def require_baseline_and_recommended_models(self) -> SolvableModelIRDraft:
+        roles = {candidate.role for candidate in self.candidate_models}
+        missing = {"baseline", "recommended"} - roles
+        if missing:
+            raise ValueError(f"candidate_models missing roles: {sorted(missing)}")
+        assumption_ids = [assumption.id for assumption in self.assumptions]
+        if len(assumption_ids) != len(set(assumption_ids)):
+            raise ValueError("modeling assumption ids must be unique")
+        if len(self.execution_components) != len(set(self.execution_components)):
+            raise ValueError("execution_components must be unique")
+        has_operator_graph = "operator_graph" in self.execution_components
+        has_indexed_model = "indexed_linear_model" in self.execution_components
+        if has_operator_graph and not self.operators:
+            raise ValueError("operator_graph architecture requires operators")
+        if not has_operator_graph and self.operators:
+            raise ValueError(
+                "operators require the operator_graph execution component"
+            )
+        if has_operator_graph and not has_indexed_model and any(
+            not candidate.operator_node_ids for candidate in self.candidate_models
+        ):
+            raise ValueError(
+                "operator_graph candidates require operator node references"
+            )
+        if not has_operator_graph and any(
+            candidate.operator_node_ids for candidate in self.candidate_models
+        ):
+            raise ValueError(
+                "candidate operator_node_ids require operator_graph"
+            )
+        return self
+
+
+SubproblemIRDraft = Annotated[
+    SolvableModelIRDraft | BlockedModelIR,
+    Field(discriminator="execution_status"),
+]
+
+
+class ModelIRGenerationDraft(IRModel):
+    schema_version: Literal["1.0"] = "1.0"
+    model_id: str = Field(min_length=1, max_length=120)
+    subproblems: list[SubproblemIRDraft] = Field(min_length=1, max_length=1)
+
+    def promote(
+        self,
+        indexed_linear_model: IndexedLinearModelSpec | None = None,
+    ) -> ModelIR:
+        source = (
+            self.normalize_indexed_execution()
+            if indexed_linear_model is not None
+            else self
+        )
+        promoted: list[SubproblemIR] = []
+        for subproblem in source.subproblems:
+            if isinstance(subproblem, BlockedModelIR):
+                promoted.append(subproblem)
+                continue
+            component_kinds = set(subproblem.execution_components)
+            if (
+                "indexed_linear_model" in component_kinds
+                and indexed_linear_model is None
+            ):
+                raise ValueError(
+                    "indexed_linear_model execution component requires an indexed model"
+                )
+            execution_components: list[ExecutionComponent] = []
+            if "operator_graph" in component_kinds:
+                execution_components.append(OperatorGraphExecutionComponent(
+                    kind="operator_graph",
+                    component_id="operator_graph",
+                    variables=subproblem.variables,
+                    operators=subproblem.operators,
+                ))
+            if indexed_linear_model is not None:
+                execution_components.append(IndexedLinearExecutionComponent(
+                    kind="indexed_linear",
+                    component_id="indexed_linear_model",
+                    model=indexed_linear_model,
+                    solver_node_id="solve_indexed_model",
+                    outputs=["solution"],
+                ))
+            payload = subproblem.model_dump(
+                mode="python",
+                exclude={
+                    "execution_components",
+                    "variables",
+                    "operators",
+                },
+            )
+            promoted.append(SolvableModelIR(
+                **payload,
+                execution_components=execution_components,
+                fact_bindings=_build_fact_bindings(execution_components),
+                equations=[],
+                constraints=[],
+            ))
+        return ModelIR(model_id=source.model_id, subproblems=promoted)
+
+    def normalize_indexed_execution(self) -> ModelIRGenerationDraft:
+        subproblem = self.subproblems[0]
+        if isinstance(subproblem, BlockedModelIR):
+            return self
+        if "indexed_linear_model" not in subproblem.execution_components:
+            raise ValueError(
+                "indexed execution requires the indexed_linear_model component"
+            )
+        node_id = "solve_indexed_model"
+        normalized = subproblem.model_copy(update={
+            "candidate_models": [
+                item.model_copy(update={
+                    "operator_node_ids": [*item.operator_node_ids, node_id],
+                })
+                for item in subproblem.candidate_models
+            ],
+            "final_answers": [
+                item.model_copy(update={"value_ref": "solution"})
+                for item in subproblem.final_answers
+            ],
+        })
+        return self.model_copy(update={"subproblems": [normalized]})
+
+
+class StaticIndexedParameterDraft(IRModel):
+    source_kind: Literal["static"] = "static"
+    id: str = Field(min_length=1, max_length=100)
+    index_sets: list[str] = Field(default_factory=list, max_length=4)
+    source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
+    dense_values: list[float] = Field(min_length=1, max_length=10000)
+    dense_source_ref: str = Field(min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def require_unique_source_fact_ids(self) -> StaticIndexedParameterDraft:
+        _require_unique_source_fact_ids(self.source_fact_ids)
+        return self
+
+    def promote(self) -> IndexedParameterSpec:
+        return IndexedParameterSpec(
+            id=self.id,
+            index_sets=self.index_sets,
+            source_fact_ids=self.source_fact_ids,
+            dense_values=self.dense_values,
+            dense_source_ref=self.dense_source_ref,
+        )
+
+
+class RuntimeIndexedParameterDraft(IRModel):
+    source_kind: Literal["runtime_artifact"] = "runtime_artifact"
+    id: str = Field(min_length=1, max_length=100)
+    index_sets: list[str] = Field(default_factory=list, max_length=4)
+    source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
+    runtime_source: RuntimeIndexedParameterSource
+
+    @model_validator(mode="after")
+    def require_unique_source_fact_ids(self) -> RuntimeIndexedParameterDraft:
+        _require_unique_source_fact_ids(self.source_fact_ids)
+        return self
+
+    def promote(self) -> IndexedParameterSpec:
+        return IndexedParameterSpec(
+            id=self.id,
+            index_sets=self.index_sets,
+            source_fact_ids=self.source_fact_ids,
+            runtime_source=self.runtime_source,
+        )
+
+
+IndexedParameterDraft = Annotated[
+    StaticIndexedParameterDraft | RuntimeIndexedParameterDraft,
+    Field(discriminator="source_kind"),
+]
+
+
+class BinderIndexSelectorDraft(IRModel):
+    binder: str = Field(min_length=1, max_length=100)
+    value: Literal[None] = None
+    offset: int = Field(default=0, ge=-10000, le=10000)
+
+    def promote(self) -> IndexSelector:
+        return IndexSelector(
+            binder=self.binder,
+            value=None,
+            offset=self.offset,
+        )
+
+
+class LiteralIndexSelectorDraft(IRModel):
+    binder: Literal[None] = None
+    value: IndexValue
+    offset: int = Field(default=0, ge=-10000, le=10000)
+
+    def promote(self) -> IndexSelector:
+        return IndexSelector(
+            binder=None,
+            value=self.value,
+            offset=self.offset,
+        )
+
+
+IndexSelectorDraft = BinderIndexSelectorDraft | LiteralIndexSelectorDraft
+
+
+class ConstantLinearValueDraft(IRModel):
+    kind: Literal["constant"] = "constant"
+    value: float
+
+    def promote(self) -> ConstantLinearValue:
+        return ConstantLinearValue(value=self.value)
+
+
+class ParameterLinearValueDraft(IRModel):
+    kind: Literal["parameter"] = "parameter"
+    parameter_id: str = Field(min_length=1, max_length=100)
+    selectors: list[IndexSelectorDraft] = Field(default_factory=list, max_length=4)
+    multiplier: float = 1.0
+
+    def promote(self) -> ParameterLinearValue:
+        return ParameterLinearValue(
+            parameter_id=self.parameter_id,
+            selectors=[item.promote() for item in self.selectors],
+            multiplier=self.multiplier,
+        )
+
+
+LinearValueDraft = Annotated[
+    ConstantLinearValueDraft | ParameterLinearValueDraft,
+    Field(discriminator="kind"),
+]
+
+
+class IndexedVariableReferenceDraft(IRModel):
+    variable_id: str = Field(min_length=1, max_length=100)
+    selectors: list[IndexSelectorDraft] = Field(default_factory=list, max_length=4)
+
+    def promote(self) -> IndexedVariableReference:
+        return IndexedVariableReference(
+            variable_id=self.variable_id,
+            selectors=[item.promote() for item in self.selectors],
+        )
+
+
+class IndexedLinearTermDraft(IRModel):
+    for_each: dict[str, str] | None = Field(default=None, max_length=4)
+    coefficient: LinearValueDraft
+    variable: IndexedVariableReferenceDraft
+
+    def promote(self) -> IndexedLinearTerm:
+        return IndexedLinearTerm(
+            for_each=self.for_each or {},
+            coefficient=self.coefficient.promote(),
+            variable=self.variable.promote(),
+        )
+
+
+class IndexedLinearObjectiveDraft(IRModel):
+    sense: Literal["minimize", "maximize"]
+    terms: list[IndexedLinearTermDraft] = Field(min_length=1, max_length=50)
+
+    def promote(self) -> IndexedLinearObjective:
+        return IndexedLinearObjective(
+            sense=self.sense,
+            terms=[item.promote() for item in self.terms],
+        )
+
+
+class IndexedLinearConstraintDraft(IRModel):
+    id: str = Field(min_length=1, max_length=100)
+    source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
+    for_each: dict[str, str] | None = Field(default=None, max_length=4)
+    terms: list[IndexedLinearTermDraft] = Field(min_length=1, max_length=1000)
+    relation: Literal["equal", "less_equal", "greater_equal"]
+    rhs: LinearValueDraft
+
+    @model_validator(mode="after")
+    def require_unique_source_fact_ids(self) -> IndexedLinearConstraintDraft:
+        _require_unique_source_fact_ids(self.source_fact_ids)
+        return self
+
+    def promote(self) -> IndexedLinearConstraint:
+        return IndexedLinearConstraint(
+            id=self.id,
+            source_fact_ids=self.source_fact_ids,
+            for_each=self.for_each or {},
+            terms=[item.promote() for item in self.terms],
+            relation=self.relation,
+            rhs=self.rhs.promote(),
+        )
+
+
+class IndexedLinearCoreDraft(IRModel):
+    index_sets: list[IndexSetSpec] = Field(min_length=1, max_length=20)
+    parameters: list[IndexedParameterDraft] = Field(default_factory=list, max_length=100)
+    variables: list[IndexedVariableSpec] = Field(min_length=1, max_length=100)
+    objective: IndexedLinearObjectiveDraft
+
+    def promote_core(self) -> IndexedLinearCoreSpec:
+        return IndexedLinearCoreSpec(
+            index_sets=self.index_sets,
+            parameters=[item.promote() for item in self.parameters],
+            variables=self.variables,
+            objective=self.objective.promote(),
+        )
+
+    def promote(
+        self,
+        constraints: list[IndexedLinearConstraint],
+        additional_index_sets: list[IndexSetSpec] | None = None,
+    ) -> IndexedLinearModelSpec:
+        core = self.promote_core()
+        return IndexedLinearModelSpec(
+            index_sets=[*core.index_sets, *(additional_index_sets or [])],
+            parameters=core.parameters,
+            variables=core.variables,
+            objective=core.objective,
+            constraints=constraints,
+        )
+
+
+class ConstraintIndexSetSymbol(IRModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    id: str = Field(min_length=1, max_length=100)
+    values: tuple[IndexValue, ...] = Field(min_length=1, max_length=1000)
+
+
+class ConstraintParameterSymbol(IRModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    id: str = Field(min_length=1, max_length=100)
+    index_sets: tuple[str, ...] = Field(default_factory=tuple, max_length=4)
+    source_ref: str = Field(min_length=1, max_length=300)
+
+
+class ConstraintVariableSymbol(IRModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    id: str = Field(min_length=1, max_length=100)
+    index_sets: tuple[str, ...] = Field(default_factory=tuple, max_length=4)
+    domain: Literal["continuous", "integer", "binary"]
+
+
+def _runtime_parameter_source_ref(
+    source: RuntimeIndexedParameterSource,
+) -> str:
+    pointer = "/".join(
+        item.replace("~", "~0").replace("/", "~1")
+        for item in source.field_path
+    )
+    return f"artifact:{source.artifact_ref}#/{pointer}"
+
+
+class ConstraintGenerationContext(IRModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    index_sets: tuple[ConstraintIndexSetSymbol, ...] = Field(min_length=1, max_length=20)
+    parameters: tuple[ConstraintParameterSymbol, ...] = Field(
+        default_factory=tuple,
+        max_length=100,
+    )
+    variables: tuple[ConstraintVariableSymbol, ...] = Field(min_length=1, max_length=100)
+
+    @classmethod
+    def from_core(cls, core: IndexedLinearCoreDraft) -> ConstraintGenerationContext:
+        return cls(
+            index_sets=tuple(
+                ConstraintIndexSetSymbol(id=item.id, values=tuple(item.values))
+                for item in core.index_sets
+            ),
+            parameters=tuple(
+                ConstraintParameterSymbol(
+                    id=item.id,
+                    index_sets=tuple(item.index_sets),
+                    source_ref=(
+                        item.dense_source_ref
+                        if isinstance(item, StaticIndexedParameterDraft)
+                        else _runtime_parameter_source_ref(item.runtime_source)
+                    ),
+                )
+                for item in core.parameters
+            ),
+            variables=tuple(
+                ConstraintVariableSymbol(
+                    id=item.id,
+                    index_sets=tuple(item.index_sets),
+                    domain=item.domain,
+                )
+                for item in core.variables
+            ),
+        )
+
+
+class IndexedLinearConstraintsDraft(IRModel):
+    additional_index_sets: list[IndexSetSpec] = Field(default_factory=list, max_length=20)
+    constraints: list[IndexedLinearConstraintDraft] = Field(min_length=1, max_length=50)
+
+    def promote_constraints(self) -> list[IndexedLinearConstraint]:
+        return [item.promote() for item in self.constraints]
+
+
+class ModelReviewSubmission(IRModel):
+    schema_version: Literal["1.0"] = "1.0"
+    model_ir_ref: str = Field(min_length=1, max_length=300)
+    revision_request_ref: str | None = Field(default=None, min_length=1, max_length=300)
 
 
 class ApprovedModelIR(IRModel):
     schema_version: Literal["1.0"] = "1.0"
-    review_status: Literal["approved", "revision_required", "blocked"]
+    review_status: Literal["approved", "partial", "revision_required", "blocked"]
     model_id: str = Field(min_length=1, max_length=120)
     model_ir_ref: str = Field(default="model_ir.json", min_length=1, max_length=300)
     review_ref: str = Field(default="model_review.json", min_length=1, max_length=300)
+    revision_request_ref: str | None = Field(default=None, min_length=1, max_length=300)
+    executable_subproblem_ids: list[str] = Field(max_length=50)
     approved_model_ir: ModelIR
+
+    @model_validator(mode="after")
+    def require_consistent_execution_projection(self) -> ApprovedModelIR:
+        identifiers = [
+            subproblem.subproblem_id
+            for subproblem in self.approved_model_ir.subproblems
+        ]
+        executable = self.executable_subproblem_ids
+        if len(executable) != len(set(executable)):
+            raise ValueError("executable_subproblem_ids must be unique")
+        unknown = sorted(set(executable) - set(identifiers))
+        if unknown:
+            raise ValueError(f"unknown executable subproblem ids: {unknown!r}")
+        solvable = [
+            subproblem.subproblem_id
+            for subproblem in self.approved_model_ir.subproblems
+            if isinstance(subproblem, SolvableModelIR)
+        ]
+        if executable != solvable:
+            raise ValueError(
+                "executable subproblem ids must exactly match solvable subproblems "
+                "in approved_model_ir"
+            )
+        blocked_count = len(identifiers) - len(solvable)
+        expected_status = (
+            "approved"
+            if solvable and not blocked_count
+            else "partial"
+            if solvable
+            else "blocked"
+        )
+        if self.review_status == "revision_required":
+            if solvable:
+                raise ValueError(
+                    "revision_required approved_model_ir cannot expose solvable subproblems"
+                )
+        elif self.review_status != expected_status:
+            raise ValueError(
+                f"review_status must be {expected_status!r} for the execution projection"
+            )
+        return self
+
+
+class AssumptionReviewSpec(IRModel):
+    assumption_id: str = Field(min_length=1, max_length=100)
+    status: Literal["accepted", "revision_required", "rejected"]
+    rationale: str = Field(min_length=1, max_length=600)
+    alternative_scenario_coverage: str = Field(min_length=1, max_length=600)
+    sensitivity_check_coverage: str = Field(min_length=1, max_length=600)
+
+
+class RevisionRequirementSpec(IRModel):
+    requirement_id: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=600)
+    acceptance_criteria: str = Field(min_length=1, max_length=600)
+
+
+class RevisionCheckSpec(IRModel):
+    requirement_id: str = Field(min_length=1, max_length=100)
+    status: Literal["accepted", "revision_required", "rejected"]
+    model_paths: list[str] = Field(min_length=1, max_length=30)
+    rationale: str = Field(min_length=1, max_length=600)
+
+    @model_validator(mode="after")
+    def require_json_pointer_paths(self) -> RevisionCheckSpec:
+        invalid = [path for path in self.model_paths if not path.startswith("/")]
+        if invalid:
+            raise ValueError(f"model_paths must be JSON Pointers: {invalid!r}")
+        return self
+
+
+class SubproblemReviewSpec(IRModel):
+    subproblem_id: str = Field(min_length=1, max_length=100)
+    status: Literal["approved", "revision_required", "blocked"]
+    blocking_issues: list[str] = Field(default_factory=list, max_length=50)
+    required_revisions: list[RevisionRequirementSpec] = Field(
+        default_factory=list,
+        max_length=50,
+    )
+    revision_checks: list[RevisionCheckSpec] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def require_consistent_decision(self) -> SubproblemReviewSpec:
+        requirement_ids = [item.requirement_id for item in self.required_revisions]
+        check_ids = [item.requirement_id for item in self.revision_checks]
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError("revision requirement ids must be unique within a subproblem")
+        if len(check_ids) != len(set(check_ids)):
+            raise ValueError("revision check ids must be unique within a subproblem")
+        if self.status == "approved":
+            if self.blocking_issues or self.required_revisions:
+                raise ValueError(
+                    "approved subproblem review cannot contain blocking issues or revisions"
+                )
+        elif self.status == "revision_required":
+            if not self.required_revisions:
+                raise ValueError(
+                    "revision_required subproblem review must provide required_revisions"
+                )
+        elif not self.blocking_issues:
+            raise ValueError("blocked subproblem review must provide blocking_issues")
+        return self
 
 
 class ModelIRReview(IRModel):
     schema_version: Literal["1.0"] = "1.0"
     model_id: str = Field(min_length=1, max_length=120)
-    status: Literal["approved", "revision_required", "blocked"]
+    status: Literal["approved", "partial", "revision_required", "blocked"] | None = None
+    executable_subproblem_ids: list[str] = Field(default_factory=list, max_length=50)
     problem_spec_ref: str = Field(default="problem_spec.json", min_length=1, max_length=300)
     model_ir_ref: str = Field(default="model_ir.json", min_length=1, max_length=300)
     identifiability: str = "unknown"
     dimensional_consistency: str = "unknown"
     data_sufficiency: str = "unknown"
     computational_feasibility: str = "unknown"
-    blocking_issues: list[str] = Field(default_factory=list)
-    required_revisions: list[str] = Field(default_factory=list)
+    assumption_checks: list[AssumptionReviewSpec] = Field(max_length=100)
+    subproblem_reviews: list[SubproblemReviewSpec] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def require_derived_review_summary(self) -> ModelIRReview:
+        identifiers = [item.subproblem_id for item in self.subproblem_reviews]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("subproblem review ids must be unique")
+        statuses = [item.status for item in self.subproblem_reviews]
+        if "revision_required" in statuses:
+            derived_status = "revision_required"
+        else:
+            approved_count = statuses.count("approved")
+            derived_status = (
+                "approved"
+                if approved_count == len(statuses)
+                else "partial"
+                if approved_count
+                else "blocked"
+            )
+        derived_executable = [
+            item.subproblem_id
+            for item in self.subproblem_reviews
+            if item.status == "approved"
+        ]
+        if self.status is not None and self.status != derived_status:
+            raise ValueError("review status does not match per-subproblem decisions")
+        if (
+            self.executable_subproblem_ids
+            and self.executable_subproblem_ids != derived_executable
+        ):
+            raise ValueError(
+                "executable_subproblem_ids do not match approved subproblem decisions"
+            )
+        self.status = derived_status
+        self.executable_subproblem_ids = derived_executable
+        return self

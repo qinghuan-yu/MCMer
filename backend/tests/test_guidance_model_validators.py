@@ -1,6 +1,28 @@
+from copy import deepcopy
+
 import numpy as np
 
 from app.guidance.model_validators import build_default_model_validator_registry
+
+
+def _future_forecast_evidence() -> dict:
+    from app.guidance.operator_catalog import build_default_operator_registry
+
+    time = np.arange(32, dtype=float)
+    target = 10.0 + 0.5 * time + 3.0 * np.sin(2.0 * np.pi * time / 4.0)
+    runtime = build_default_operator_registry().runtime("forecast.future_basis_rolling_origin")
+    return runtime.executor(
+        inputs={"time": time.tolist(), "target": target.tolist()},
+        parameters={
+            "future_time": [32.0, 33.0, 34.0],
+            "candidate_periods": [4.0, 8.0],
+            "season_length": 4,
+            "initial_train_size": 16,
+            "interval_level": 0.9,
+        },
+        random_seed=None,
+        work_dir=None,
+    )["forecast"]
 
 
 def test_regression_family_runs_independent_adequacy_validators() -> None:
@@ -86,6 +108,74 @@ def test_optimization_family_requires_consistent_multistart_evidence() -> None:
     assert assessment.checks["feasibility_certificate"].status == "passed"
     assert assessment.checks["bound_certificate"].status == "passed"
     assert "residual_recompute" not in assessment.checks
+
+
+def _milp_evidence() -> dict:
+    return {
+        "x": [3.0, 0.0],
+        "objective_value": 6.0,
+        "compiled_model": {
+            "objective_sense": "minimize",
+            "variable_labels": ["x[a]", "x[b]"],
+            "objective": [2.0, 3.0],
+            "integrality": [1, 1],
+            "lower_bounds": [0.0, 0.0],
+            "upper_bounds": [5.0, 5.0],
+            "constraint_labels": ["conservation"],
+            "matrix": [[1.0, 1.0]],
+            "constraint_lower": [3.0],
+            "constraint_upper": [3.0],
+            "provenance": [],
+        },
+        "baseline": {
+            "x": [0.0, 3.0],
+            "objective_value": 9.0,
+            "feasible": True,
+        },
+        "solver": {"success": True, "mip_gap": 0.0},
+        "feasibility_certificate": {
+            "max_constraint_violation": 0.0,
+            "max_integrality_violation": 0.0,
+        },
+        "bound_certificate": {"dual_bound": 6.0, "primal_bound": 6.0},
+    }
+
+
+def test_milp_family_independently_recomputes_objective_feasibility_and_bounds() -> None:
+    registry = build_default_model_validator_registry()
+    evidence = _milp_evidence()
+
+    assessment = registry.assess(
+        family="mixed_integer_linear_optimization",
+        candidate_roles={"baseline", "recommended"},
+        evidence=[evidence],
+    )
+
+    assert assessment.status == "passed", assessment.reasons
+    assert set(assessment.checks) == {
+        "objective_recompute",
+        "feasibility_and_conservation",
+        "integrality_recompute",
+        "bound_and_gap",
+        "baseline_comparison",
+    }
+
+    evidence["objective_value"] = 7.0
+    forged_objective = registry.assess(
+        family="mixed_integer_linear_optimization",
+        candidate_roles={"baseline", "recommended"},
+        evidence=[evidence],
+    )
+    assert forged_objective.checks["objective_recompute"].status == "failed"
+
+    evidence = _milp_evidence()
+    evidence["x"][0] = 2.5
+    forged_integer = registry.assess(
+        family="mixed_integer_linear_optimization",
+        candidate_roles={"baseline", "recommended"},
+        evidence=[evidence],
+    )
+    assert forged_integer.checks["integrality_recompute"].status == "failed"
 
 
 def test_evaluation_family_independently_recomputes_ranking_and_stability() -> None:
@@ -354,3 +444,93 @@ def test_forecast_interval_rejects_mismatched_bound_lengths() -> None:
     )
 
     assert assessment.checks["prediction_interval"].status == "failed"
+
+
+def test_future_forecast_rejects_sensitivity_above_declared_threshold() -> None:
+    from app.guidance.operator_catalog import build_default_operator_registry
+
+    time = np.arange(32, dtype=float)
+    target = 10.0 + 0.5 * time + 3.0 * np.sin(2.0 * np.pi * time / 4.0)
+    target[-1] += 10.0
+    runtime = build_default_operator_registry().runtime("forecast.future_basis_rolling_origin")
+    evidence = runtime.executor(
+        inputs={"time": time.tolist(), "target": target.tolist()},
+        parameters={
+            "future_time": [32.0, 33.0, 34.0],
+            "candidate_periods": [4.0, 8.0],
+            "season_length": 4,
+            "initial_train_size": 16,
+            "interval_level": 0.9,
+            "sensitivity_threshold": 0.01,
+        },
+        random_seed=None,
+        work_dir=None,
+    )["forecast"]
+    assert evidence["sensitivity"]["passed"] is False
+    assert evidence["sensitivity"]["max_relative_change"] > 0.01
+
+    assessment = build_default_model_validator_registry().assess(
+        family="future_forecast",
+        candidate_roles={"baseline", "recommended"},
+        evidence=[evidence],
+    )
+
+    assert assessment.checks["sensitivity_recompute"].status == "failed"
+    assert assessment.status == "failed"
+
+
+def test_future_forecast_family_independently_recomputes_all_temporal_evidence() -> None:
+    registry = build_default_model_validator_registry()
+    evidence = _future_forecast_evidence()
+
+    assessment = registry.assess(
+        family="future_forecast",
+        candidate_roles={"baseline", "recommended"},
+        evidence=[evidence],
+    )
+
+    assert assessment.status == "passed", assessment.reasons
+    assert set(assessment.checks) == {
+        "rolling_origin_recompute",
+        "future_index_check",
+        "error_and_baseline_recompute",
+        "interval_recompute",
+        "sensitivity_recompute",
+    }
+
+    for check_name, mutate in [
+        (
+            "rolling_origin_recompute",
+            lambda item: item["rolling_origin"]["folds"][0].update({
+                "max_train_time": item["rolling_origin"]["folds"][0]["validation_time"]
+            }),
+        ),
+        (
+            "future_index_check",
+            lambda item: item["future_time"].__setitem__(0, item["history_time"][-1]),
+        ),
+        (
+            "error_and_baseline_recompute",
+            lambda item: item["metrics"].update({"rmse": item["metrics"]["rmse"] + 1.0}),
+        ),
+        (
+            "interval_recompute",
+            lambda item: item["prediction_interval"]["lower"].__setitem__(
+                0, item["future_predictions"][0] + 1.0
+            ),
+        ),
+        (
+            "sensitivity_recompute",
+            lambda item: item["sensitivity"].update({
+                "max_relative_change": item["sensitivity"]["max_relative_change"] + 0.5
+            }),
+        ),
+    ]:
+        forged = deepcopy(evidence)
+        mutate(forged)
+        rejected = registry.assess(
+            family="future_forecast",
+            candidate_roles={"baseline", "recommended"},
+            evidence=[forged],
+        )
+        assert rejected.checks[check_name].status == "failed"

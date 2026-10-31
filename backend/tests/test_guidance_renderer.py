@@ -1,6 +1,48 @@
 from app.guidance.renderer import render_verified_guidance
 
 
+def test_guidance_exposes_structured_fact_source_and_model_paths() -> None:
+    markdown = render_verified_guidance(
+        approved_model={
+            "review_status": "approved",
+            "approved_model_ir": {
+                "model_id": "fact-trace-model",
+                "subproblems": [{
+                    "execution_status": "solvable",
+                    "subproblem_id": "problem1",
+                    "objective": "Minimize total cost.",
+                    "fact_bindings": [{
+                        "fact_id": "fact.component_ratio",
+                        "model_paths": [
+                            "/execution_components/0/model/constraints/0"
+                        ],
+                    }],
+                }],
+            },
+        },
+        problem_spec={
+            "locked_facts": [{
+                "fact_id": "fact.component_ratio",
+                "statement": "Each unit requires four components.",
+                "source_refs": ["inputs/problem.docx#paragraph-2"],
+                "subproblem_ids": ["problem1"],
+                "semantic_key": "assembly.component_ratio",
+                "value": 4,
+                "unit": "components/unit",
+            }],
+            "uncertainties": [],
+        },
+        verification_report={"status": "verified"},
+        parameter_registry={"parameters": []},
+        result_registry={"verified_results": [], "blocked_results": []},
+    )
+
+    assert "## 题面事实追踪" in markdown
+    assert "fact.component_ratio" in markdown
+    assert "inputs/problem.docx#paragraph-2" in markdown
+    assert "/execution_components/0/model/constraints/0" in markdown
+
+
 def test_guidance_summary_renders_three_verification_layers_not_single_status() -> None:
     markdown = render_verified_guidance(
         approved_model={

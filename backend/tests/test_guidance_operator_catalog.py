@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -43,14 +44,203 @@ def test_catalog_exposes_only_problem_independent_operator_ids() -> None:
         "diagnostics.leave_one_out",
         "dynamics.affine_ode_rk4",
         "forecast.robust_regularized_time_split",
+        "forecast.future_basis_rolling_origin",
         "graph.shortest_path_max_flow",
         "model_selection.continuous_hinge_bic",
         "optimization.constrained_quadratic_multistart",
+        "optimization.milp",
         "plot.xy_evidence",
         "regression.basis_least_squares",
         "regression.zero_intercept_grouped",
     }
     assert not any("traffic" in item or "anchor" in item or "wuyi" in item for item in DEFAULT_OPERATOR_IDS)
+
+
+def _future_forecast_parameters() -> dict:
+    return {
+        "future_time": [16.0, 17.0, 18.0],
+        "candidate_periods": [4.0, 8.0],
+        "season_length": 4,
+        "initial_train_size": 8,
+        "interval_level": 0.9,
+    }
+
+
+@pytest.mark.parametrize(
+    ("time", "target", "parameter_change", "message"),
+    [
+        (list(range(16)), list(range(16)), {"future_time": None}, "future_time"),
+        ([0, 1, 3, 2, 4, 5, 6, 7, 8], list(range(9)), {}, "strictly increasing"),
+        (list(range(6)), list(range(6)), {"initial_train_size": 4, "season_length": 2}, "samples"),
+    ],
+)
+def test_future_forecast_rejects_missing_indices_unordered_time_and_insufficient_samples(
+    tmp_path: Path,
+    time: list,
+    target: list,
+    parameter_change: dict,
+    message: str,
+) -> None:
+    registered = _runtime("forecast.future_basis_rolling_origin")
+    parameters = _future_forecast_parameters()
+    for key, value in parameter_change.items():
+        if value is None:
+            parameters.pop(key)
+        else:
+            parameters[key] = value
+
+    with pytest.raises(ValueError, match=message):
+        registered.executor(
+            inputs={"time": time, "target": target},
+            parameters=parameters,
+            random_seed=None,
+            work_dir=tmp_path,
+        )
+
+
+def test_future_forecast_selects_periodic_trend_and_emits_future_intervals(
+    tmp_path: Path,
+) -> None:
+    time = np.arange(32, dtype=float)
+    target = 10.0 + 0.5 * time + 3.0 * np.sin(2.0 * np.pi * time / 4.0)
+    parameters = {
+        "future_time": [32.0, 33.0, 34.0],
+        "candidate_periods": [4.0, 8.0],
+        "season_length": 4,
+        "initial_train_size": 16,
+        "interval_level": 0.9,
+    }
+
+    forecast = _execute(
+        "forecast.future_basis_rolling_origin",
+        inputs={"time": time.tolist(), "target": target.tolist()},
+        parameters=parameters,
+        work_dir=tmp_path,
+    )["forecast"]
+
+    expected = 10.0 + 0.5 * np.array(parameters["future_time"]) + 3.0 * np.sin(
+        2.0 * np.pi * np.array(parameters["future_time"]) / 4.0
+    )
+    assert forecast["future_time"] == parameters["future_time"]
+    assert forecast["future_predictions"] == pytest.approx(expected.tolist(), abs=1e-8)
+    assert forecast["selected_model"]["id"] == "trend_period_4"
+    assert forecast["metrics"]["rmse"] < forecast["baseline_metrics"]["rmse"]
+    assert {item["id"] for item in forecast["candidates"]} == {
+        "linear_trend",
+        "trend_period_4",
+        "trend_period_8",
+    }
+    interval = forecast["prediction_interval"]
+    assert len(interval["lower"]) == len(parameters["future_time"])
+    assert all(low <= value <= high for low, value, high in zip(
+        interval["lower"],
+        forecast["future_predictions"],
+        interval["upper"],
+    ))
+
+
+def test_future_forecast_can_select_seasonal_naive_baseline(tmp_path: Path) -> None:
+    pattern = [1.0, 5.0, 2.0, 8.0]
+    target = pattern * 6
+    time = list(range(len(target)))
+
+    forecast = _execute(
+        "forecast.future_basis_rolling_origin",
+        inputs={"time": time, "target": target},
+        parameters={
+            "future_time": [24.0, 25.0, 26.0, 27.0],
+            "candidate_periods": [4.0],
+            "season_length": 4,
+            "initial_train_size": 12,
+            "interval_level": 0.9,
+        },
+        work_dir=tmp_path,
+    )["forecast"]
+
+    assert forecast["selected_model"]["id"] == "seasonal_naive"
+    assert forecast["future_predictions"] == pattern
+    assert forecast["metrics"]["rmse"] == pytest.approx(0.0)
+
+
+def _compiled_milp() -> dict:
+    return {
+        "objective_sense": "minimize",
+        "variable_labels": ["x"],
+        "objective": [1.0],
+        "integrality": [1],
+        "lower_bounds": [0.0],
+        "upper_bounds": [10.0],
+        "constraint_labels": ["minimum"],
+        "matrix": [[1.0]],
+        "constraint_lower": [2.0],
+        "constraint_upper": [10.0],
+        "provenance": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("objective", [float("nan")], "finite"),
+        ("integrality", [2], "integrality"),
+    ],
+)
+def test_milp_rejects_nonfinite_coefficients_and_invalid_integrality(
+    tmp_path: Path,
+    field: str,
+    value: list,
+    message: str,
+) -> None:
+    registered = _runtime("optimization.milp")
+    compiled = _compiled_milp()
+    compiled[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        registered.executor(
+            inputs={},
+            parameters={"compiled_model": compiled},
+            random_seed=None,
+            work_dir=tmp_path,
+        )
+
+
+def test_milp_rejects_infeasible_model(tmp_path: Path) -> None:
+    registered = _runtime("optimization.milp")
+    compiled = deepcopy(_compiled_milp())
+    compiled["upper_bounds"] = [1.0]
+
+    with pytest.raises(ValueError, match="infeasible"):
+        registered.executor(
+            inputs={},
+            parameters={"compiled_model": compiled},
+            random_seed=None,
+            work_dir=tmp_path,
+        )
+
+
+def test_milp_validator_rejects_undeclared_output_port() -> None:
+    registered = _runtime("optimization.milp")
+
+    assert registered.validator(outputs={"solution": {}, "undeclared": 1}) == [
+        "expected exactly one output named solution"
+    ]
+
+
+def test_milp_emits_compiled_problem_and_independent_feasible_baseline(tmp_path: Path) -> None:
+    compiled = _compiled_milp()
+
+    solution = _execute(
+        "optimization.milp",
+        inputs={},
+        parameters={"compiled_model": compiled},
+        work_dir=tmp_path,
+    )["solution"]
+
+    assert solution["x"] == pytest.approx([2.0])
+    assert solution["objective_value"] == pytest.approx(2.0)
+    assert solution["compiled_model"] == compiled
+    assert solution["baseline"]["feasible"] is True
+    assert solution["baseline"]["objective_value"] >= solution["objective_value"]
 
 
 def test_robust_regularized_forecast_uses_time_split_intervals_and_leakage_check(

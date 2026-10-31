@@ -14,29 +14,42 @@ def _model_ir(*, random_seed=7, identifiability_checks=None):
             "execution_status": "solvable",
             "subproblem_id": "problem1",
             "objective": "Estimate one dimensionless coefficient.",
-            "variables": [
-                {
-                    "id": "x",
-                    "role": "observed",
-                    "symbol": "x",
-                    "unit": "m",
-                    "shape": ["sample"],
-                },
-                {
-                    "id": "y",
-                    "role": "observed",
-                    "symbol": "y",
-                    "unit": "s",
-                    "shape": ["sample"],
-                },
-                {
-                    "id": "theta",
-                    "role": "unknown_parameter",
-                    "symbol": "theta",
-                    "unit": "dimensionless",
-                    "shape": [],
-                },
-            ],
+            "assumptions": [],
+            "fact_bindings": [],
+            "execution_components": [{
+                "kind": "operator_graph",
+                "component_id": "typed_fit_graph",
+                "variables": [
+                    {
+                        "id": "x",
+                        "role": "observed",
+                        "symbol": "x",
+                        "unit": "m",
+                        "shape": ["sample"],
+                    },
+                    {
+                        "id": "y",
+                        "role": "observed",
+                        "symbol": "y",
+                        "unit": "s",
+                        "shape": ["sample"],
+                    },
+                    {
+                        "id": "theta",
+                        "role": "unknown_parameter",
+                        "symbol": "theta",
+                        "unit": "dimensionless",
+                        "shape": [],
+                    },
+                ],
+                "operators": [{
+                    "node_id": "fit",
+                    "operator_id": "statistics.typed_fit",
+                    "inputs": {"x": "observations.x", "y": "observations.y"},
+                    "outputs": ["theta"],
+                    "random_seed": random_seed,
+                }],
+            }],
             "data": [{
                 "id": "observations",
                 "source_ref": "data/observations.csv",
@@ -46,13 +59,6 @@ def _model_ir(*, random_seed=7, identifiability_checks=None):
                 "id": "identity_check",
                 "left": {"kind": "symbol", "symbol": "y"},
                 "right": {"kind": "symbol", "symbol": "y"},
-            }],
-            "operators": [{
-                "node_id": "fit",
-                "operator_id": "statistics.typed_fit",
-                "inputs": {"x": "observations.x", "y": "observations.y"},
-                "outputs": ["theta"],
-                "random_seed": random_seed,
             }],
             "candidate_models": [
                 {
@@ -85,6 +91,14 @@ def _model_ir(*, random_seed=7, identifiability_checks=None):
             }],
         }],
     })
+
+
+def _operator_graph(subproblem):
+    return next(
+        component
+        for component in subproblem.execution_components
+        if component.kind == "operator_graph"
+    )
 
 
 def _registry(
@@ -153,12 +167,40 @@ def test_compiler_orders_direct_artifact_references_after_their_producer() -> No
             "execution_status": "solvable",
             "subproblem_id": "problem1",
             "objective": "Extract a value from a derived design artifact.",
-            "variables": [{
-                "id": "theta",
-                "role": "unknown_parameter",
-                "symbol": "theta",
-                "unit": "unspecified",
-                "shape": [],
+            "assumptions": [],
+            "fact_bindings": [],
+            "execution_components": [{
+                "kind": "operator_graph",
+                "component_id": "derived_design_graph",
+                "variables": [{
+                    "id": "theta",
+                    "role": "unknown_parameter",
+                    "symbol": "theta",
+                    "unit": "unspecified",
+                    "shape": [],
+                }],
+                "operators": [
+                    {
+                        "node_id": "z_source",
+                        "operator_id": "design.periodic_key_moments",
+                        "inputs": {},
+                        "outputs": ["design"],
+                        "parameters": {
+                            "fixed_moments": [0],
+                            "periodic_starts": [],
+                            "period": 1,
+                            "window_end_offset": 0,
+                            "sample_count": 1,
+                        },
+                    },
+                    {
+                        "node_id": "a_extract",
+                        "operator_id": "artifact.extract_scalar",
+                        "inputs": {"artifact": "design"},
+                        "outputs": ["theta"],
+                        "parameters": {"path": "monitoring_count"},
+                    },
+                ],
             }],
             "data": [{
                 "id": "declared_input",
@@ -170,28 +212,6 @@ def test_compiler_orders_direct_artifact_references_after_their_producer() -> No
                 "left": {"kind": "symbol", "symbol": "theta"},
                 "right": {"kind": "symbol", "symbol": "theta"},
             }],
-            "operators": [
-                {
-                    "node_id": "z_source",
-                    "operator_id": "design.periodic_key_moments",
-                    "inputs": {},
-                    "outputs": ["design"],
-                    "parameters": {
-                        "fixed_moments": [0],
-                        "periodic_starts": [],
-                        "period": 1,
-                        "window_end_offset": 0,
-                        "sample_count": 1,
-                    },
-                },
-                {
-                    "node_id": "a_extract",
-                    "operator_id": "artifact.extract_scalar",
-                    "inputs": {"artifact": "design"},
-                    "outputs": ["theta"],
-                    "parameters": {"path": "monitoring_count"},
-                },
-            ],
             "candidate_models": [
                 {
                     "id": "declared_baseline",
@@ -315,8 +335,9 @@ def test_compiler_rejects_operator_dependency_cycle_before_execution() -> None:
 
     model_ir = _model_ir()
     subproblem = model_ir.subproblems[0]
-    subproblem.operators[0].inputs["x"] = "post.value"
-    subproblem.operators.append(OperatorInvocation(
+    graph = _operator_graph(subproblem)
+    graph.operators[0].inputs["x"] = "post.value"
+    graph.operators.append(OperatorInvocation(
         node_id="post",
         operator_id="transform.scalar_to_vector",
         inputs={"value": "fit.theta"},
@@ -365,7 +386,9 @@ def test_compiler_rejects_operator_output_not_declared_by_model_ir() -> None:
     from app.guidance.model_ir_compiler import ModelIRCompiler
 
     model_ir = _model_ir()
-    model_ir.subproblems[0].operators[0].outputs = ["scratch_artifact"]
+    _operator_graph(model_ir.subproblems[0]).operators[0].outputs = [
+        "scratch_artifact"
+    ]
 
     result = ModelIRCompiler(registry=_registry()).compile(model_ir)
 
@@ -404,7 +427,8 @@ def test_compiler_writes_traceable_execution_plan_json(tmp_path) -> None:
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     node = payload["graph"]["nodes"][0]
     assert node["ir_source"] == (
-        "approved_model_ir.json#subproblems[problem1].operators[fit]"
+        "approved_model_ir.json#/subproblems/problem1"
+        "/execution_components/0/operators/0"
     )
     assert node["inputs"] == {"x": "observations.x", "y": "observations.y"}
     assert node["outputs"] == ["theta"]
@@ -516,15 +540,28 @@ def test_graph_executor_records_missing_attachment_without_losing_failure_artifa
         "model_id": "missing_attachment_failure",
         "subproblems": [{
             "execution_status": "solvable",
-            "subproblem_id": "problem1",
-            "objective": "Read a required attachment before computing the result.",
-            "variables": [{
-                "id": "table_value",
-                "role": "derived",
-                "symbol": "D",
-                "unit": "unspecified",
-                "shape": ["row", "column", "table"],
-            }],
+                "subproblem_id": "problem1",
+                "objective": "Read a required attachment before computing the result.",
+                "assumptions": [],
+                "fact_bindings": [],
+                "execution_components": [{
+                    "kind": "operator_graph",
+                    "component_id": "attachment_reader_graph",
+                    "variables": [{
+                        "id": "table_value",
+                        "role": "derived",
+                        "symbol": "D",
+                        "unit": "unspecified",
+                        "shape": ["row", "column", "table"],
+                    }],
+                    "operators": [{
+                        "node_id": "read_attachment",
+                        "operator_id": "data.read_excel_table",
+                        "inputs": {"source": "data/does-not-exist.xlsx"},
+                        "outputs": ["table_value"],
+                        "parameters": {"sheet": 0},
+                    }],
+                }],
             "data": [{
                 "id": "missing_source",
                 "source_ref": "data/does-not-exist.xlsx",
@@ -536,13 +573,6 @@ def test_graph_executor_records_missing_attachment_without_losing_failure_artifa
                 "right": {"kind": "literal", "value": 0.0},
             }],
             "constraints": [],
-            "operators": [{
-                "node_id": "read_attachment",
-                "operator_id": "data.read_excel_table",
-                "inputs": {"source": "data/does-not-exist.xlsx"},
-                "outputs": ["table_value"],
-                "parameters": {"sheet": 0},
-            }],
             "candidate_models": [
                 {
                     "id": "declared_input_baseline",
@@ -613,6 +643,7 @@ def test_calculation_stage_blocks_missing_operator_without_program_generation(tm
         ApprovedModelIR(
             review_status="approved",
             model_id=model_ir.model_id,
+            executable_subproblem_ids=["problem1"],
             approved_model_ir=model_ir,
         ).model_dump_json(indent=2),
         encoding="utf-8",

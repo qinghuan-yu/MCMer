@@ -130,14 +130,19 @@ def render_verified_guidance(
     result_registry: dict[str, Any],
     execution_manifest: dict[str, Any] | None = None,
     calculation_failure: dict[str, Any] | None = None,
+    problem_spec: dict[str, Any] | None = None,
 ) -> str:
     model = approved_model.get("approved_model_ir", {})
     model = model if isinstance(model, dict) else {}
     status = str(verification_report.get("status") or "blocked")
     if status == "blocked" and approved_model.get("review_status") != "approved":
-        return _render_model_ir_blocked_diagnostic(
+        return _append_fact_traceability(
+            _render_model_ir_blocked_diagnostic(
+                model=model,
+                verification_report=verification_report,
+            ),
+            problem_spec=problem_spec,
             model=model,
-            verification_report=verification_report,
         )
     if _is_calculation_failure_without_verified_evidence(
         status=status,
@@ -145,17 +150,25 @@ def render_verified_guidance(
         parameter_registry=parameter_registry,
         result_registry=result_registry,
     ):
-        return _render_calculation_failure_diagnostic(
-            execution_manifest=execution_manifest or {},
-            calculation_failure=calculation_failure or {},
-            verification_report=verification_report,
-            result_registry=result_registry,
+        return _append_fact_traceability(
+            _render_calculation_failure_diagnostic(
+                execution_manifest=execution_manifest or {},
+                calculation_failure=calculation_failure or {},
+                verification_report=verification_report,
+                result_registry=result_registry,
+            ),
+            problem_spec=problem_spec,
+            model=model,
         )
     if status == "blocked":
-        return _render_verification_failure_diagnostic(
-            approved_model=approved_model,
-            verification_report=verification_report,
-            result_registry=result_registry,
+        return _append_fact_traceability(
+            _render_verification_failure_diagnostic(
+                approved_model=approved_model,
+                verification_report=verification_report,
+                result_registry=result_registry,
+            ),
+            problem_spec=problem_spec,
+            model=model,
         )
     problem_understanding = _problem_understanding_lines(model, result_registry)
     lines = [
@@ -382,8 +395,28 @@ def render_verified_guidance(
             continue
         passed = sum(1 for check in checks if isinstance(check, dict) and check.get("status") == "passed")
         lines.append(f"- {label}复核：{passed}/{len(checks)} 项通过。")
-    for assumption in model.get("assumptions", []):
-        lines.append(f"- 假设与局限：{_guidance_text(assumption)}")
+    for subproblem in model.get("subproblems", []):
+        if not isinstance(subproblem, dict):
+            continue
+        subproblem_id = _cell(subproblem.get("subproblem_id"))
+        for assumption in subproblem.get("assumptions", []):
+            if not isinstance(assumption, dict):
+                continue
+            lines.append(
+                "- 假设与局限 `{subproblem}/{assumption_id}`：{statement}；"
+                "依据：{sources}；替代情景：{alternatives}；敏感性检查：{checks}。".format(
+                    subproblem=subproblem_id,
+                    assumption_id=_cell(assumption.get("id")),
+                    statement=_guidance_text(assumption.get("statement")),
+                    sources=_guidance_text(_join_claim_items(assumption.get("source_refs"))),
+                    alternatives=_guidance_text(
+                        _join_claim_items(assumption.get("alternative_scenarios"))
+                    ),
+                    checks=_guidance_text(
+                        _join_claim_items(assumption.get("sensitivity_checks"))
+                    ),
+                )
+            )
 
     lines.extend(["", "## 阻断项与待确认项", ""])
     blocks = verification_report.get("blocking_issues", [])
@@ -406,6 +439,81 @@ def render_verified_guidance(
             lines.extend(f"- `{item}`" for item in ref)
         else:
             lines.append(f"- `{name}`：`{ref}`")
+    return _append_fact_traceability(
+        "\n".join(lines) + "\n",
+        problem_spec=problem_spec,
+        model=model,
+    )
+
+
+def _append_fact_traceability(
+    markdown: str,
+    *,
+    problem_spec: dict[str, Any] | None,
+    model: dict[str, Any],
+) -> str:
+    if not isinstance(problem_spec, dict):
+        return markdown
+    facts = problem_spec.get("locked_facts", [])
+    uncertainties = problem_spec.get("uncertainties", [])
+    if not isinstance(facts, list) or not isinstance(uncertainties, list):
+        return markdown
+
+    model_paths: dict[str, list[str]] = {}
+    for subproblem in model.get("subproblems", []):
+        if not isinstance(subproblem, dict):
+            continue
+        subproblem_id = str(subproblem.get("subproblem_id") or "")
+        for binding in subproblem.get("fact_bindings", []):
+            if not isinstance(binding, dict):
+                continue
+            fact_id = str(binding.get("fact_id") or "")
+            paths = binding.get("model_paths", [])
+            if not fact_id or not isinstance(paths, list):
+                continue
+            model_paths.setdefault(fact_id, []).extend(
+                f"{subproblem_id}:{path}" for path in paths
+            )
+
+    lines = [markdown.rstrip(), "", "## 题面事实追踪", ""]
+    if facts:
+        lines.extend([
+            "| fact_id | 题面事实 | 值/单位 | 适用子问题 | InputCatalog 来源 | ModelIR 路径 |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ])
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            value_unit = f"{fact.get('value')} {fact.get('unit') or ''}".strip()
+            lines.append(
+                "| {fact_id} | {statement} | {value_unit} | {scope} | {sources} | {paths} |".format(
+                    fact_id=_cell(fact.get("fact_id")),
+                    statement=_cell(fact.get("statement")),
+                    value_unit=_cell(value_unit),
+                    scope=_cell(_join_claim_items(fact.get("subproblem_ids"))),
+                    sources=_cell(_join_claim_items(fact.get("source_refs"))),
+                    paths=_cell(_join_claim_items(model_paths.get(str(fact.get("fact_id")), []))),
+                )
+            )
+    else:
+        lines.append("- ProblemSpec 未登记 locked facts。")
+
+    lines.extend(["", "### 题意歧义", ""])
+    if uncertainties:
+        for uncertainty in uncertainties:
+            if not isinstance(uncertainty, dict):
+                continue
+            lines.append(
+                "- `{id}`：{statement}；作用域：{scope}；候选值：{values}；来源：{sources}。".format(
+                    id=_cell(uncertainty.get("uncertainty_id")),
+                    statement=_cell(uncertainty.get("statement")),
+                    scope=_cell(_join_claim_items(uncertainty.get("subproblem_ids"))),
+                    values=_cell(_join_claim_items(uncertainty.get("candidate_values"))),
+                    sources=_cell(_join_claim_items(uncertainty.get("source_refs"))),
+                )
+            )
+    else:
+        lines.append("- ProblemSpec 未登记题意歧义。")
     return "\n".join(lines) + "\n"
 
 

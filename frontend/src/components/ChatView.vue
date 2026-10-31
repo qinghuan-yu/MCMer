@@ -276,7 +276,10 @@ const guidanceDownloadUrl = computed(() => {
   return getFileUrl(primaryMarkdownPath.value)
 })
 const workspaceDownloadUrl = computed(() => `/api/tasks/${encodeURIComponent(props.taskId)}/workspace.zip`)
-const isGuidanceBlocked = computed(() => isGuidanceResult.value && String(props.result?.audit_status || '').toUpperCase() === 'BLOCK')
+const isGuidanceBlocked = computed(() => isGuidanceResult.value && (
+  String(props.result?.audit_status || '').toUpperCase() === 'BLOCK'
+  || props.result?.status === 'blocked'
+))
 const verificationLayers = computed(() => normalizeVerificationLayers(props.result?.verification_layers))
 const capabilityCoverage = computed(() => normalizeCapabilityCoverage(props.result?.capability_coverage))
 const resultIcon = computed(() => {
@@ -286,7 +289,7 @@ const resultIcon = computed(() => {
 const resultTitle = computed(() => {
   if (isGuidanceBlocked.value) return '方案需返工'
   if (props.taskType === 'polish') return '润色完成'
-  return guidanceResultTitle(props.result?.verification_layers)
+  return guidanceResultTitle(props.result?.verification_layers, props.result?.status)
 })
 const showDocxLink = computed(() => Boolean(props.taskType === 'polish' && props.result?.docx_path && props.result?.primary_artifact_type !== 'guidance'))
 

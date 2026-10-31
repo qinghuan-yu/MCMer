@@ -6,7 +6,35 @@
       "execution_status": "solvable",
       "subproblem_id": "aggregate_flow_tasks",
       "objective": "Fit aggregate observations and derive an auditable representative design.",
-      "variables": [
+      "assumptions": [],
+      "fact_bindings": [],
+      "data": [
+        {
+          "id": "workbook",
+          "source_ref": "data/附件(Attachment).xlsx",
+          "fields": {
+            "observations": "all declared sheets"
+          }
+        }
+      ],
+      "equations": [
+        {
+          "id": "declared_identity",
+          "left": {
+            "kind": "literal",
+            "value": 0.0
+          },
+          "right": {
+            "kind": "literal",
+            "value": 0.0
+          }
+        }
+      ],
+      "constraints": [],
+      "execution_components": [{
+        "kind": "operator_graph",
+        "component_id": "traffic_operator_graph",
+        "variables": [
         {
           "id": "sheet1",
           "role": "derived",
@@ -124,30 +152,7 @@
           ]
         }
       ],
-      "data": [
-        {
-          "id": "workbook",
-          "source_ref": "data/附件(Attachment).xlsx",
-          "fields": {
-            "observations": "all declared sheets"
-          }
-        }
-      ],
-      "equations": [
-        {
-          "id": "declared_identity",
-          "left": {
-            "kind": "literal",
-            "value": 0.0
-          },
-          "right": {
-            "kind": "literal",
-            "value": 0.0
-          }
-        }
-      ],
-      "constraints": [],
-      "operators": [
+        "operators": [
         {
           "node_id": "sheet1",
           "operator_id": "data.read_excel_table",
@@ -784,7 +789,8 @@
             ]
           }
         }
-      ],
+        ]
+      }],
       "candidate_models": [
         {
           "id": "simple_baseline",

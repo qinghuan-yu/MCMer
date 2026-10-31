@@ -10,7 +10,13 @@ from typing import Literal
 import nbformat
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.guidance.model_ir import BlockedModelIR, ModelIR, SolvableModelIR
+from app.guidance.artifacts import ClaimRecord
+from app.guidance.model_ir import (
+    BlockedModelIR,
+    ModelIR,
+    OperatorGraphExecutionComponent,
+    SolvableModelIR,
+)
 from app.guidance.model_ir_compiler import CompilationResult, ExecutionPlan
 from app.guidance.operators import OperatorRegistry
 
@@ -279,17 +285,20 @@ def _parameter_registry(
     for subproblem in model_ir.subproblems:
         if not isinstance(subproblem, SolvableModelIR):
             continue
-        for variable in subproblem.variables:
-            if variable.role != "unknown_parameter" or variable.id not in values:
+        for component in subproblem.execution_components:
+            if not isinstance(component, OperatorGraphExecutionComponent):
                 continue
-            parameters.append({
-                "parameter_id": variable.id,
-                "symbol": variable.symbol,
-                "value": values[variable.id],
-                "unit": variable.unit,
-                "source_node": artifact_nodes[variable.id],
-                "status": "estimated",
-            })
+            for variable in component.variables:
+                if variable.role != "unknown_parameter" or variable.id not in values:
+                    continue
+                parameters.append({
+                    "parameter_id": variable.id,
+                    "symbol": variable.symbol,
+                    "value": values[variable.id],
+                    "unit": variable.unit,
+                    "source_node": artifact_nodes[variable.id],
+                    "status": "estimated",
+                })
     return {
         "parameters": parameters,
         "summary": {"total_count": len(parameters), "blocked_count": 0},
@@ -303,11 +312,14 @@ def _result_registry(
 ) -> dict:
     verified: list[dict] = []
     blocked: list[dict] = []
+    claims: list[dict] = []
     variables = {
         variable.id: variable
         for subproblem in model_ir.subproblems
         if isinstance(subproblem, SolvableModelIR)
-        for variable in subproblem.variables
+        for component in subproblem.execution_components
+        if isinstance(component, OperatorGraphExecutionComponent)
+        for variable in component.variables
     }
     for subproblem in model_ir.subproblems:
         if isinstance(subproblem, BlockedModelIR):
@@ -322,6 +334,9 @@ def _result_registry(
             continue
         if not isinstance(subproblem, SolvableModelIR):
             continue
+        assumption_statements = [
+            assumption.statement for assumption in subproblem.assumptions
+        ]
         for answer in subproblem.final_answers:
             if answer.value_ref not in values:
                 blocked.append({
@@ -340,6 +355,19 @@ def _result_registry(
                 "evidence_ids": answer.evidence_ids,
                 "status": answer.status,
             })
+            claims.append(ClaimRecord(
+                id=answer.id,
+                status=answer.status,
+                claim_text=answer.item,
+                evidence_ids=[answer.id],
+                assumptions=assumption_statements,
+                risk=(
+                    "Conditional result: valid only under the registered modeling "
+                    "assumptions and their alternative-scenario checks."
+                    if assumption_statements
+                    else "No additional modeling assumptions are registered."
+                ),
+            ).model_dump(mode="json"))
     return {
         "verified_results": verified,
         "blocked_results": blocked,
@@ -347,6 +375,7 @@ def _result_registry(
             "coverage_status": "complete" if not blocked else "partial",
             "verified_count": len(verified),
             "blocked_count": len(blocked),
+            "claim_registry": claims,
         },
     }
 

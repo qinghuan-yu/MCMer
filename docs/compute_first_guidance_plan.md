@@ -1,362 +1,207 @@
-# Guider 长线目标：高可信建模指导流水线
+# Guider 长线目标：题面证据、索引优化与真实题闭环
 
-> 本文件是项目唯一长线计划。任何代码修改前必须完整阅读本文件，并确认当前步骤。
+> 本文件是项目唯一长线计划。任何代码、测试、Schema 或配置修改前必须完整阅读本文件，确认唯一 `CURRENT`，并严格执行 Red-Green-Refactor。
+
+## Go / No-Go
+
+- **判断**：`GO`。
+- **批准状态**：用户已批准替换题面证据入口、阻断验证合同、扩展通用索引 MILP 与未来期预测算子、assumption-aware ModelIR 合同、索引 Draft/canonical 生成边界、Constraints 紧凑符号上下文边界、Modeler/Reviser 共享架构合同边界、确定性模型完整性与修订闭环审核边界、结构化题面事实覆盖、ProblemSpec Draft/canonical 生成边界、Guidance 分阶段 LLM 预算边界、Modeling 逐子问题隔离边界、预测输出到索引 MILP 的组合执行图边界、canonical 类型化执行组件与节点级事实来源边界、逐子题审核与部分执行边界，以及强类型子问题事实与依赖边界。
+- **盲测基线**：2022 五一数学建模 A 题任务 `20260715-135019-066fc4b9`。输入完整，但内嵌表格未进入数据证据层；审核阻断路径因三层验证字段缺失而错误变为 `failed`。
 
 ## 强制执行协议
 
-- **修改前必读**：每次修改代码前，必须完整阅读本计划中的当前步骤。
-- **测试先行**：新功能和缺陷修复必须遵循 Red-Green-Refactor；生产代码前必须先看到目标测试因缺失行为而失败。
-- **重构而非修补**：若现有模块与目标行为冲突，禁止添加 `if/else`、开关、兼容分支或转发适配器。必须停止实现，提交模块级重构提案并获得用户批准。
-- **即时更新状态**：每完成一个子任务，立即将对应复选框更新为 `[x]`，并确保只有一个 `CURRENT` 步骤。
-- **删除旧计划**：不得在 `docs/` 中保留被本文件取代的路线图、优化计划或指导计划。
-- **强制现状摘要**：每次修改后必须报告核心数据流、致命耦合点、本次变化、已完成复选框和下一步骤。
+- 每次修改前完整阅读本计划，指出当前未完成步骤。
+- 每个行为变更先写最小失败测试并确认 RED，再实现 GREEN，最后在测试绿色时重构。
+- 若发现本计划之外的模块边界冲突，立即停止并重新取得用户批准，禁止增加兼容分支、题名判断或问题专用模板。
+- 每完成一个子任务立即把对应复选框改为 `[x]`，并移动唯一 `CURRENT`。
+- 不创建并行 roadmap；目标变化时直接覆写本文件并删除过时计划。
+- 不支持的数学能力必须形成有证据的 `partial/blocked`，不得伪造数据、参数、公式或数值结果。
+- 每次修改后报告现状摘要：核心数据流、最危险耦合、本次变化、完成复选框、下一未完成步骤。
 
 ## 当前步骤
 
-**CURRENT：本轮已完成 - 确定性指导链路已通过真实题、完整回归和前端构建并推送。**
+**CURRENT：Phase 4 强类型子问题事实与依赖投影 REFACTOR。**
 
-- [x] 将仓库执行规则固化到根目录 `AGENTS.md`。
-- [x] 删除与本计划冲突的旧版路线图文档。
-- [x] 提交 `GuidancePipeline` 模块级重构提案并获得用户批准。
-- [x] 将最终链路收敛为六个必要业务阶段，并冻结“不新增非必要依赖”规则。
-- [x] RED：先写端到端阶段顺序测试，证明当前 Pipeline 缺少拆题、建模、审核、计算、复核和指导输出契约。
-- [x] RED：审核状态不是 approved 时，计算阶段必须完全不运行。
-- [x] RED：计算阶段必须一次生成并执行完整 `solve.py`，不得逐步工具调用。
-- [x] GREEN：整体替换临时算术主链，不保留旧新双轨或 feature flag。
-- [x] 审核失败只允许返回建模阶段一次。
-- [x] 第二次仍未通过则产出 blocked guidance，不进入计算。
-- [x] 用不可辨识参数、错误单位和数据不足三个 fixture 验证阻断。
-- [x] 回归类结果检查拟合误差、残差和参数稳定性。
-- [x] 图片只保留数据概览、模型说明、结果拟合和复核诊断中确有必要的类型。
-- [x] guidance 中每张图绑定来源数据和结果 ID。
-- [x] 拆题器从原始题目确定性写入 `task_summary`，不依赖 LLM 回填必填字段。
-- [x] 结构化契约遇到 JSON 语法错误时只完整重生成一次，不做字符串修补。
-- [x] 结构化契约遇到 Pydantic Schema 错误时使用同一完整重生成入口。
-- [x] 四个 guidance LLM 代理统一使用结构化契约请求器，并保存失败与恢复诊断。
-- [x] 结果复核以执行清单的失败状态和缺失产物生成 blocked 报告，不抛文件异常。
-- [x] 求解失败且注册表缺失时仍产出披露阻断项的 guidance。
-- [x] 执行清单展开受控相对 glob 并登记实际生成文件，避免图片误报缺失。
-- [x] 模型审核同时消费已保存的 ProblemSpec 与 ModelSpec，禁止因未传上下文误报契约文件缺失。
-- [x] 执行产物文件清单由系统派生，ModelSpec 禁止接收 LLM 自定义 required_outputs。
-- [x] ModelSpec 以强类型 subproblem_models 逐题约束方程、参数来源、约束、求解步骤和预期结果。
-- [x] RevisedModelSpec 必须逐项关闭独立审核的 required_revisions，遗漏项不得进入复审。
-- [x] 强类型建模契约通过真实 XLSX/Jupyter/PNG 端到端测试、203 项后端回归和前端生产构建。
-- [x] ProblemSpec 与 ModelSpec 的子问题 ID 必须完整一一覆盖，禁止漏题或额外题目进入审核。
-- [x] GeneratedProgram 必须声明系统要求的全部输出，语法与运行失败统一进入 execution_manifest。
-- [x] 参数、结果、图片和 solver_results 使用强类型文件契约，缺字段不得进入结果复核。
-- [x] verified guidance 必须同时具备非空参数证据、数值结果、复核检查和逐题建模细节。
-- [x] 用缺字段、错 ID、缺输出、畸形注册表和运行异常 fixture 完成实测前对抗验证。
-- [x] guidance 独立入口必须按 workflow_mode 应用 LLM 超时预算，禁止退回全局 120 秒。
-- [x] GuidanceProgramGenerator 超时必须保存失败诊断并保留已审核模型供阶段续跑。
-- [x] candidate_methods 使用强类型对象，禁止含义不明的 dict 与字符串双轨。
-- [x] 所有结构化代理首轮请求必须携带完整目标 JSON Schema，降低包装层级和字段形态错误。
-- [x] ProblemSpec 缺失或空白子问题 ID 时由合同层确定性补齐，避免实测中覆盖校验出现空 ID 列表。
-- [x] GuidanceModeler 结构化 JSON 两轮失败时必须落盘诊断并产出 blocked guidance，禁止链路直接中断。
-- [x] GuidanceModelReviser 结构化 JSON 两轮失败时必须复用同一 blocked guidance 收束路径，禁止修订阶段直接中断。
-- [x] ModelSpec 裸数字子问题 ID 由合同层规范为 `problemN`，避免有效建模方案被覆盖校验误阻断。
-
-- [x] GuidanceProgramGenerator 生成失败或语义校验失败必须写入 failed execution_manifest，并继续进入复核与 blocked guidance 路径，禁止六阶段链路直接中断。
-- [x] standard guidance LLM 请求预算必须使用全局超时配置，避免生成器两轮失败把前端任务拖成数分钟等待。
-- [x] StructuredContractRequester 必须对每次结构化 attempt 施加外层硬超时，禁止底层 LLM 内部重试绕过 guidance 阶段预算。
-- [x] guidance 审计必须阻断无 verified result 且无参数证据的空壳 blocked 方案，禁止把建模前失败标记为可信 PASS。
-- [x] GuidanceModeler 必须使用压缩 ProblemSpec payload，避免真实题面全文导致结构化建模超时。
-- [x] 模型审核未通过时 guidance 禁止引用未 approved 的草稿模型公式、方法与数值，只能输出阻断原因和修复清单。
-- [x] guidance 审计或模型审核阻断时 Pipeline 最终结果必须返回 blocked，禁止前端误判为 completed。
-- [x] GuidanceModeler 与 GuidanceModelReviser 必须逐子问题给出可辨识性计划，缺少 rank/Jacobian/唯一性/固定参数或额外约束检查时触发完整重生。
-- [x] CalculationStage 必须捕获求解执行器协议异常并写入 failed execution_manifest，禁止真实链路在计算阶段抛异常中断。
-- [x] 建模前合同失败时 guidance 必须输出阻断诊断报告，禁止渲染空参数表和空计算结果的伪方案。
-- [x] 模型审核阻断生成的 blocked result 必须使用唯一 ID，禁止结果注册表出现重复引用。
-- [x] GuidanceModeler 与 GuidanceModelReviser 首轮 prompt 必须明确要求逐题“可辨识性计划”和设计矩阵满秩/唯一性等检查。
-- [x] 生成程序声明根目录输出却写入子目录时必须在执行前拒绝，禁止形成 partial 后才发现注册表缺失。
-- [x] 结果复核阻断项不得泄露绝对工作目录路径，缺失合同文件只报告相对文件名。
-- [x] 模型审核自然语言正向结论如 `consistent; ...` 必须按通过处理，避免单位一致性误阻断。
-- [x] GuidanceProgramGenerator 首轮提示必须明确根目录 required output 只能写入工作目录根部，禁止默认写入 output/results 子目录。
-- [x] 计算阶段失败且无 verified evidence 时 guidance 必须渲染为计算链路阻断诊断，禁止输出空壳正式方案。
-- [x] 阻断诊断报告必须使用诊断专属审计章节清单，避免被正式方案章节误报 warning。
-- [x] 生成程序中辅助函数引用未定义全局变量时必须在执行前拒绝，避免真实链路运行到 NameError 才失败。
-- [x] solver_results.evidence 禁止写入 `kind=blocked`，阻断项必须进入 result_registry.blocked_results，图片只能绑定 verified result。
-- [x] 生成程序静态作用域检查必须跳过嵌套函数体并允许嵌套函数自有参数，避免误拒绝合法求解器。
-- [x] 结果复核状态为 blocked 时 guidance 必须渲染为结果复核阻断诊断，禁止继续输出正式建模指导方案外壳。
-- [x] 回归 evidence 的 `constraint_values` 禁止复用 residuals/errors，必须表示非负约束裕度或模型中的非负量。
-- [x] 结构化契约重试必须保留原始业务系统提示，避免第二轮重生成遗忘建模、可辨识性或产物协议约束。
-- [x] 生成程序中的回归 evidence 必须包含非空 observed/predicted/residuals/constraint_values，且源码禁止 not implemented/would need to compute 等占位实现短语。
-- [x] ModelSpec 输出必须使用 schema 级长度与数量约束压缩，复杂子问题用参数组概括，避免真实题建模 JSON 过长截断。
-- [x] 阻断诊断 guidance 的审计必须只检查诊断披露完整性，不得套用正式方案的参数、数值与图片覆盖率规则。
-- [x] guidance workflow 必须把最终 blocked 结果持久化为任务 blocked 状态，禁止 task_info 显示 completed。
-- [x] 五一交通流五问实测必须使用确定性求解模板产出参数、结果、图片和 typed solver evidence，禁止生成占位求解程序。
-- [x] CalculationStage 成功续跑后必须清理旧 calculation_failure checkpoint，避免日志继续显示已修复的历史失败。
-- [x] 五一交通流 guidance 必须披露总量分解不可唯一识别、统一样本序号时间坐标，并把固定参数降级为规范化估计而非真实反推。
-- [x] 前后端必须提供任务工作区 ZIP 下载入口，部署到服务器后仍可导出 `guidance.md`、注册表、notebook、图片和诊断附件。
-- [x] guidance 必须提供结论状态登记，将关键结论区分为题设锁定、证据自洽、依赖先验的代表解和候选实验设计。
-- [x] guidance 必须提供正式可辨识性分析，说明观测量、未知量、方程结构、秩/自由度、解族或规范化假设，禁止只用拟合残差证明支路真实恢复。
-- [x] guidance 渲染必须清理与统一时间坐标和不可辨识披露冲突的旧模型措辞，禁止正文继续声称固定参数能证明唯一识别或在样本序号体系下保留 `t-2` 延迟公式。
-- [x] guidance 必须提供“最终答案与应填表格”，将可直接填写的函数、观测时刻或候选答案绑定结论状态和证据 ID，避免只输出 result ID 与残差指标。
-- [x] 五一交通流问题 2-4 的最终答案表必须给出可读拟合模型口径、参数组、证据 ID 与模型形式不确定性披露，避免只呈现参数向量和 RMSE。
-- [x] 五一交通流问题 2-4 必须登记 7:30 与 8:30 指定时刻拟合值，并明确这些数值不能作为唯一支路流量。
-- [x] 历史项目卡片与方案预览页必须暴露工作区 ZIP 下载入口，避免服务器部署后产物不透明。
-- [x] guidance 必须提供读者视角的建模路线与决策总览，集中回答观测/未知、唯一性、推荐路线、可填内容和结论来源分层。
-- [x] 五一交通流问题 5 必须给出候选观测集合的设计矩阵秩诊断、参数维数和最小性边界，不能把候选集合写成已证明最少。
-- [x] 五一交通流问题 2-4 必须在最终答案区给出可复算的基函数与参数字典，并把断点、周期和相位常量登记到参数表。
-- [x] guidance 必须提供建模路线取舍表，说明推荐路线、被排除路线、排除原因、适用边界和证据来源。
-- [x] guidance 审计必须把读者决策、路线取舍、可辨识性、结论状态和最终答案章节作为正式方案硬门槛，缺失时阻断而非降级为 warning。
-- [x] GuidanceProgramGenerator 必须要求 `result_registry.summary` 写入读者决策、路线取舍、可辨识性、结论状态和最终答案表，避免新题只依赖 renderer 兜底。
-- [x] ResultVerificationStage 必须阻断缺少读者决策、路线取舍、可辨识性、结论状态或最终答案表的 verified result registry，禁止弱 summary 进入正式 guidance。
-- [x] ResultVerificationStage 必须阻断字段齐全但内容空泛的读者向 summary，至少检查观测/未知/时间口径、推荐与排除路线、可辨识性、结论来源和最终答案证据绑定。
-- [x] guidance 审计必须阻断章节齐全但正文空泛的正式方案，确保 `guidance.md` 直接回答观测/未知/时间、唯一性、路线取舍、公式参数结果和结论来源分层。
-- [x] guidance 审计必须要求“最终答案与应填表格”章节内部绑定 result/param 证据或阻断原因，禁止答案表与注册证据脱节。
-- [x] guidance 审计必须逐行检查最终答案表的证据绑定，禁止某一行借用其他行的 result/param 证据通过审计。
-- [x] guidance 审计必须校验最终答案表引用的 result/param ID 真实存在于注册表，禁止伪造或写错证据 ID 通过审计。
-- [x] guidance 审计必须要求最终答案表逐行标注结论状态，区分题设锁定、证据自洽、依赖先验代表解、候选实验设计或阻断项。
-- [x] guidance 审计必须要求最终答案表直接写出可填公式、数值、观测时刻或阻断原因，禁止答案列只写“见 result/param 注册表”。
-- [x] guidance 审计必须要求“可辨识性分析”章节本身说明观测/方程、未知参数、秩或自由度以及唯一性或缺失信息结论，禁止只在别处堆关键词。
-- [x] guidance 审计必须要求“建模路线取舍”章节本身说明推荐路线、排除路线、取舍原因、适用边界和证据来源，禁止只写方法名。
-- [x] guidance 审计必须要求“问题理解”章节本身说明观测数据、未知目标和时间/数据口径，禁止只在别处拼凑题目理解。
-- [x] guidance 审计必须要求“结论状态登记”章节本身区分结论状态、证据来源和假设/代表解边界，禁止只写“结论可信”。
-- [x] guidance 审计必须要求“必要计算结果”章节本身说明公式/模型、参数、求解方法和结果/误差指标，禁止只列 result ID。
-- [x] guidance 审计必须要求“参数与来源表”章节本身包含数值、单位、来源和可信状态，禁止只列参数名或 param ID。
-- [x] guidance 审计必须要求“复核与稳健性”章节解释误差/残差指标、阈值或基线、通过含义和稳健性/敏感性边界，禁止只写 verified。
-- [x] guidance 审计必须要求“图片解读”章节解释图支撑的判断和局限，禁止只列图片路径、来源和 result ID。
-- [x] guidance 审计必须要求“分问题建模步骤”章节本身给出目标、公式/模型、参数、约束/假设、求解步骤和输出，禁止只写“详见注册表”。
-- [x] guidance 审计必须要求“数据与来源”章节本身说明来源文件/数据表、观测输入字段和时间/样本口径，禁止只写“见注册表”。
-- [x] guidance 审计必须要求“数据与来源”章节引用注册表里的具体 source_ref/source_data，禁止只写字段名或泛称来源。
-- [x] guidance 审计必须要求“建模路线与读者决策”章节本身集中回答观测/未知/时间、唯一性、推荐与排除路线、最终答案证据/动作和结论来源分层，禁止只写“见后文/注册表”。
-- [x] result_registry.summary 必须使用强类型 ReaderGuidanceSummary 统一生成、复核与渲染合同，禁止任意 dict 被关键词验证放行后产生空答案表或待确认结论。
-- [x] 五一交通流问题 2-4 的指定时刻表必须把已验证主路聚合拟合值与不可唯一识别的支路值分行登记，支路值缺少独立观测时必须明确 blocked，禁止用聚合值冒充支路答案。
-- [x] 五一交通流问题 2-4 的设计矩阵与最终公式必须由同一 basis spec 生成，并在最终答案中同时给出符号式和真实系数数值代入式，禁止只写 theta 参数范围后让用户自行拼接。
-- [x] RED：缺少附录的子问题必须建模为 blocked，禁止用伪公式和伪参数满足全题可执行契约。
-- [x] GREEN：以可判别的 solvable/blocked 子问题联合类型替换单一 SubproblemModelSpec，并让审核与程序生成接受诚实的部分可解方案。
-- [x] RED：真实工作簿画像必须暴露合并分组标签与尾部全空列，否则生成程序会产生单样本分组和列数错位。
-- [x] GREEN：数据画像确定性登记工作表有效列、忽略尾部空列和需前向填充的合并分组列，并约束求解器按画像读取。
-- [x] RED：题面引用但上传文件中不存在的附录必须进入确定性来源清单，禁止在 locked_facts 中继续声称其已提供。
-- [x] GREEN：拆题阶段根据题面引用和实际文件清单登记 available/missing 来源，并把缺失来源传播到建模合同。
-- [x] RED：建模阶段必须读取规范化工作簿画像，禁止因只看到文件名而把实际存在的表1-4误判为缺失。
-- [x] GREEN：将 data_profile 纳入 ModelingStage/LLMModeler 合同，并清理与 missing source_requirements 冲突的数据源描述。
-- [x] RED：可辨识性计划写在参数约束中也必须被语义校验识别，禁止误判有效部分模型。
-- [x] GREEN：统一扫描子问题与参数级约束，并要求模型输出精确使用稳定子问题 ID、传播上游阻断依赖。
-- [x] RED：无显式不等式约束的回归必须登记预测物理量的非负裕度，禁止代码生成器反复把绝对残差伪装成 constraint_values。
-- [x] GREEN：将回归 constraint_values 的唯一生成口径和问题 1.1 分直径 K 输出要求写入生成契约。
-- [x] RED：程序生成契约必须显式约束 ReaderGuidanceSummary 的数组类型、答案状态、阻断证据引用和图片结果引用，禁止“字段齐全但类型近似”的运行产物。
-- [x] GREEN：补全嵌套结果契约并让生成程序在执行前接受与运行后复核相同的字段口径。
-- [x] 程序生成模块替换提案已获用户明确批准：删除“确定性模板优先、LLM fallback”双轨。
-- [x] RED：已注册题型必须由确定性模板生成完整程序，未注册题型必须在执行前诚实阻断，禁止调用 coder LLM。
-- [x] RED：锚杆支护模板必须分直径输出 K、分岩石/煤体评估临界力矩，并拒绝跨工况拼接得到伪断点。
-- [x] GREEN：以统一 TemplateProgramGenerator + 模板注册表整体替换 LLMProgramGenerator，并迁入交通流与锚杆支护模板。
-- [x] RED：确定性模板不得继承“缺附录时用简化经验公式估算”等不可信恢复动作。
-- [x] GREEN：阻断恢复动作只允许补齐明确缺失输入后重新建模与计算。
-- [x] RED：verified guidance 证据门槛必须按 solvable/blocked 联合类型分别校验，禁止把诚实阻断项误报为建模细节缺失。
-- [x] GREEN：可解项校验方程/参数/步骤，阻断项校验原因/缺失输入/恢复动作。
-- [x] RED：正式 guidance 的分问题步骤不得泄漏未执行的候选公式或求解器，必须以结果注册表中的实际模型口径为准。
-- [x] GREEN：由 identifiability_analysis + final_answer_tables 渲染已执行可解步骤，blocked 项只渲染阻断与恢复动作。
-- [x] RED：数值审计不得把 Markdown 题号当数值结论，候选区间端点必须进入注册指标。
-- [x] GREEN：扩展结构编号识别并登记断点候选区间上下界。
-- [x] RED：必要计算结果汇总也不得引用未执行的候选公式/方法，禁止正式 guidance 章节间自相矛盾。
-- [x] GREEN：公式与求解汇总统一从已登记 identifiability_analysis 生成。
-- [x] RED：锚杆 guidance 必须明确无时间轴、逐表来源与分工况答案，图片解读必须引用绑定结论而非通用套话。
-- [x] GREEN：补齐数据口径、精确答案映射和结果驱动图片解读。
-- [x] RED：数值审计必须识别带工况后缀的题号（如 1.2-rock），禁止把题号片段误报为数值结论。
-- [x] GREEN：结构编号识别支持题号后缀但不放宽正文数值追踪。
-- [x] 新题实测：用 2026 五一 A 题及附件重跑六阶段链路，完成可解问题的有效数值计算、缺失附录子题的正式阻断，并人工复核 guidance 的五项读者价值。
-- [x] 发布：提交并推送本轮已验证变更。
-## Go / No-Go
-
-- **判断**：Go，但停止把简易公式计算器扩展为通用求解器。
-- **理由**：最终产品必须帮助使用者面对真实题目快速找准建模方向，并给出可复现的必要计算；可信度注册表是护栏，不是产品主链。
-
-## 目标结果
-
-输入真实赛题及附件后，系统按以下顺序产出一份高可信 `guidance.md`：
+## 目标核心数据流
 
 ```text
-题目与数据解析
-  -> 题目拆解 problem_spec.json
-  -> 建模方案 model_spec.json
-  -> 独立模型审核 approved_model_spec.json
-  -> 完整求解程序 solve.py
-  -> 本地一次性执行 execution_manifest.json
-  -> 数值与结果复核 verification_report.json
-  -> 必要说明图片 figures/
-  -> 参数与结果注册表
-  -> 建模指导 guidance.md
-  -> 机器可信度审计 guidance_audit_report.json
+Raw problem source + supplementary files
+  -> InputCatalog (ordered paragraphs, structured tables, source refs, hashes)
+  -> EvidenceProfile (question tables + uploaded datasets)
+  -> ProblemSpec
+  -> Model IR (indexed variables/constraints or explicit blocked capability)
+  -> ModelReview
+  -> ModelIRCompiler
+  -> generic operator graph (forecast + MILP)
+  -> registries + independent verification
+  -> guidance.md + workspace ZIP
 ```
 
-最终指导文件必须说明：题目观测量与未知量、时间轴和数据口径、目标能否唯一推出、不可唯一时缺少什么信息、问题类型、建模方向、备选方法、选择理由、假设、符号、公式、参数来源、数据处理、求解步骤、必要结果、应填表格、图片解读、复核结论、局限、哪些结论来自数据、哪些依赖额外假设、哪些只是竞赛导向的合理选解，以及阻断项和复现方式。
+`InputCatalog` 是题面事实与表格的唯一证据入口。Pipeline 不得把题面正文与 `data/` 文件视为两套互不相见的数据世界。
 
-## 边界
+## 替换边界
 
-### 包含
+| 旧边界 | 新边界 | 迁移要求 |
+| --- | --- | --- |
+| `ingest_question_source` 仅返回拼接文本 | 版本化 `InputCatalog` | 保留段落/表格顺序、单元格、来源定位与哈希 |
+| `_list_data_files` 与 `_build_data_profile` 仅扫描 `data/` | 统一 `EvidenceProfile` | 同时登记题面内嵌表格和补充文件，删除旧双轨 |
+| 来源正则只识别“附录” | 结构化来源需求 | 统一识别附件、附录、Appendix，并绑定实际证据 |
+| blocked 分支手写旧 `VerificationReport` | 统一三层验证报告工厂 | 所有退出路径使用同一合同，不保留旧字段适配 |
+| 仅有连续二次优化 | 索引线性模型 + `optimization.milp` | 使用 SciPy `milp`，不新增赛题专用求解器 |
+| 只有时间留出评估 | 未来期预测算子 | 候选模型、滚动验证、基线、区间与未来时点输出齐全 |
+| LLM Draft 直接复用 strict canonical 索引节点 | Draft 专用 selector/term/constraint DTO + 单向 promote | `null` 只在 Draft 边界规范化；Core 错误不得延迟到 Constraints 重试 |
+| Constraints 直接接收完整稠密 Core 与自由符号字符串 | 确定性 `ConstraintGenerationContext` | 只暴露索引、参数和变量符号目录；完整 Core 仅留在系统侧用于 promote 与语义验证 |
+| Modeler 与 Reviser 各自维护 ModelIR Draft 规则 | 唯一共享架构合同 + 阶段职责后缀 | indexed route、operators、assumptions、证据与单子问题覆盖规则必须一致；修订阶段只追加审核处理职责 |
+| LLM Reviewer 单独判断模型完整性且复审看不到首次整改要求 | 确定性架构/Core 覆盖校验 + 结构化修订谱系 | 不完整模型在 Reviewer 前失败；复审逐项引用模型路径并证明首次要求已接受 |
+| `ProblemSpec.locked_facts/uncertainties` 为自由字符串 | 结构化、证据绑定且有子问题作用域的事实/歧义记录 | 同键同作用域冲突必须拒绝；可解模型逐项提供事实到 ModelIR 路径的覆盖证据，不保留字符串兼容分支 |
+| Decomposer 直接复用 strict canonical `ProblemSpec` | `ProblemSpecGenerationDraft` 单向提升到 canonical | Draft 接受自然语言标识符；系统生成稳定 ASCII ID、同步作用域引用并拒绝规范化碰撞，canonical 正则保持严格 |
+| Guidance 全阶段共用单一 `llm_timeout` | 显式分解/架构/Core/Constraints/审核预算 | 长结构生成获得独立时限；删除共享标量，诊断公开实际阶段预算 |
+| Modeling 任一子问题异常即终止整个 ModelIR | 逐子问题成功/阻断结果聚合 | 单题完整生成与校验封装为独立边界；异常只阻断对应题并保留独立诊断，全局兜底仅处理切片前灾难性失败 |
+| `ModelReview` 单一全局状态使一题阻断短路全部可解子题 | 逐子题审核决策 + 显式可执行子题集合 | blocked 子题保留诊断；仅 approved 的 solvable 子题进入编译执行；结果、验证、Guidance 与前端整体状态为 `partial`，不得把部分结果冒充整题完成 |
+| `operator_graph` 与 `indexed_linear` 互斥，MILP 参数只能编译期稠密给定 | 预测/估计节点输出可绑定索引参数的组合执行图 | 参数来源使用静态证据或运行时工件的强类型 union；编译器生成有序 DAG，MILP 节点运行时物化参数后再展开矩阵，不保留互斥路由兼容分支 |
+| canonical `SolvableModelIR` 平铺 `variables/operators/indexed_linear_model` 且索引变量重复登记 | 类型化 canonical execution components | operator graph 与 indexed linear component 各自拥有变量和执行节点；编译器只消费组件，不保留平铺字段兼容分支 |
+| 架构 Draft 在 Core/Constraints 生成前猜测 `fact_bindings.model_paths` | 节点级事实来源 + 最终确定性绑定 | 参数、约束和算子节点登记实际使用的 fact ID；组装器按最终 canonical JSON 路径生成绑定并拒绝遗漏、未知、重复或不存在路径 |
 
-- 题目拆解、模型提出、独立审核、程序生成、本地执行、结果复核、图表、Markdown 组织与审计。
-- Python 作为首个完整求解运行时。
-- 文件化阶段契约，任何阶段都可单独检查和重跑。
-- 参数与数值必须追踪到题设、附件、代码或明确假设。
+## 非目标
 
-### 非目标
-
-- 不直接生成可提交论文。
-- 不为 guidance 生成 DOCX。
-- 不恢复多轮 CoderAgent `execute_code` 循环。
-- 不把所有数学模型压缩成算术表达式 DSL。
-- 第一阶段不同时支持 MATLAB、云端沙箱和分布式任务。
-
-### 延后
-
-- MATLAB/北太天元执行器。
-- 多语言代码生成。
-- 跨任务结果缓存和分布式长任务。
-- 论文自动转化。
-
-## 当前状态与漂移诊断
-
-### 可保留
-
-- guidance 独立 API 与 Markdown 下载。
-- `parameter_registry.json`、`result_registry.json`、blocked/partial 披露。
-- `guidance_audit_report.json` 和历史任务兼容。
-- guidance 与旧 paper workflow 的运行隔离。
-
-### 已发生的漂移
-
-- **目标漂移**：近期链路从“完整建模指导”收缩成了“结构化算术计算”。
-- **阶段漂移**：单个 planner 同时承担拆题、建模和求解设计，缺少独立审核。
-- **验证漂移**：审计能证明文字可追踪，却不能证明模型合理或计算完整。
-- **实现漂移**：`compute/runner.py` 被误当作通用建模求解器，真实回归、优化和仿真无法落地。
-
-## 核心架构规则
-
-1. 每个阶段只消费上一阶段的已保存契约，不依赖隐式对话记忆。
-2. 模型审核未通过时不得生成求解程序。
-3. 代码生成器一次生成完整 `solve.py`；执行器直接运行程序，不让 LLM 逐步调用工具。
-4. 求解程序必须写出结构化结果、参数表、运行清单和必要图片。
-5. 结果复核读取代码与产物，至少检查输入、公式口径、单位、约束、残差或稳健性。
-6. guidance writer 只能引用审核通过的模型和已登记结果。
-7. 简易公式 runner 只作为小计算辅助模块，不决定主链架构。
-8. 只允许六个业务阶段：拆题、建模、模型审核、数值计算、结果复核、指导输出；不得为每个小动作新建 stage。
-9. 优先复用现有依赖：Pydantic、LocalCodeInterpreter、NumPy、Pandas、SciPy、Matplotlib、openpyxl；新增依赖必须先证明现有能力无法满足需求并获得用户批准。
-10. API、WebSocket 和 Markdown 下载契约保持不变；内部 Pipeline 直接替换，不引入兼容开关。
-
-## 最小目标架构
-
-```text
-DecompositionStage
-  -> problem_spec.json
-ModelingStage
-  -> model_spec.json
-ModelReviewStage
-  -> approved_model_spec.json
-CalculationStage
-  -> solve.py + execution_manifest.json + parameter_registry.json + result_registry.json + figures/
-ResultVerificationStage
-  -> verification_report.json
-GuidanceStage
-  -> guidance.md + guidance_audit_report.json
-```
-
-每个阶段只有一个公开入口，复杂性由阶段内部吸收。Pipeline 只负责顺序、进度和失败传播，不理解模型公式、求解代码或 Markdown 章节细节。
-
-## 文件契约
-
-### problem_spec.json
-
-- 子问题、目标、对象、数据、约束、输出要求。
-- 题设事实与待确认信息。
-- 问题类型及候选建模方向。
-
-### model_spec.json
-
-- 每个子问题的候选模型与推荐模型。
-- 假设、符号、公式、参数、目标函数、约束和求解步骤。
-- 所需结果表和图表计划。
-
-### approved_model_spec.json
-
-- 审核状态：approved、revision_required 或 blocked。
-- 对可辨识性、维度、约束、数据充分性和计算可行性的判断。
-- 审核后的最终模型规格及必须修复项。
-
-### execution_manifest.json
-
-- `solve.py` 哈希、运行时间、退出状态、标准输出和错误摘要。
-- 生成文件清单。
-- 不得把程序成功退出等同于结果正确。
-
-### verification_report.json
-
-- 输入覆盖、公式一致性、单位、约束满足、残差/误差、敏感性与复算状态。
-- verified、partial、blocked 结论及理由。
+- 不新增血管机器人、库存题或五一 A 题专用生产模板。
+- 不让 LLM 直接生成并执行 Python、矩阵或 104 周硬编码答案。
+- 不承诺首轮即支持非线性整数规划、随机规划或商业求解器。
+- 不用提示词补丁掩盖证据目录或执行合同缺陷。
 
 ## 阶段计划
 
-### Phase 1：六阶段真实垂直链路
+### Phase 0：修复诚实阻断闭环
 
-**目的**：用五一 A 题问题一证明目标链路成立，不先追求题型通用化。
+- [x] RED：审核状态为 blocked 时，必须产出包含 `execution_verified`、`evidence_supported`、`model_adequate` 的 `verification_report.json`、注册表和 `guidance.md`，最终任务状态为 `blocked`。
+- [x] GREEN：用统一构造器生成未执行/证据未评估/模型阻断三层状态，禁止伪造候选模型角色。
+- [x] REFACTOR：删除 blocked 路径中的旧 `status=` 手写合同，所有失败与阻断出口共享同一报告边界。
 
-- [x] RED：阶段顺序测试要求严格执行拆题、建模、审核、计算、复核、指导输出。
-- [x] RED：审核状态不是 approved 时，计算阶段必须完全不运行。
-- [x] RED：计算阶段必须一次生成并执行完整 `solve.py`，不得逐步工具调用。
-- [x] 实现 `DecompositionStage`，保存 `problem_spec.json`。
-- [x] 实现 `ModelingStage`，保存含候选方法、选择理由、假设、公式、参数和图表需求的 `model_spec.json`。
-- [x] 实现 `ModelReviewStage`，审核可辨识性、数据充分性、公式与单位，并保存 `approved_model_spec.json`。
-- [x] 实现 `CalculationStage`，复用现有代码生成能力和 `LocalProgramExecutor`，生成参数表、结果表和必要图片。
-- [x] 实现 `ResultVerificationStage`，检查输入、单位、约束、残差和复算结果。
-- [x] 实现 `GuidanceStage`，输出参数来源表、建模细节、必要图片、复核结论和复现路径。
-- [x] 删除临时 `LLMGuidancePlanner -> run_solve_spec` 主链，不保留运行开关。
+**退出证据**：盲测中的同类 ModelReview 阻断不再触发 Pydantic ValidationError；Guidance 清楚说明阻断原因和恢复条件。
 
-**退出证据**：真实附件被读取；支路模型完成最小二乘拟合；关键参数、残差指标和说明图落盘；`guidance.md` 能从参数追到数据、代码和复核结论。
+### Phase 1：统一题面与附件证据
 
-**已验证**：2026-06-19 使用历史任务中的原始 `附件(Attachment).xlsx` 完成实测；断点为 30，支路斜率约为 0.5 和 1.0，RMSE 为 `1.63e-14`，复核状态为 verified，guidance 审计为 PASS，并生成真实 Jupyter notebook 与 PNG。
+- [x] RED：DOCX 内嵌成本表和 104 周需求必须以稳定表格引用进入 InputCatalog/EvidenceProfile；“附件1/附件2”必须判定为 available。
+- [x] RED：ProblemSpec 或 Model IR 把已登记证据声明为 missing 时必须被确定性拒绝。
+- [x] GREEN：实现版本化 InputCatalog，保留段落、表格、行列、单元格、来源路径和 SHA-256。
+- [x] REFACTOR：以 EvidenceProfile 整体替换 `_list_data_files`、仅 `data/` 的 `_build_data_profile` 和自由文本附件判断。
+- [x] GREEN：Guidance ZIP 包含原始题面、InputCatalog、EvidenceProfile 及其哈希关联。
 
-**止损规则**：若完整程序仍需 LLM 在运行期间逐步补代码，停止后续开发，先修正代码生成契约。
+**退出证据**：同一 DOCX 不再出现“task_summary 有数据、data_profile 为空”的矛盾；题面表格与外部 XLSX 使用同一证据引用语义。
 
-### Phase 2：模型审核闭环
+### Phase 2：通用索引 MILP
 
-**目的**：让错误模型在计算前失败，而不是靠最终审计兜底。
+- [x] RED：Model IR 支持有限索引集、整数/二元/连续变量、按索引展开的线性目标、状态转移、边界和线性约束；维度或索引错误必须在编译前失败。
+- [x] RED：MILP 算子必须拒绝非有限系数、非法积分类型、不可行模型和未声明输出。
+- [x] GREEN：实现索引线性 IR 展开器与通用 `optimization.milp`，仅接受编译后的结构化矩阵。
+- [x] GREEN：独立验证目标复算、整数性、约束违反、求解下界/间隙和状态守恒，并比较简单可行基线。
+- [x] GREEN：用非赛题命名的多期库存 fixture 验证训练/调试延迟、保养、损毁常量和阶梯成本线性化。
 
-- [x] 审核失败只允许返回建模阶段一次。
-- [x] 第二次仍未通过则产出 blocked guidance，不进入计算。
-- [x] 用不可辨识参数、错误单位和数据不足三个 fixture 验证阻断。
+**退出证据**：2022 A 题 Q1-Q4 可由同一索引 IR 编译，不包含题名路由或硬编码周答案；若求解器不能证明质量则降级而非宣称最优。
 
-**退出证据**：故意注入的模型错误均在执行 `solve.py` 前被定位。
+### Phase 3：未来期预测
 
-**已验证**：不可辨识参数、错误单位和数据不足三个 fixture 均最多返回建模阶段一次，第二次审核失败后生成 blocked guidance，且未生成或执行 `solve.py`。五一 A 题问题一实测中，首版模型因缺少识别约束被退回，修订后第二次审核通过并完成真实 XLSX、Jupyter、PNG、数值复核与 guidance 输出。
+- [x] RED：预测算子必须输出未来指定时点，而不只是历史留出集；缺少未来索引、时序无序或样本不足时拒绝执行。
+- [x] GREEN：实现趋势/周期基函数候选与季节朴素基线，使用滚动起点评估选择模型并生成预测区间。
+- [x] GREEN：独立复算时间切分、未来索引、误差、基线比较、区间和参数敏感性。
 
-### Phase 3：复核与图片质量
+**退出证据**：Q5 可生成第105-112周逐周预测，并把预测证据传入同一 MILP，而不是把预测值写进提示词。
 
-**目的**：保证计算结果不只是“程序成功运行”。
+### Phase 4：真实题复测与回归
 
-- [x] 回归类结果检查拟合误差、残差和参数稳定性。
-- [x] 图片只保留数据概览、模型说明、结果拟合和复核诊断中确有必要的类型。
-- [x] guidance 中每张图绑定来源数据和结果 ID。
+- [x] RED-GREEN-REFACTOR：未来预测的敏感性变化超过声明阈值时，独立审核必须失败，不能只验证报告布尔值的一致性。
+- [x] RED-GREEN-REFACTOR：Core 结构校验允许运行时参数参与目标系数，复用运行时占位验证；实际执行仍严格物化和检查真实参数。
+- [x] RED-GREEN-REFACTOR：验证报告显式登记子题覆盖状态；即使已执行子集三层均通过，只要仍有阻断子题，整题报告必须保持 partial。
+- [x] RED：ModelIR 必须结构化登记建模假设、题面依据、影响范围、替代情景和敏感性检查；假设不得伪装为 locked fact，缺失替代情景或敏感性检查时 Reviewer 不得批准。
+- [x] GREEN：贯通 `ProblemSpec.uncertainties -> ModelIR assumptions -> ModelReview -> ClaimRecord.assumptions -> guidance.md`，允许在题意歧义但能力充分时给出明确标注的条件解，而不是误报算子能力不足。
+- [x] REFACTOR：生成 Draft 与 canonical ModelIR 使用同一假设语义，删除下游凭空拼接假设的路径，并确保旧 fixture 通过显式空假设迁移而非兼容分支。
+- [x] RED：索引生成合同必须拒绝大索引集逐值展开的目标项/约束和超出约束族预算的草稿，避免 104 期模型在生成阶段超时。
+- [x] GREEN：Core/Constraints 提示、Schema 预算和语义校验统一要求 `for_each + binder` 紧凑表达，仅允许少量显式边界项。
+- [x] REFACTOR：复用同一紧凑性校验器并保持 canonical ModelIR 的通用上限不变，删除生成层的重复判断。
+- [x] RED：Core 的索引维度/selector 错误必须在请求 Constraints 前失败；Draft 可省略字段为 `null` 时必须可规范化，但 canonical 合同仍拒绝 `null`。
+- [x] GREEN：实现 Draft 专用 selector/term/objective/constraint DTO 与单向 `promote()`，Core 和 Constraints 分别执行本阶段语义验证。
+- [x] REFACTOR：删除生成层对 canonical 子节点的直接复用和跨阶段错误归因，保持编译器只接收 strict canonical ModelIR。
+- [x] RED：selector Draft 的 JSON Schema 必须显式区分 binder 分支与 literal value 分支，不能只依赖响应后的 validator。
+- [x] GREEN：以两个 Draft selector 类型组成 union，分别要求 binder 或 value，并保持单向 promote 到 canonical `IndexSelector`。
+- [x] RED：Constraints 请求必须包含由已验证 Core 派生的紧凑符号目录，且不得包含 `dense_values`、目标项或完整 Core；生成的未知参数/变量仍必须确定性拒绝。
+- [x] GREEN：实现不可变 `ConstraintGenerationContext`，登记索引值、参数 ID/维度与变量 ID/维度/类型，并整体替换 Constraints 的完整 Core 输入。
+- [x] REFACTOR：完整 Core 只在系统侧参与 promote、展开与语义验证；统一符号目录构造和诊断，验证请求体缩减、合同回归与真实 Q2。
+- [x] REFACTOR：Core/Constraints 共用同一 selector union，删除运行时 XOR validator，验证 Schema、合同回归与真实 Q2。
+- [x] RED：同一内容请求首次发生项目请求超时时必须原样重试一次；任意业务 RuntimeError 与连续两次超时仍立即失败并留下诊断。
+- [x] GREEN：为 StructuredContractRequester 增加专用超时异常和每内容尝试一次的传输重试，不增加两次完整 JSON 生成上限。
+- [x] REFACTOR：诊断区分 content attempt 与 transport attempt，并保持失败、恢复和总超时测试确定性。
+- [x] RED：Modeler 与 Reviser 的系统提示必须包含同一份架构合同；Reviser 不得遗漏 indexed route 使用空 operators、假设来源和单子问题覆盖规则。
+- [x] GREEN：提取唯一共享架构合同，初建与修订仅组合各自职责后缀，删除两套重复且漂移的规则正文。
+- [x] REFACTOR：共享合同由单一构造边界注入并保持修订 payload 不变；运行合同回归、真实 Q2 修订和复审。
+- [x] RED：架构层声明的 decision/state/derived 变量若未映射到 indexed Core，或 Core 变量未参与目标/约束，必须在进入 Reviewer 前确定性失败。
+- [x] GREEN：实现通用架构/Core 变量覆盖与使用校验，不引入题名、变量名、最低约束数或赛题专用规则。
+- [x] REFACTOR：显式迁移通用 fixture，统一诊断并验证完整 Q2 能通过、不完整 v9 Q2 会被拒绝。
+- [x] RED：首次 review 的结构化整改要求必须传入 Reviser 与复审；缺少对应模型路径、要求未接受或路径不存在时，复审不得 approved。
+- [x] GREEN：实现带稳定 requirement ID、处置状态和 ModelIR 路径证据的修订谱系，并由确定性校验约束 approved。
+- [x] REFACTOR：Pipeline 保留首次 review 工件，统一初审/复审输入边界，并在 Guidance 与 ZIP 中公开修订闭环证据。
+- [x] RED：ProblemSpec 子问题仅含 title/brief_description 且 task_summary 超长时，Modeling 失败仍必须生成合法 blocked ModelIR、三层报告和 Guidance。
+- [x] GREEN：用有界、按字段优先级解析的子问题目标构造器替换 task_summary 兜底，不截断错误原因或恢复动作。
+- [x] REFACTOR：统一失败目标诊断并回归完整/简略 ProblemSpec，随后恢复真实题 Modeling 复测。
+- [x] RED：Modeler/Reviser 共享合同必须禁止把题面锁定事实包装成假设，并要求每条假设都有非空替代情景、敏感性检查；题意歧义必须精确引用 `problem_spec.json#uncertainties/<uncertainty_id>`。
+- [x] GREEN：在唯一共享架构合同中明确假设生成与来源引用规则，使初建和修订获得完全相同的约束。
+- [x] REFACTOR：回归空假设、标准建模约定和题意歧义三类路径，随后恢复真实题 Modeling 复测。
+- [x] RED：ProblemSpec 事实与歧义必须具有稳定 ID、精确 InputCatalog 来源、适用子问题和规范化语义键/值；非法来源、未知作用域及同键同作用域冲突必须确定性失败。
+- [x] RED：可解 ModelIR 必须逐项绑定适用 locked fact 到存在的模型 JSON 路径；遗漏、重复、未知事实或不存在路径不得进入 Reviewer。
+- [x] GREEN：以结构化 `LockedFactSpec`/`UncertaintySpec` 和 `FactBindingSpec` 整体替换字符串列表，并贯通 Decomposer、Modeler、Reviser 与确定性语义校验。
+- [x] REFACTOR：显式迁移 fixtures、失败降级、EvidenceProfile 一致性与 Guidance/ZIP 公开工件，删除旧字符串事实路径。
+- [x] RED：Guidance 工作流必须为 decomposition、architecture、indexed core、indexed constraints、review 暴露独立超时预算；标准模式 Constraints 不得继续继承 120 秒共享值，诊断必须记录实际预算。
+- [x] GREEN：用不可变分阶段预算整体替换 `WorkflowBudget.llm_timeout`，在各结构化请求边界注入对应预算。
+- [x] REFACTOR：删除 Guidance 的共享超时标量并回归 fast/standard/strict 三种模式、传输重试和超时诊断。
+- [x] RED-GREEN-REFACTOR：真实题 Modeling 长错误必须完整归档到 `modeling_failure.json`，正式 blocked 合同只保留有界摘要与诊断引用，失败降级不得再次触发字段长度校验。
+- [x] RED：任一子问题合同生成失败时，其他子问题仍须继续生成；失败题必须形成合法 `BlockedModelIR` 并引用独立完整诊断。
+- [x] GREEN：提取单子问题生成边界，以成功或阻断结果聚合完整 ModelIR；请求 payload 显式列出 `required_fact_ids`。
+- [x] REFACTOR：全局 Modeling 兜底只处理切片前灾难性失败，统一单题诊断命名、摘要和全 blocked/partial 回归。
+- [x] RED：索引参数必须支持绑定上游算子工件字段，合法预测→MILP 必须形成有序 DAG。
+- [x] GREEN：以静态证据/运行时工件参数来源 union 替换纯稠密参数边界，编译器为 MILP 生成参数绑定输入与模型模板。
+- [x] RED：编译阶段必须拒绝未知上游工件与组合执行图依赖环。
+- [x] GREEN：用统一工件生产者目录验证运行时参数来源，并把参数依赖纳入既有拓扑诊断。
+- [x] RED：MILP 运行时必须从上游工件精确物化参数、复核字段路径、索引长度与有限数值，再展开矩阵求解；缺值、NaN 和长度错误不得进入 SciPy。
+- [x] GREEN：扩展通用 MILP 运行时物化器与参数/结果溯源，不新增赛题专用算子。
+- [x] RED：Modeler 必须能生成同时含预测节点和 indexed model 的组合草稿；Draft 接受 RFC 6901 URI fragment 并单向规范化，canonical 仍只接受 `/` 指针。
+- [x] GREEN：整体替换互斥 `execution_route` 生成合同，Core/Constraints 继承运行时参数符号目录，Reviewer 能审核跨节点来源。
+- [x] REFACTOR：统一静态与动态索引展开、编译诊断、执行依赖和验证溯源，迁移 fixtures 并删除旧互斥路由规则。
+- [x] RED：Decomposer Draft 中混入 Unicode 的 fact/uncertainty/semantic 标识符必须可单向提升为稳定 ASCII canonical ID；所有子问题作用域引用必须同步，规范化碰撞必须确定性拒绝。
+- [x] GREEN：实现 `ProblemSpecGenerationDraft -> ProblemSpec` 单向提升并整体替换 Decomposer 对 strict canonical 的直接复用，不放宽 canonical 正则。
+- [x] REFACTOR：统一子问题、事实、歧义与 semantic key 的稳定标识符生成和碰撞诊断，迁移合同 fixtures 并删除生成层直接写 canonical 的路径。
+- [x] RED：纯 indexed canonical 模型不得要求重复的高层 `variables`；operator graph 与 forecast→MILP 组合模型必须通过类型化组件编译，旧平铺字段必须被 canonical Schema 拒绝。
+- [x] GREEN：以 `OperatorGraphExecutionComponent` / `IndexedLinearExecutionComponent` 整体替换 canonical `variables/operators/indexed_linear_model` 平铺字段，并迁移 compiler、execution、semantics 与 review。
+- [x] RED：架构 Draft 不得再提交预猜的 `fact_bindings.model_paths`；Core 参数、约束和算子节点必须登记来源 fact ID，最终组装必须生成真实路径并拒绝遗漏、未知、重复和不存在路径。
+- [x] GREEN：贯通节点级事实来源与最终 `FactBindingSpec` 组装，分阶段请求只接收本阶段未覆盖事实，Reviewer 只审核 canonical 真实路径。
+- [x] REFACTOR：迁移全部 ModelIR fixtures 与测试，删除平铺执行字段、`FactBindingDraft` 和架构阶段事实路径生成规则，统一组件遍历与事实路径诊断。
+- [x] RED-GREEN：真实题多事实子问题不得在建模压缩阶段截断 `locked_facts`/`uncertainties`；混合执行图候选可等待系统注入 MILP 节点，纯 operator graph 仍必须引用实际节点。
+- [x] REFACTOR：结构化事实和歧义完整进入子题作用域切片，候选节点引用校验按类型化执行组件语义统一，不增加题目专用路径。
+- [x] RED-GREEN：非零索引偏移的 Constraints 生成合同必须使用排除越界端点的辅助索引集，并以独立约束族表达首末期边界；确定性越界校验保持严格。
+- [x] RED：混合 ModelIR 中某题 blocked 时，另一题的 approved 决策必须形成显式可执行集合并实际产生数值结果；注册表同时保留已验证结果与阻断结果，最终状态为 `partial`。
+- [x] GREEN：以逐子题审核记录整体替换 `ModelIRReview`/`ApprovedModelIR` 全局门控，确定性派生整体 `approved`、`partial`、`revision_required` 或 `blocked`，拒绝遗漏、重复、未知或非法执行 ID。
+- [x] GREEN：Pipeline、Calculation、Verification 与 Guidance 只执行审核通过的 solvable 子题，并将未执行子题的审核/建模原因合并进同一三层验证和结果注册表。
+- [x] REFACTOR：删除 `CalculationStage requires an approved Model IR` 等全局短路，迁移审核 fixtures 与前端结果协议，确保 `partial` 不显示为整题完成。
+- [x] 重跑 2022 五一 A 题，审查 ProblemSpec、InputCatalog、EvidenceProfile、Model IR、执行计划、数值注册表、验证报告和 Guidance。
+- [x] RED：以强类型 `SubproblemSpec` 替换自由 `dict`，要求每题显式登记 `required_fact_ids`、`required_uncertainty_ids` 与前置子题依赖；未知、遗漏、跨作用域或循环引用必须在 Modeling 前失败。
+- [x] GREEN：贯通 `ProblemSpecGenerationDraft -> ProblemSpec -> Modeler` 的逐题事实/歧义/依赖投影，使数据来源、题面数值条件和上游结果具有唯一结构化入口。
+- [ ] REFACTOR：迁移 Decomposer/Modeler、fixtures 与失败合同，删除从 description 猜测事实或把 `data_source.id` 当 `fact_id` 的隐式路径，随后再次复跑 2022 五一 A 题。
+- [ ] 人工核对 Q1-Q4 状态转移、整数损毁、训练容量、阶梯成本及 Q5 两方案口径，不以求解器 success 代替数学审核。
+- [x] 运行完整后端测试、前端协议测试、生产构建、UTF-8、编译、旧链扫描、ZIP 和 `git diff --check`。
 
-**退出证据**：篡改参数或结果时，复核报告阻断；删除图片时，guidance 审计指出缺失。
+**2026-10-31 提交前验证**：三处审核回归新增的 5 项测试先确认 RED，再以最小实现转为 GREEN；Core 复用既有运行时占位校验，没有扩展执行兼容分支。完整后端 `pytest tests -q -p no:cacheprovider` 为 408 passed，包含真实附件 ZIP 与旧链架构守卫；前端 `node --experimental-strip-types --test tests/*.test.ts` 为 8 passed，`npm run build` 通过。57 个待提交文件通过严格 UTF-8 解码，48 个 Python 文件通过语法/编译检查，3 个 JSON 文件解析通过，BOM 未意外变化，`git diff --check` 通过。Windows 受限环境中的临时目录和 asyncio 本地连接影响测试，完整后端验证改在正常权限下运行。本次不宣称完成上方仍未勾选的真实题复跑和人工数学审核。
 
-**已验证**：回归结果同时复算拟合误差、残差与参数稳定性；25% 参数漂移被阻断。图片仅接受四类用途并要求 `source_data` 与 `linked_result_ids`；删除已登记图片后 guidance 审计为 BLOCK。五一 A 题真实 XLSX/Jupyter/PNG 端到端测试继续通过，复核与 guidance 审计均为 PASS。
+**退出证据**：完整输入不再被误报缺失；支持部分给出可复算数值，不支持部分准确写明缺少的算子或假设；前端不会把 partial/blocked 显示为整题完成。
 
-### Phase 4：真实题型扩展与旧链删除
+## 停止条件
 
-**目的**：垂直样例稳定后再扩展，不提前抽象通用框架。
+- SciPy `milp` 不可用或需要新增重型/商业依赖时，停止并单独提案。
+- 索引 IR 只能依靠赛题专用字段表达时，停止并重新设计通用语义。
+- 真实题提升只能靠题名、关键词或硬编码答案时，本路线判定失败。
 
-- [x] 增加一个优化题 fixture。
-- [x] 增加一个预测或评价题 fixture。
-- [x] 删除 `_legacy_paper_writing_workflow` 及 guidance 不再使用的旧修复代码。
-- [x] 保留 polish 所需代码并迁入独立边界。
+## 最终完成判据
 
-**退出证据**：三类真实题均走同一六阶段接口；guidance 调用图不再依赖旧写作 workflow。
-
-## 验证规则
-
-- 单元测试验证 schema、执行器、注册表和审计。
-- 集成测试使用真实 XLSX/CSV 文件，不只测试内存算术。
-- 端到端测试必须检查实际参数值、图表文件、复核结论和 Markdown 引用。
-- 每阶段完成后运行完整后端测试和前端构建。
-- Phase 1 不以 mock 全绿作为完成；必须包含一次真实 XLSX、真实 Jupyter 执行和真实 PNG 生成。
-
-## 红蓝对抗
-
-- **红队**：模型生成一份能运行但公式错误的程序，系统仍可能输出漂亮结果。
-- **蓝队**：独立模型审核、结果复核、基线/残差/约束检查和注册表共同阻断。
-- **残余风险**：审核模型本身也可能判断错误，因此必须保留代码、数据、参数来源和不确定性披露供人工复核。
-
-## 第一执行步骤
-
-提交 `GuidancePipeline` 模块级重构提案；批准后，用五一 A 题问题一证明完整链路能够真实读取附件、完成最小二乘拟合、产出参数表、残差指标、说明图和可复核 Markdown。
+1. blocked、failed、partial、verified 的所有路径均满足同一三层验证合同。
+2. DOCX/PDF 题面内嵌表格和外部数据文件进入同一证据目录。
+3. Q1-Q4 使用通用索引 MILP，Q5 使用通用未来期预测与同一优化链。
+4. 每个正式数值都能追踪到原始单元格、IR 节点、算子版本和独立验证。
+5. 仓库没有题目专用生产模板、任意代码执行或旧新双轨。
+6. 全量回归、真实附件、ZIP、前端构建和人工数学审查全部通过。

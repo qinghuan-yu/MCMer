@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-import asyncio
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Generic, TypeVar
@@ -30,6 +30,10 @@ class ContractGenerationError(RuntimeError):
     """Raised after both complete contract generations fail validation."""
 
 
+class ContractRequestTimeout(RuntimeError):
+    """Raised when one project-bounded LLM transport attempt times out."""
+
+
 class StructuredContractRequester(Generic[ModelT]):
     def __init__(
         self,
@@ -41,6 +45,7 @@ class StructuredContractRequester(Generic[ModelT]):
         artifact_dir: Path | None = None,
         enrich_payload: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         semantic_validator: Callable[[ModelT], None] | None = None,
+        request_timeout: int | float | None = None,
     ) -> None:
         self.llm = llm
         self.model_type = model_type
@@ -49,24 +54,52 @@ class StructuredContractRequester(Generic[ModelT]):
         self.artifact_dir = artifact_dir
         self.enrich_payload = enrich_payload
         self.semantic_validator = semantic_validator
+        self.request_timeout = (
+            request_timeout
+            if request_timeout is not None
+            else getattr(llm, "request_timeout", None)
+        )
 
     async def request(self, payload: Any) -> ModelT:
-        attempts: list[dict[str, str | int]] = []
+        attempts: list[dict[str, Any]] = []
         history = self._initial_history(payload)
 
         for attempt_number in (1, 2):
-            try:
-                response = await self._chat_once(
-                    history=history,
-                    tools=None,
-                    tool_choice="none",
-                    agent_name=self.agent_name,
-                    sub_title=self.agent_name,
-                )
-            except Exception as exc:
-                attempts.append(_attempt_record(attempt_number, "", exc))
-                self._write_diagnostic(attempts, status="failed")
-                raise
+            for transport_attempt in (1, 2):
+                try:
+                    response = await self._chat_once(
+                        history=history,
+                        tools=None,
+                        tool_choice="none",
+                        agent_name=self.agent_name,
+                        sub_title=self.agent_name,
+                    )
+                except ContractRequestTimeout as exc:
+                    attempts.append(_attempt_record(
+                        attempt_number,
+                        "",
+                        exc,
+                        transport_attempt=transport_attempt,
+                        request_timeout=self.request_timeout,
+                    ))
+                    self._write_diagnostic(
+                        attempts,
+                        status="retrying" if transport_attempt == 1 else "failed",
+                    )
+                    if transport_attempt == 2:
+                        raise
+                    continue
+                except Exception as exc:
+                    attempts.append(_attempt_record(
+                        attempt_number,
+                        "",
+                        exc,
+                        transport_attempt=transport_attempt,
+                        request_timeout=self.request_timeout,
+                    ))
+                    self._write_diagnostic(attempts, status="failed")
+                    raise
+                break
             raw_response = str(response.choices[0].message.content or "")
             try:
                 parsed = _extract_json(raw_response)
@@ -76,7 +109,13 @@ class StructuredContractRequester(Generic[ModelT]):
                 if self.semantic_validator is not None:
                     self.semantic_validator(contract)
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                attempts.append(_attempt_record(attempt_number, raw_response, exc))
+                attempts.append(_attempt_record(
+                    attempt_number,
+                    raw_response,
+                    exc,
+                    transport_attempt=transport_attempt,
+                    request_timeout=self.request_timeout,
+                ))
                 self._write_diagnostic(attempts, status="retrying" if attempt_number == 1 else "failed")
                 if attempt_number == 2:
                     raise ContractGenerationError(
@@ -90,25 +129,28 @@ class StructuredContractRequester(Generic[ModelT]):
                 )
                 continue
 
-            if attempts:
-                attempts.append({
-                    "attempt": attempt_number,
-                    "raw_response": raw_response,
-                    "status": "valid",
-                })
-                self._write_diagnostic(attempts, status="recovered")
+            attempts.append({
+                "attempt": attempt_number,
+                "transport_attempt": transport_attempt,
+                "status": "valid",
+                "request_timeout_seconds": self.request_timeout,
+            })
+            self._write_diagnostic(
+                attempts,
+                status="valid" if len(attempts) == 1 else "recovered",
+            )
             return contract
 
         raise AssertionError("contract request attempt loop did not return")
 
     async def _chat_once(self, **kwargs: Any) -> Any:
-        timeout = getattr(self.llm, "request_timeout", None)
+        timeout = self.request_timeout
         if timeout is None:
             return await self.llm.chat(**kwargs)
         try:
             return await asyncio.wait_for(self.llm.chat(**kwargs), timeout=float(timeout))
         except asyncio.TimeoutError as exc:
-            raise RuntimeError(
+            raise ContractRequestTimeout(
                 f"{self.agent_name}: request timed out after {timeout}s"
             ) from exc
 
@@ -134,7 +176,6 @@ class StructuredContractRequester(Generic[ModelT]):
             "target_schema": self.model_type.model_json_schema(),
             "validation_error_type": type(error).__name__,
             "validation_error": str(error),
-            "previous_invalid_response": raw_response,
             "original_input": original_payload,
         }
         return [
@@ -150,7 +191,7 @@ class StructuredContractRequester(Generic[ModelT]):
             {"role": "user", "content": json.dumps(correction, ensure_ascii=False)},
         ]
 
-    def _write_diagnostic(self, attempts: list[dict[str, str | int]], *, status: str) -> None:
+    def _write_diagnostic(self, attempts: list[dict[str, Any]], *, status: str) -> None:
         if self.artifact_dir is None:
             return
         directory = self.artifact_dir / "contract_diagnostics"
@@ -162,6 +203,7 @@ class StructuredContractRequester(Generic[ModelT]):
                     "agent_name": self.agent_name,
                     "contract": self.model_type.__name__,
                     "status": status,
+                    "request_timeout_seconds": self.request_timeout,
                     "attempts": attempts,
                 },
                 ensure_ascii=False,
@@ -171,12 +213,21 @@ class StructuredContractRequester(Generic[ModelT]):
         )
 
 
-def _attempt_record(attempt: int, raw_response: str, error: Exception) -> dict[str, str | int]:
+def _attempt_record(
+    attempt: int,
+    raw_response: str,
+    error: Exception,
+    *,
+    transport_attempt: int,
+    request_timeout: int | float | None,
+) -> dict[str, Any]:
     return {
         "attempt": attempt,
+        "transport_attempt": transport_attempt,
         "raw_response": raw_response,
         "error_type": type(error).__name__,
         "error": str(error),
+        "request_timeout_seconds": request_timeout,
     }
 
 

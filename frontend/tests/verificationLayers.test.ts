@@ -40,6 +40,21 @@ test('guidance result title describes the weakest layer instead of workflow comp
 })
 
 
+test('partial task status takes precedence over passing executed layers', () => {
+  assert.equal(
+    guidanceResultTitle(
+      {
+        execution_verified: 'passed',
+        evidence_supported: 'passed',
+        model_adequate: 'passed',
+      },
+      'partial',
+    ),
+    '部分子题已完成',
+  )
+})
+
+
 test('chat result card renders every verification layer instead of a completion badge', () => {
   const source = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
 
@@ -48,6 +63,7 @@ test('chat result card renders every verification layer instead of a completion 
   assert.match(source, /layer\.label/)
   assert.match(source, /layer\.statusLabel/)
   assert.doesNotMatch(source, /方案完成/)
+  assert.match(source, /guidanceResultTitle\(props\.result\?\.verification_layers,\s*props\.result\?\.status\)/)
 })
 
 
@@ -70,6 +86,12 @@ test('workflow completion labels do not imply mathematical completion', () => {
   assert.doesNotMatch(historySource, /completed: '已完成'/)
   assert.match(appSource, /completed: '流程已结束'/)
   assert.match(historySource, /completed: '流程已结束'/)
+  assert.match(appSource, /partial: '部分子题已完成'/)
+  assert.match(appSource, /blocked: '流程已阻断'/)
+  assert.match(historySource, /partial: '部分子题已完成'/)
+  assert.match(historySource, /blocked: '流程已阻断'/)
+  assert.match(appSource, /taskStatus\.value = String\(terminalMessage\.data\.status \|\| 'completed'\)/)
+  assert.match(appSource, /taskStatus\.value = String\(msg\.data\?\.status \|\| 'completed'\)/)
 })
 
 

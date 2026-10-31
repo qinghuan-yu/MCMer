@@ -47,6 +47,7 @@ def test_unknown_capability_is_blocked_as_missing_operator_without_llm() -> None
         EquationSpec,
         FinalAnswerSpec,
         ModelIR,
+        OperatorGraphExecutionComponent,
         OperatorInvocation,
         SolvableModelIR,
         SymbolExpression,
@@ -64,22 +65,34 @@ def test_unknown_capability_is_blocked_as_missing_operator_without_llm() -> None
                 execution_status="solvable",
                 subproblem_id="problem1",
                 objective="Estimate a latent field from indirect observations.",
-                variables=[
-                    VariableSpec(
-                        id="observations",
-                        role="observed",
-                        symbol="y",
-                        unit="dimensionless",
-                        shape=["sample"],
-                    ),
-                    VariableSpec(
-                        id="latent_field",
-                        role="state",
-                        symbol="x",
-                        unit="dimensionless",
-                        shape=["sample"],
-                    ),
-                ],
+                execution_components=[OperatorGraphExecutionComponent(
+                    kind="operator_graph",
+                    component_id="inverse_graph",
+                    variables=[
+                        VariableSpec(
+                            id="observations",
+                            role="observed",
+                            symbol="y",
+                            unit="dimensionless",
+                            shape=["sample"],
+                        ),
+                        VariableSpec(
+                            id="latent_field",
+                            role="state",
+                            symbol="x",
+                            unit="dimensionless",
+                            shape=["sample"],
+                        ),
+                    ],
+                    operators=[
+                        OperatorInvocation(
+                            node_id="inverse_step",
+                            operator_id="inverse.spectral_reconstruction",
+                            inputs={"observations": "data.measurements"},
+                            outputs=["latent_field"],
+                        )
+                    ],
+                )],
                 data=[
                     DataReference(
                         id="measurements",
@@ -94,14 +107,8 @@ def test_unknown_capability_is_blocked_as_missing_operator_without_llm() -> None
                         right=SymbolExpression(symbol="latent_field"),
                     )
                 ],
-                operators=[
-                    OperatorInvocation(
-                        node_id="inverse_step",
-                        operator_id="inverse.spectral_reconstruction",
-                        inputs={"observations": "data.measurements"},
-                        outputs=["latent_field"],
-                    )
-                ],
+                assumptions=[],
+                fact_bindings=[],
                 candidate_models=[
                     CandidateModel(
                         id="direct_baseline",
