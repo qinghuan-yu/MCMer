@@ -1,120 +1,17 @@
-"""DocumentFinalizer — unified export outlet for all final documents.
-
-Every ``res.md``, ``res.docx``, ``res_vN.docx``, and failure report must
-go through this module.  It handles:
-- Image reference normalisation
-- Image whitelist enforcement
-- Markdown writing
-- DOCX export
-- DOCX media validation
-- ``res.json`` writing
-- Revision version inheritance
-- Failure report export
-"""
+"""exporters responsibilities."""
 
 from __future__ import annotations
 
-import json
-import os
-import re
 import asyncio
-import shutil
-import zipfile
 from pathlib import Path
 from typing import Any
-
-from app.utils.common_utils import (
-    finalize_markdown_export,
-    normalize_math_markdown,
-    save_json,
-)
-from app.utils.figure_artifacts import normalize_artifact_path
+from app.utils.document_export import finalize_markdown_export
+from app.utils.markdown import normalize_math_markdown
+from app.utils.file_io import save_json
 from app.utils.log_util import logger
-
-
-_TOOL_PROTOCOL_RE = re.compile(
-    r"(<\s*[｜|]+\s*DSML\s*[｜|]+|</\s*[｜|]+\s*DSML\s*[｜|]+|"
-    r"\btool_calls\b|invoke\s+name\s*=|parameter\s+name\s*=|run_script)",
-    re.IGNORECASE,
-)
-
-_COVERAGE_DISCLOSURE_TERMS = (
-    "partial coverage",
-    "partial result",
-    "blocked",
-    "interrupted",
-    "incomplete",
-    "limitation",
-    "limited",
-    "provisional",
-    "salvaged",
-    "pending review",
-    "部分覆盖",
-    "部分结果",
-    "被阻断",
-    "阻断",
-    "中断",
-    "未完成",
-    "未能",
-    "无法",
-    "受限",
-    "局限",
-    "保全",
-    "待复核",
-    "需复核",
-    "临时结果",
-    "降级",
-)
-
-_RESULT_OVERVIEW_FORBIDDEN_TERMS = (
-    "fitting_curve",
-    "residual_plot",
-    "comparison_bar",
-    "mechanism",
-    "workflow",
-    "fitted curve",
-    "residual plot",
-    "model shape",
-    "curve shape",
-    "function shape",
-    "拟合曲线",
-    "拟合函数",
-    "函数曲线",
-    "函数整体形态",
-    "整体形态",
-    "残差图",
-    "对比柱状图",
-    "机理图",
-    "流程图",
-    "平直线",
-    "正弦波动",
-    "正弦周期",
-    "波峰",
-    "波谷",
-)
-
-
-def _contains_tool_protocol_text(content: str) -> bool:
-    if not content:
-        return False
-    matches = _TOOL_PROTOCOL_RE.findall(content)
-    if any("DSML" in str(match).upper() for match in matches):
-        return True
-    lowered = content.lower()
-    return (
-        "tool_calls" in lowered
-        and ("invoke name" in lowered or "parameter name" in lowered or "run_script" in lowered)
-    )
-
-
-class FinalizationValidationError(ValueError):
-    """Machine-readable finalization validation failure."""
-
-    def __init__(self, message: str, error_code: str, details: dict[str, Any] | None = None):
-        super().__init__(message)
-        self.error_code = error_code
-        self.error_type = "finalizer_validation"
-        self.details = details or {}
+from app.artifacts.document_images import _enforce_whitelist, _normalize_image_refs, _validate_image_references
+from app.artifacts.document_outputs import _remove_docx_outputs, _safe_artifact_basename, _skip_docx_export, _write_compat_aliases, append_guidance_audit_appendix
+from app.artifacts.document_validation import FinalizationValidationError, _contains_tool_protocol_text, _validate_coverage_disclosure, _validate_result_overview_semantics
 
 
 class DocumentFinalizer:
@@ -151,15 +48,15 @@ class DocumentFinalizer:
                 error_code="FINALIZER_TOOL_PROTOCOL_LEAK",
             )
         normalized = normalize_math_markdown(paper_content)
-        normalized = DocumentFinalizer.append_guidance_audit_appendix(normalized, result_payload)
-        normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
-        DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
-        normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
-        DocumentFinalizer._validate_coverage_disclosure(normalized, result_payload)
-        DocumentFinalizer._validate_result_overview_semantics(normalized, result_payload)
+        normalized = append_guidance_audit_appendix(normalized, result_payload)
+        normalized = _normalize_image_refs(work_dir, normalized, allowed_images)
+        _validate_image_references(work_dir, normalized, allowed_images, required_images)
+        normalized = _enforce_whitelist(normalized, allowed_images)
+        _validate_coverage_disclosure(normalized, result_payload)
+        _validate_result_overview_semantics(normalized, result_payload)
 
         # ── Determine output paths ─────────────────────────────────────
-        safe_basename = DocumentFinalizer._safe_artifact_basename(artifact_basename)
+        safe_basename = _safe_artifact_basename(artifact_basename)
         if version is not None and version > 0:
             paper_path = str(root / f"res_v{version}.md")
             docx_path = str(root / f"res_v{version}.docx")
@@ -174,16 +71,16 @@ class DocumentFinalizer:
         save_json(result_payload, str(root / "res.json"))
 
         # ── Write markdown and export DOCX ─────────────────────────────
-        if DocumentFinalizer._skip_docx_export(result_payload, safe_basename):
+        if _skip_docx_export(result_payload, safe_basename):
             Path(paper_path).write_text(normalized, encoding="utf-8")
-            DocumentFinalizer._remove_docx_outputs(root, docx_path)
+            _remove_docx_outputs(root, docx_path)
             docx_path = ""
         else:
             docx_ok = finalize_markdown_export(paper_path, normalized, docx_path, allowed_images)
             if not docx_ok:
                 logger.warning("DOCX export failed for %s", paper_path)
                 docx_path = ""
-        DocumentFinalizer._write_compat_aliases(root, safe_basename, paper_path, docx_path)
+        _write_compat_aliases(root, safe_basename, paper_path, docx_path)
 
         return paper_path, docx_path, notebook_path
 
@@ -251,8 +148,8 @@ class DocumentFinalizer:
                     "DocumentFinalizer.finalize() cannot save notebook in async context; "
                     "use DocumentFinalizer.finalize_async()."
                 )
-        DocumentFinalizer._validate_coverage_disclosure(paper_content, result_payload)
-        DocumentFinalizer._validate_result_overview_semantics(paper_content, result_payload)
+        _validate_coverage_disclosure(paper_content, result_payload)
+        _validate_result_overview_semantics(paper_content, result_payload)
 
         # ── Normalise markdown ─────────────────────────────────────────
         if _contains_tool_protocol_text(paper_content):
@@ -261,13 +158,13 @@ class DocumentFinalizer:
                 error_code="FINALIZER_TOOL_PROTOCOL_LEAK",
             )
         normalized = normalize_math_markdown(paper_content)
-        normalized = DocumentFinalizer.append_guidance_audit_appendix(normalized, result_payload)
-        normalized = DocumentFinalizer._normalize_image_refs(work_dir, normalized, allowed_images)
-        DocumentFinalizer._validate_image_references(work_dir, normalized, allowed_images, required_images)
-        normalized = DocumentFinalizer._enforce_whitelist(normalized, allowed_images)
+        normalized = append_guidance_audit_appendix(normalized, result_payload)
+        normalized = _normalize_image_refs(work_dir, normalized, allowed_images)
+        _validate_image_references(work_dir, normalized, allowed_images, required_images)
+        normalized = _enforce_whitelist(normalized, allowed_images)
 
         # ── Determine output paths ─────────────────────────────────────
-        safe_basename = DocumentFinalizer._safe_artifact_basename(artifact_basename)
+        safe_basename = _safe_artifact_basename(artifact_basename)
         if version is not None and version > 0:
             paper_path = str(root / f"res_v{version}.md")
             docx_path = str(root / f"res_v{version}.docx")
@@ -282,121 +179,24 @@ class DocumentFinalizer:
         save_json(result_payload, str(root / "res.json"))
 
         # ── Write markdown and export DOCX ─────────────────────────────
-        if DocumentFinalizer._skip_docx_export(result_payload, safe_basename):
+        if _skip_docx_export(result_payload, safe_basename):
             Path(paper_path).write_text(normalized, encoding="utf-8")
-            DocumentFinalizer._remove_docx_outputs(root, docx_path)
+            _remove_docx_outputs(root, docx_path)
             docx_path = ""
         else:
             docx_ok = finalize_markdown_export(paper_path, normalized, docx_path, allowed_images)
             if not docx_ok:
                 logger.warning("DOCX export failed for %s", paper_path)
                 docx_path = ""
-        DocumentFinalizer._write_compat_aliases(root, safe_basename, paper_path, docx_path)
+        _write_compat_aliases(root, safe_basename, paper_path, docx_path)
 
         return paper_path, docx_path, notebook_path
 
-    @staticmethod
-    def _safe_artifact_basename(value: str) -> str:
-        """Limit custom primary document names to simple local basenames."""
-        name = str(value or "res").strip().lower()
-        if not re.fullmatch(r"[a-z0-9_-]+", name):
-            return "res"
-        return name
 
-    @staticmethod
-    def _skip_docx_export(result_payload: dict[str, Any], artifact_basename: str) -> bool:
-        """Guidance deliverables are Markdown-first and intentionally skip DOCX."""
-        if artifact_basename == "guidance":
-            return True
-        if isinstance(result_payload, dict):
-            return result_payload.get("primary_artifact_type") == "guidance"
-        return False
 
-    @staticmethod
-    def append_guidance_audit_appendix(markdown: str, result_payload: dict[str, Any] | None) -> str:
-        """Append a compact parameter/source table for machine auditability."""
-        if not isinstance(result_payload, dict):
-            return markdown
-        if result_payload.get("primary_artifact_type") != "guidance":
-            return markdown
-        if "机器可审计参数附录" in markdown:
-            return markdown
 
-        guidance_context = result_payload.get("guidance_context")
-        if not isinstance(guidance_context, dict):
-            return markdown
-        parameter_registry = guidance_context.get("parameter_registry")
-        if not isinstance(parameter_registry, dict):
-            return markdown
-        parameters = parameter_registry.get("parameters")
-        if not isinstance(parameters, list) or not parameters:
-            return markdown
 
-        rows = [
-            "\n\n## 机器可审计参数附录\n",
-            "\n| 参数ID | 符号 | 名称 | 取值 | 来源类型 | 来源位置 | 信任状态 | 关联结果 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-        ]
-        for parameter in parameters:
-            if not isinstance(parameter, dict):
-                continue
-            rows.append(
-                "| "
-                + " | ".join(
-                    [
-                        DocumentFinalizer._escape_table_cell(parameter.get("id")),
-                        DocumentFinalizer._escape_table_cell(parameter.get("symbol")),
-                        DocumentFinalizer._escape_table_cell(parameter.get("name")),
-                        DocumentFinalizer._escape_table_cell(parameter.get("value")),
-                        DocumentFinalizer._escape_table_cell(parameter.get("source_type")),
-                        DocumentFinalizer._escape_table_cell(parameter.get("source_ref") or parameter.get("source_location")),
-                        DocumentFinalizer._escape_table_cell(parameter.get("trust_status")),
-                        DocumentFinalizer._escape_table_cell(parameter.get("linked_result_ids")),
-                    ]
-                )
-                + " |"
-            )
-        return markdown.rstrip() + "\n" + "\n".join(rows) + "\n"
 
-    @staticmethod
-    def _escape_table_cell(value: Any) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, (dict, list)):
-            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
-        else:
-            text = str(value)
-        return text.replace("\n", " ").replace("|", "\\|")
-
-    @staticmethod
-    def _write_compat_aliases(root: Path, artifact_basename: str, paper_path: str, docx_path: str) -> None:
-        """Keep legacy res.* consumers working while newer tasks use guidance.*."""
-        if artifact_basename == "res":
-            return
-
-        compat_md = root / "res.md"
-        compat_docx = root / "res.docx"
-        try:
-            shutil.copyfile(paper_path, compat_md)
-            if docx_path and Path(docx_path).exists():
-                shutil.copyfile(docx_path, compat_docx)
-            elif compat_docx.exists():
-                compat_docx.unlink()
-        except Exception as exc:
-            logger.warning("Failed to write legacy res.* aliases for %s: %s", paper_path, exc)
-
-    @staticmethod
-    def _remove_docx_outputs(root: Path, docx_path: str) -> None:
-        """Remove stale DOCX files when an artifact is Markdown-only."""
-        candidates = [root / "res.docx"]
-        if docx_path:
-            candidates.append(Path(docx_path))
-        for candidate in candidates:
-            try:
-                if candidate.exists():
-                    candidate.unlink()
-            except Exception as exc:
-                logger.warning("Failed to remove stale DOCX artifact %s: %s", candidate, exc)
 
     @staticmethod
     def export_failure_report(
@@ -488,227 +288,7 @@ class DocumentFinalizer:
 
         return md_path, docx_path if Path(docx_path).exists() else ""
 
-    @staticmethod
-    def _writer_context_from_payload(result_payload: dict[str, Any] | None) -> dict[str, Any]:
-        """Return the final writer context embedded in a result payload."""
-        if not isinstance(result_payload, dict):
-            return {}
 
-        direct_context = result_payload.get("writer_context")
-        if isinstance(direct_context, dict):
-            return direct_context
 
-        stages = result_payload.get("stages")
-        if isinstance(stages, dict):
-            stage_context = stages.get("writer_context")
-            if isinstance(stage_context, dict):
-                return stage_context
-
-        return {}
-
-    @staticmethod
-    def _validate_coverage_disclosure(markdown: str, result_payload: dict[str, Any] | None) -> None:
-        """Require partial-coverage papers to disclose that status in the final text."""
-        writer_context = DocumentFinalizer._writer_context_from_payload(result_payload)
-        diagnostics = writer_context.get("coverage_diagnostics")
-        if not isinstance(diagnostics, dict):
-            return
-        if not diagnostics.get("must_disclose_partial"):
-            return
-
-        normalized_text = (markdown or "").lower()
-        if any(term.lower() in normalized_text for term in _COVERAGE_DISCLOSURE_TERMS):
-            return
-
-        details = {
-            "coverage_status": diagnostics.get("coverage_status"),
-            "blocked_count": diagnostics.get("blocked_count"),
-            "verified_count": diagnostics.get("verified_count"),
-            "provisional_verified_count": diagnostics.get("provisional_verified_count"),
-        }
-        raise FinalizationValidationError(
-            "Final paper must disclose partial coverage, blocked results, or provisional results.",
-            error_code="FINALIZER_MISSING_COVERAGE_DISCLOSURE",
-            details=details,
-        )
-
-    @staticmethod
-    def _validate_result_overview_semantics(markdown: str, result_payload: dict[str, Any] | None) -> None:
-        """Reject text that relabels a numeric result overview as another figure type."""
-        writer_context = DocumentFinalizer._writer_context_from_payload(result_payload)
-        available = writer_context.get("available_figures")
-        if not isinstance(available, list):
-            return
-
-        overview_paths = {
-            normalize_artifact_path(item.get("path"))
-            for item in available
-            if isinstance(item, dict)
-            and str(item.get("semantic_role") or item.get("figure_role") or "").strip().lower()
-            in {"result_overview", "data_overview"}
-            and str(item.get("path") or "").strip()
-        }
-        if not overview_paths:
-            return
-
-        content = markdown or ""
-        for match in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", content):
-            raw_target = match.group(1).strip().strip("<>")
-            target = normalize_artifact_path(raw_target.split(" ", 1)[0].strip("'\""))
-            if target not in overview_paths:
-                continue
-
-            start = max(0, match.start() - 500)
-            end = min(len(content), match.end() + 900)
-            context = content[start:end].lower()
-            matched_terms = [
-                term for term in _RESULT_OVERVIEW_FORBIDDEN_TERMS
-                if term.lower() in context
-            ]
-            if matched_terms:
-                raise FinalizationValidationError(
-                    "Result overview figures may only be described as labeled numeric summaries.",
-                    error_code="FINALIZER_RESULT_OVERVIEW_RELABEL",
-                    details={"path": target, "matched_terms": matched_terms[:5]},
-                )
 
     # ── Internal helpers ───────────────────────────────────────────────
-
-    @staticmethod
-    def _normalize_image_refs(
-        work_dir: str,
-        markdown: str,
-        allowed_images: list[str] | None,
-    ) -> str:
-        """Normalise image references to match allowed paths."""
-        if not allowed_images or not markdown:
-            return markdown
-
-        allowed = {normalize_artifact_path(p) for p in allowed_images if str(p).strip()}
-        by_name = {Path(p).name: p for p in allowed}
-        pattern = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
-
-        def _replace(m: re.Match[str]) -> str:
-            alt = m.group(1)
-            raw = normalize_artifact_path(m.group(2).strip().strip("<>"))
-            if raw in allowed:
-                return m.group(0)
-            rel = by_name.get(Path(raw).name)
-            if rel:
-                return f"![{alt}]({rel})"
-            return m.group(0)
-
-        return pattern.sub(_replace, markdown)
-
-    @staticmethod
-    def _enforce_whitelist(
-        markdown: str,
-        allowed_images: list[str] | None,
-    ) -> str:
-        """Remove image references not in the whitelist."""
-        if allowed_images is None:
-            return markdown
-        allowed = {normalize_artifact_path(p) for p in allowed_images if str(p).strip()}
-        if not allowed:
-            return re.sub(r"(?m)^\s*!\[[^\]]*\]\([^)]+\)\s*$\n?", "", markdown or "")
-
-        def _strip_title(raw: str) -> str:
-            target = raw.strip()
-            if target.startswith("<"):
-                end = target.find(">")
-                if end != -1:
-                    return target[1:end].strip()
-            for sep in (' "', " '"):
-                if sep in target:
-                    return target.split(sep, 1)[0].strip()
-            return target
-
-        def _replace(m: re.Match[str]) -> str:
-            raw = normalize_artifact_path(_strip_title(m.group(2)))
-            return m.group(0) if raw in allowed else ""
-
-        return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", _replace, markdown or "")
-
-    @staticmethod
-    def _extract_markdown_image_targets(markdown: str) -> list[str]:
-        """Extract normalized image targets from Markdown image syntax."""
-        if not markdown:
-            return []
-
-        def _strip_title(raw: str) -> str:
-            target = raw.strip()
-            if target.startswith("<"):
-                end = target.find(">")
-                if end != -1:
-                    return target[1:end].strip()
-            for sep in (' "', " '"):
-                if sep in target:
-                    return target.split(sep, 1)[0].strip()
-            return target
-
-        targets: list[str] = []
-        for match in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", markdown):
-            raw = _strip_title(match.group(1))
-            normalized = normalize_artifact_path(raw)
-            if normalized:
-                targets.append(normalized)
-        return targets
-
-    @staticmethod
-    def _validate_image_references(
-        work_dir: str,
-        markdown: str,
-        allowed_images: list[str] | None,
-        required_images: list[str] | None,
-    ) -> None:
-        """Hard-validate Markdown image references before export.
-
-        Rules:
-        - If ``allowed_images`` is not None, every referenced image must be in whitelist.
-        - Every referenced image must exist on disk under work_dir.
-        """
-        refs = DocumentFinalizer._extract_markdown_image_targets(markdown)
-        if not refs and not required_images:
-            return
-
-        allowed = None
-        if allowed_images is not None:
-            allowed = {
-                normalize_artifact_path(path)
-                for path in allowed_images
-                if str(path).strip()
-            }
-            disallowed = [path for path in refs if path not in allowed]
-            if disallowed:
-                raise FinalizationValidationError(
-                    "Markdown references images outside FigureBundle whitelist: "
-                    + ", ".join(disallowed),
-                    error_code="FINALIZER_UNWHITELISTED_IMAGE_REF",
-                    details={"paths": disallowed},
-                )
-
-        missing = [
-            path
-            for path in refs
-            if not (Path(work_dir) / path).exists()
-        ]
-        if missing:
-            raise FinalizationValidationError(
-                "Markdown references missing image files: " + ", ".join(missing),
-                error_code="FINALIZER_MISSING_IMAGE_REF",
-                details={"paths": missing},
-            )
-
-        if required_images:
-            required = {
-                normalize_artifact_path(path)
-                for path in required_images
-                if str(path).strip()
-            }
-            not_referenced = [path for path in required if path not in set(refs)]
-            if not_referenced:
-                raise FinalizationValidationError(
-                    "Markdown is missing required figure references: " + ", ".join(not_referenced),
-                    error_code="FINALIZER_REQUIRED_IMAGE_NOT_REFERENCED",
-                    details={"paths": not_referenced},
-                )

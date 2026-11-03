@@ -523,3 +523,178 @@ def test_generic_multiperiod_inventory_fixture_closes_delay_state_and_tiered_cos
     assert all(check.status == "passed" for check in assessment.checks.values())
     parameter_ids = {item["parameter_id"] for item in solution["provenance"]}
     assert {"demand", "loss", "maintenance", "tier_one_cost", "tier_two_cost"} <= parameter_ids
+
+
+def test_static_parameter_tampered_values_are_rejected_against_locked_facts_and_evidence_tables() -> None:
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.evidence_consistency import validate_model_evidence_consistency
+
+    problem_spec = ProblemSpec.model_validate({
+        "task_summary": "Verify static parameter values against raw locked facts and tables.",
+        "subproblems": [{
+            "id": "finite_horizon_allocation",
+            "objective": "Minimize indexed acquisition cost subject to state conservation.",
+            "required_fact_ids": [
+                "fact.unit_cost_p1",
+                "fact.unit_cost_p2",
+                "fact.demand_table",
+            ],
+            "required_uncertainty_ids": [],
+            "depends_on_subproblem_ids": [],
+        }],
+        "data_sources": [{
+            "id": "demand_table",
+            "description": "Registered period cost and demand table.",
+            "source_ref": "input_catalog.json#table-1",
+        }],
+        "locked_facts": [
+            {
+                "fact_id": "fact.unit_cost_p1",
+                "statement": "Unit cost in period p1 is 2.0.",
+                "source_refs": ["input_catalog.json#paragraph-1"],
+                "subproblem_ids": ["finite_horizon_allocation"],
+                "semantic_key": "cost.unit_p1",
+                "value": 2.0,
+                "unit": "yuan/unit",
+            },
+            {
+                "fact_id": "fact.unit_cost_p2",
+                "statement": "Unit cost in period p2 is 3.0.",
+                "source_refs": ["input_catalog.json#paragraph-1"],
+                "subproblem_ids": ["finite_horizon_allocation"],
+                "semantic_key": "cost.unit_p2",
+                "value": 3.0,
+                "unit": "yuan/unit",
+            },
+            {
+                "fact_id": "fact.demand_table",
+                "statement": "Period demand comes from table-1.",
+                "source_refs": ["input_catalog.json#table-1"],
+                "subproblem_ids": ["finite_horizon_allocation"],
+                "semantic_key": "demand.table",
+                "value": "registered_dataset",
+                "unit": "unit",
+            },
+        ],
+        "uncertainties": [],
+    })
+    evidence_profile = {
+        "schema_version": "1.0",
+        "evidence": [{
+            "evidence_id": "question.table.1",
+            "kind": "embedded_table",
+            "source_ref": "input_catalog.json#table-1",
+            "source_file": "inputs/problem.docx",
+            "labels": ["Table 1"],
+            "sha256": "a" * 64,
+            "size_bytes": 64,
+            "rows": [
+                ["period", "unit_cost", "demand"],
+                ["p1", "2.0", "4.0"],
+                ["p2", "3.0", "5.0"],
+            ],
+            "profile": {"row_count": 3, "column_count": 3},
+        }],
+    }
+
+    valid_payload = _payload()
+    valid_model = _indexed_model(valid_payload)
+    valid_model["parameters"][0]["source_fact_ids"] = [
+        "fact.unit_cost_p1",
+        "fact.unit_cost_p2",
+    ]
+    valid_model["parameters"][1]["source_fact_ids"] = ["fact.demand_table"]
+    valid_ir = ModelIR.model_validate(valid_payload)
+
+    validate_model_evidence_consistency(problem_spec, valid_ir, evidence_profile)
+    valid_compilation = ModelIRCompiler(registry=_registry()).compile(
+        valid_ir,
+        problem_spec=problem_spec,
+        evidence_profile=evidence_profile,
+    )
+    assert valid_compilation.status == "compiled", valid_compilation.diagnostics
+
+    tampered_fact_payload = deepcopy(valid_payload)
+    _indexed_model(tampered_fact_payload)["parameters"][0]["values"][0]["value"] = 999.0
+    tampered_fact_ir = ModelIR.model_validate(tampered_fact_payload)
+
+    with pytest.raises(ValueError, match="indexed_parameter_evidence_mismatch"):
+        validate_model_evidence_consistency(
+            problem_spec,
+            tampered_fact_ir,
+            evidence_profile,
+        )
+    tampered_fact_compilation = ModelIRCompiler(registry=_registry()).compile(
+        tampered_fact_ir,
+        problem_spec=problem_spec,
+        evidence_profile=evidence_profile,
+    )
+    assert tampered_fact_compilation.status == "blocked"
+    assert "indexed_parameter_evidence_mismatch" in {
+        item.code for item in tampered_fact_compilation.diagnostics
+    }
+
+    tampered_table_payload = deepcopy(valid_payload)
+    demand_param = _indexed_model(tampered_table_payload)["parameters"][1]
+    demand_param.pop("values")
+    demand_param["dense_values"] = [4.0, 999.0]
+    demand_param["dense_source_ref"] = "input_catalog.json#table-1/demand"
+    tampered_table_ir = ModelIR.model_validate(tampered_table_payload)
+
+    with pytest.raises(ValueError, match="indexed_parameter_evidence_mismatch"):
+        validate_model_evidence_consistency(
+            problem_spec,
+            tampered_table_ir,
+            evidence_profile,
+        )
+    tampered_table_compilation = ModelIRCompiler(registry=_registry()).compile(
+        tampered_table_ir,
+        problem_spec=problem_spec,
+        evidence_profile=evidence_profile,
+    )
+    assert tampered_table_compilation.status == "blocked"
+    assert "indexed_parameter_evidence_mismatch" in {
+        item.code for item in tampered_table_compilation.diagnostics
+    }
+
+    from app.guidance.generation_validation import _validate_indexed_core_stage
+    from app.guidance.model_ir_drafts import (IndexedLinearCoreDraft)
+
+    tampered_core_draft = IndexedLinearCoreDraft.model_validate({
+        "index_sets": [{"id": "period", "values": ["p1", "p2"]}],
+        "parameters": [{
+            "source_kind": "static",
+            "id": "unit_cost",
+            "index_sets": ["period"],
+            "dense_values": [999.0, 3.0],
+            "dense_source_ref": "input_catalog.json#table-1/unit-cost",
+            "source_fact_ids": ["fact.unit_cost_p1", "fact.unit_cost_p2"],
+        }],
+        "variables": [{
+            "id": "order",
+            "index_sets": ["period"],
+            "domain": "integer",
+            "lower_bound": 0.0,
+        }],
+        "objective": {
+            "sense": "minimize",
+            "terms": [{
+                "for_each": {"t": "period"},
+                "coefficient": {
+                    "kind": "parameter",
+                    "parameter_id": "unit_cost",
+                    "selectors": [{"binder": "t"}],
+                },
+                "variable": {
+                    "variable_id": "order",
+                    "selectors": [{"binder": "t"}],
+                },
+            }],
+        },
+    })
+    with pytest.raises(ValueError, match="indexed_parameter_evidence_mismatch"):
+        _validate_indexed_core_stage(
+            tampered_core_draft,
+            [fact.model_dump(mode="json") for fact in problem_spec.locked_facts],
+            evidence_profile=evidence_profile,
+        )

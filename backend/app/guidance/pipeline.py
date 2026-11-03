@@ -11,13 +11,8 @@ from app.guidance.failure_contracts import (
     bounded_failure_summary,
     bounded_subproblem_objective,
 )
-from app.guidance.model_ir import (
-    ApprovedModelIR,
-    BlockedModelIR,
-    ModelIR,
-    ModelIRReview,
-    ModelReviewSubmission,
-)
+from app.guidance.model_review_contracts import (ApprovedModelIR, ModelIRReview, ModelReviewSubmission)
+from app.guidance.model_ir import (BlockedModelIR, ModelIR)
 from app.schemas.response import (
     TaskProgress,
     TaskResult,
@@ -330,9 +325,7 @@ def _write_modeling_failure_contracts(
             BlockedModelIR(
                 execution_status="blocked",
                 subproblem_id=subproblem.id,
-                objective=bounded_subproblem_objective(
-                    subproblem.model_dump(mode="python")
-                ),
+                objective=bounded_subproblem_objective(subproblem),
                 blocking_reason=blocking_summary,
                 missing_inputs=["valid Model IR contract"],
                 recovery_action=(

@@ -42,7 +42,8 @@ class IRReviewer:
         task,
         work_dir,
     ):
-        from app.guidance.model_ir import ModelIR, ModelIRReview
+        from app.guidance.model_ir import (ModelIR)
+        from app.guidance.model_review_contracts import (ModelIRReview)
 
         assert isinstance(model_ir, ModelIR)
         self.received_model_ir = model_ir
@@ -89,7 +90,8 @@ class RevisingIRModeler(IRModeler):
 
 
 def test_modeling_and_review_stages_exchange_only_model_ir_files(tmp_path: Path) -> None:
-    from app.guidance.model_ir import ModelIR, ModelReviewSubmission
+    from app.guidance.model_ir import (ModelIR)
+    from app.guidance.model_review_contracts import (ModelReviewSubmission)
     from app.guidance.stages import ModelingStage, ModelReviewStage
 
     problem_path = tmp_path / "problem_spec.json"
@@ -140,7 +142,7 @@ def test_modeling_and_review_stages_exchange_only_model_ir_files(tmp_path: Path)
 
 
 def test_model_review_stage_passes_explicit_revision_request(tmp_path: Path) -> None:
-    from app.guidance.model_ir import ModelIRReview, ModelReviewSubmission
+    from app.guidance.model_review_contracts import (ModelIRReview, ModelReviewSubmission)
     from app.guidance.stages import ModelingStage, ModelReviewStage
 
     problem_path = tmp_path / "problem_spec.json"
@@ -200,7 +202,7 @@ def test_model_review_stage_passes_explicit_revision_request(tmp_path: Path) -> 
 def test_modeling_stage_revision_reads_model_ir_review_without_model_spec_aliases(
     tmp_path: Path,
 ) -> None:
-    from app.guidance.model_ir import ModelIRReview
+    from app.guidance.model_review_contracts import (ModelIRReview)
     from app.guidance.stages import ModelingStage
 
     problem_path = tmp_path / "problem_spec.json"

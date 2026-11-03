@@ -70,7 +70,8 @@ def test_solvable_model_ir_requires_explicit_assumption_list() -> None:
 
 
 def test_approved_review_must_cover_every_modeling_assumption() -> None:
-    from app.guidance.model_ir import AssumptionReviewSpec, ModelIR, ModelIRReview
+    from app.guidance.model_review_contracts import (AssumptionReviewSpec, ModelIRReview)
+    from app.guidance.model_ir import (ModelIR)
     from app.guidance.model_review_validation import validate_model_review
 
     model_ir = ModelIR.model_validate(_model_payload())

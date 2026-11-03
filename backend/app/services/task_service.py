@@ -20,7 +20,8 @@ from app.schemas.response import (
     extract_verification_layers,
 )
 from app.services.redis_manager import redis_manager
-from app.utils.common_utils import finalize_markdown_export, normalize_math_markdown
+from app.utils.document_export import finalize_markdown_export
+from app.utils.markdown import normalize_math_markdown
 from app.utils.log_util import logger
 
 

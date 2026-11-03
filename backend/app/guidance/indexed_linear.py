@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import itertools
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
+
+from app.guidance.parameter_evidence import validate_static_parameter_evidence
 
 from app.guidance.model_ir import (
     ConstantLinearValue,
@@ -47,25 +50,37 @@ class _ExpandedIndexedCore:
 
 def validate_indexed_linear_core(
     core: IndexedLinearCoreSpec,
+    *,
+    locked_facts: Sequence[Any] | None = None,
+    evidence_profile: Mapping[str, Any] | Any | None = None,
 ) -> list[IndexedLinearIssue]:
-    issues: list[IndexedLinearIssue] = []
-    _expand_indexed_linear_core(_with_runtime_validation_values(core), issues)
+    issues = _evidence_issues(core, locked_facts, evidence_profile)
+    _expand_indexed_linear_core(
+        _with_runtime_validation_values(core),
+        issues,
+    )
     return _unique_issues(issues)
 
 
 def validate_indexed_linear_model_structure(
     model: IndexedLinearModelSpec,
+    *,
+    locked_facts: Sequence[Any] | None = None,
+    evidence_profile: Mapping[str, Any] | Any | None = None,
 ) -> list[IndexedLinearIssue]:
     _, issues = expand_indexed_linear_model(
-        _with_runtime_validation_values(model)
+        _with_runtime_validation_values(model),
     )
-    return issues
+    return _unique_issues([*issues, *_evidence_issues(model, locked_facts, evidence_profile)])
 
 
 def expand_indexed_linear_model(
     model: IndexedLinearModelSpec,
+    *,
+    locked_facts: Sequence[Any] | None = None,
+    evidence_profile: Mapping[str, Any] | Any | None = None,
 ) -> tuple[dict[str, Any] | None, list[IndexedLinearIssue]]:
-    issues: list[IndexedLinearIssue] = []
+    issues = _evidence_issues(model, locked_facts, evidence_profile)
     core = _expand_indexed_linear_core(model, issues)
 
     matrix: list[list[float]] = []
@@ -139,6 +154,15 @@ def expand_indexed_linear_model(
     }, []
 
 
+def _evidence_issues(core, locked_facts, evidence_profile) -> list[IndexedLinearIssue]:
+    return [
+        IndexedLinearIssue("indexed_parameter_evidence_mismatch", message)
+        for message in validate_static_parameter_evidence(
+            core, locked_facts=locked_facts, evidence_profile=evidence_profile,
+        )
+    ]
+
+
 def _with_runtime_validation_values(
     model: _IndexedCore,
 ) -> _IndexedCore:
@@ -175,7 +199,11 @@ def _expand_indexed_linear_core(
     index_sets = {item.id: list(item.values) for item in core.index_sets}
     parameters = {item.id: item for item in core.parameters}
     variables = {item.id: item for item in core.variables}
-    parameter_values = _parameter_values(parameters, index_sets, issues)
+    parameter_values = _parameter_values(
+        parameters,
+        index_sets,
+        issues,
+    )
 
     variable_keys: list[tuple[str, tuple]] = []
     variable_labels: list[str] = []

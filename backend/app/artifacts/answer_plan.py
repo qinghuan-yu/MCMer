@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app.utils.common_utils import save_json
+from app.utils.file_io import save_json
 
 
 _TABLE_HINTS = ("table", "fill", "填写", "填充", "表格", "附表", "结果表")

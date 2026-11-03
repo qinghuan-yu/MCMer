@@ -57,10 +57,7 @@ def _architecture_payload(*, execution_components, variables=None, operators=Non
 
 
 def _indexed_core_and_constraints():
-    from app.guidance.model_ir import (
-        IndexedLinearConstraintDraft,
-        IndexedLinearCoreDraft,
-    )
+    from app.guidance.model_ir_drafts import (IndexedLinearConstraintDraft, IndexedLinearCoreDraft)
 
     core = IndexedLinearCoreDraft.model_validate({
         "index_sets": [{"id": "period", "values": [1]}],
@@ -112,13 +109,13 @@ def _indexed_core_and_constraints():
 
 
 def test_architecture_draft_excludes_guessed_fact_binding_paths():
-    from app.guidance.model_ir import SolvableModelIRDraft
+    from app.guidance.model_ir_drafts import (SolvableModelIRDraft)
 
     assert "fact_bindings" not in SolvableModelIRDraft.model_fields
 
 
 def test_operator_graph_nodes_generate_final_fact_binding_paths():
-    from app.guidance.model_ir import ModelIRGenerationDraft
+    from app.guidance.model_ir_drafts import (ModelIRGenerationDraft)
 
     draft = ModelIRGenerationDraft.model_validate(_architecture_payload(
         execution_components=["operator_graph"],
@@ -147,7 +144,7 @@ def test_operator_graph_nodes_generate_final_fact_binding_paths():
 
 
 def test_indexed_nodes_generate_parameter_and_constraint_fact_binding_paths():
-    from app.guidance.model_ir import ModelIRGenerationDraft
+    from app.guidance.model_ir_drafts import (ModelIRGenerationDraft)
 
     core, constraint = _indexed_core_and_constraints()
     indexed_model = core.promote(constraints=[constraint.promote()])
@@ -185,7 +182,7 @@ def test_node_source_fact_ids_must_be_unique():
 
 
 def test_remaining_locked_facts_preserve_order_and_reject_unknown_sources():
-    from app.guidance.agents import _remaining_locked_facts
+    from app.guidance.modeling_context import _remaining_locked_facts
 
     locked_facts = [
         {"fact_id": "fact.operator"},
@@ -205,7 +202,7 @@ def test_remaining_locked_facts_preserve_order_and_reject_unknown_sources():
 
 
 def test_modeling_compaction_preserves_every_scoped_locked_fact():
-    from app.guidance.agents import _compact_problem_spec_for_modeling
+    from app.guidance.modeling_context import _compact_problem_spec_for_modeling
     from app.guidance.contracts import ProblemSpec
 
     facts = [
@@ -240,8 +237,53 @@ def test_modeling_compaction_preserves_every_scoped_locked_fact():
     ]
 
 
+def test_modeling_compaction_preserves_subproblem_tail_rules_and_list_items():
+    from app.guidance.modeling_context import _compact_problem_spec_for_modeling
+    from app.guidance.contracts import ProblemSpec
+
+    long_description = "A" * 320 + " TAIL_RULE_MUST_SURVIVE"
+    long_objective = "B" * 300 + " OBJECTIVE_TAIL_MUST_SURVIVE"
+    long_statement = "C" * 300 + " FACT_STATEMENT_TAIL_MUST_SURVIVE"
+    constraints = [
+        f"Constraint {index}: " + ("D" * 190) + f" RULE_{index}"
+        for index in range(1, 13)
+    ]
+    compact = _compact_problem_spec_for_modeling(ProblemSpec(
+        task_summary="Preserve every subproblem rule without truncation.",
+        subproblems=[{
+            "id": "problem1",
+            "title": "Subproblem Title",
+            "brief_description": "Brief summary",
+            "objective": long_objective,
+            "description": long_description,
+            "constraints": constraints,
+            "required_fact_ids": ["fact.long_statement"],
+            "required_uncertainty_ids": [],
+            "depends_on_subproblem_ids": [],
+        }],
+        locked_facts=[{
+            "fact_id": "fact.long_statement",
+            "statement": long_statement,
+            "source_refs": ["inputs/problem.docx#paragraph-1"],
+            "subproblem_ids": ["problem1"],
+            "semantic_key": "rule.tail",
+            "value": 42,
+            "unit": "unit",
+        }],
+    ))
+
+    subproblem = compact["subproblems"][0]
+    assert subproblem["description"] == long_description
+    assert subproblem["objective"] == long_objective
+    assert subproblem["title"] == "Subproblem Title"
+    assert subproblem["brief_description"] == "Brief summary"
+    assert subproblem["constraints"] == constraints
+    assert compact["locked_facts"][0]["statement"] == long_statement
+
+
+
 def test_hybrid_candidates_may_wait_for_the_system_managed_solver_node():
-    from app.guidance.model_ir import ModelIRGenerationDraft
+    from app.guidance.model_ir_drafts import (ModelIRGenerationDraft)
 
     payload = _architecture_payload(
         execution_components=["operator_graph", "indexed_linear_model"],

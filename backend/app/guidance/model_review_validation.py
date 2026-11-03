@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from app.guidance.model_ir import (
-    BlockedModelIR,
-    ModelIR,
-    ModelIRReview,
-    SolvableModelIR,
-)
+from app.guidance.model_ir import (BlockedModelIR, ModelIR, SolvableModelIR)
+from app.guidance.model_review_contracts import (ModelIRReview)
 
 
 def validate_model_review(

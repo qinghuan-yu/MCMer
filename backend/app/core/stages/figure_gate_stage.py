@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.artifacts.registry import ArtifactRegistry, FigureBundle
-from app.core.figure_stage import FigureStage as LegacyFigureStage
+from app.core.figure_requests import build_bundle_snapshot
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class FigureGateStage:
     @staticmethod
     def from_registry(registry: ArtifactRegistry) -> FigureBundleSnapshot:
         artifact_valid_images = registry.validate_for_paper()
-        bundle_snapshot = LegacyFigureStage.build_bundle_snapshot(registry)
+        bundle_snapshot = build_bundle_snapshot(registry)
         figure_bundle = bundle_snapshot.get("figure_bundle")
         writer_images = bundle_snapshot.get("writer_images", [])
         if figure_bundle is None or not isinstance(writer_images, list):

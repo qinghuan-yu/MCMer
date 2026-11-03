@@ -246,7 +246,7 @@ def test_problem_fact_sources_must_exist_in_input_catalog() -> None:
 
 
 def test_decomposer_receives_input_catalog_as_fact_source_contract() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
 
     llm = _StubLLM(_split_decomposition_payload(
         _structured_problem_spec_payload()
@@ -273,7 +273,7 @@ def test_decomposer_receives_input_catalog_as_fact_source_contract() -> None:
 
 
 def test_decomposer_splits_structure_and_facts_then_projects_references() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
 
     payload = _structured_problem_spec_payload()
     llm = _StubLLM(_split_decomposition_payload(payload))
@@ -298,7 +298,7 @@ def test_decomposer_splits_structure_and_facts_then_projects_references() -> Non
 
 
 def test_decomposer_fact_request_compacts_large_registered_tables() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
 
     source_ref = "inputs/problem.docx#table-1"
     rows = [
@@ -375,7 +375,7 @@ def test_decomposer_fact_request_compacts_large_registered_tables() -> None:
 
 
 def test_decomposer_keeps_only_registered_dataset_sources() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
 
     table_ref = "inputs/problem.docx#table-1"
     input_catalog = _input_catalog()
@@ -450,7 +450,7 @@ def test_decomposer_keeps_only_registered_dataset_sources() -> None:
 
 
 def test_decomposer_promotes_unicode_identifiers_and_synchronizes_scopes() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
 
     payload = _structured_problem_spec_payload()
     payload["subproblems"] = [{
@@ -549,7 +549,7 @@ def test_problem_structure_and_facts_promote_dependency_references() -> None:
 
 
 def test_decomposer_rejects_identifier_normalization_collisions() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
     from app.guidance.contract_request import ContractGenerationError
 
     payload = _structured_problem_spec_payload()
@@ -592,7 +592,7 @@ def test_decomposer_rejects_identifier_normalization_collisions() -> None:
 
 
 def test_decomposer_rejects_subproblem_identifier_collisions() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
     from app.guidance.contract_request import ContractGenerationError
 
     payload = _structured_problem_spec_payload()
@@ -685,7 +685,7 @@ def _blocked_model(subproblem_id: str) -> dict:
 def test_modeler_slices_structured_facts_by_target_subproblem(tmp_path: Path) -> None:
     import asyncio
 
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
     payload = _structured_problem_spec_payload()

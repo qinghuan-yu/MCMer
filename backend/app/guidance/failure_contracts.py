@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 from typing import Any
+
+from app.guidance.contracts import SubproblemSpec
 
 
 def bounded_failure_summary(
@@ -18,12 +21,25 @@ def bounded_failure_summary(
     return f"{normalized[:available].rstrip()}{suffix}"
 
 
-def bounded_subproblem_objective(subproblem: dict[str, Any]) -> str:
-    for field in ("objective", "goal", "description", "brief_description", "title"):
-        value = str(subproblem.get(field) or "").strip()
+def bounded_subproblem_objective(
+    subproblem: SubproblemSpec | Mapping[str, Any],
+) -> str:
+    payload = (
+        subproblem.model_dump(mode="python")
+        if isinstance(subproblem, SubproblemSpec)
+        else subproblem
+    )
+    for field in ("objective", "description", "brief_description", "title"):
+        value = str(payload.get(field) or "").strip()
         if value:
             return value if len(value) <= 500 else value[:497].rstrip() + "..."
-    subproblem_id = str(subproblem.get("id") or "unknown").strip()
+    goals = payload.get("goals")
+    if isinstance(goals, list):
+        for goal in goals:
+            value = str(goal or "").strip()
+            if value:
+                return value if len(value) <= 500 else value[:497].rstrip() + "..."
+    subproblem_id = str(payload.get("id") or "unknown").strip()
     return f"Produce a reviewable model for subproblem {subproblem_id}."
 
 

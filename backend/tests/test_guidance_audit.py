@@ -1,4 +1,5 @@
-from app.artifacts.guidance_audit import build_guidance_audit_report, sanitize_unregistered_numeric_claims
+from app.artifacts.guidance_audit import build_guidance_audit_report
+from app.artifacts.guidance_audit_evidence import sanitize_unregistered_numeric_claims
 
 
 def test_guidance_audit_blocks_unregistered_numbers() -> None:

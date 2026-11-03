@@ -11,35 +11,23 @@ from app.core.agents.agent import Agent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.writer_agent import WriterAgent
 from app.core.llm.llm import LLM
+from app.core.workflow_budget import resolve_workflow_budget
 from app.core.prompts import POLISH_STAGE_SYSTEM_PROMPTS
 from app.core.stages.figure_gate_stage import FigureGateStage
 from app.core.stages.finalizer_stage import FinalizerStage
 from app.core.stages.writer_stage import WriterStage
-from app.core.workflow import (
-    _build_code_interpreter,
-    _build_completed_task_result,
-    _build_failed_task_result,
-    _build_models,
-    _chart_language_policy,
-    _classify_failure,
-    _create_verified_result_summary_figure,
-    _has_generated_image_evidence,
-    _image_manifest_text,
-    _json_for_prompt,
-    _message,
-    _preview,
-    _progress,
-    _resolve_question,
-    _resolve_workflow_mode,
-    _run_writer_stage,
-    _strict_chart_artifact_contract,
-    _unique_structured_result_files,
-)
+from app.core.workflow_runtime import _build_code_interpreter, _build_models, _json_for_prompt, _message, _preview, _progress, _resolve_question, _resolve_workflow_mode, _unique_structured_result_files
+from app.core.workflow import _build_completed_task_result, _build_failed_task_result, _classify_failure
+from app.core.chart_language import _chart_language_policy, _image_manifest_text, _strict_chart_artifact_contract
+from app.core.chart_support import _create_verified_result_summary_figure
+from app.artifacts.artifact_evidence import has_generated_image_evidence as _has_generated_image_evidence
+from app.core.writing_support import _run_writer_stage
 from app.schemas.A2A import CoderToWriter
 from app.schemas.enums import FormatOutPut, TaskStatus
 from app.services.task_service import task_manager
 from app.tools.openalex_scholar import OpenAlexScholar
-from app.utils.common_utils import build_result_registry, get_current_files
+from app.utils.result_registry import build_result_registry
+from app.utils.file_io import get_current_files
 from app.utils.log_util import logger
 
 

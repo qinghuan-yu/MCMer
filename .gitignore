@@ -10,6 +10,7 @@ build/
 
 # Python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
 *.egg-info/
@@ -31,7 +32,7 @@ venv/
 backend/.env.dev
 recover_from_history.ps1
 recovery_report.txt
-backend/.local/
+.local/
 
 # Logs
 logs/

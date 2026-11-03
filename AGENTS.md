@@ -5,9 +5,15 @@ These rules are mandatory for every agent modifying this repository.
 ## Single Source of Truth
 
 - The only long-term execution plan is `docs/compute_first_guidance_plan.md`.
+- Keep only `AGENTS.md` (execution rules) and `docs/compute_first_guidance_plan.md` (active plan). Do not create parallel roadmap, optimization-plan, simplification-plan, or guidance-plan documents.
 - Before every code modification, read the complete long-term plan and identify its current unchecked step.
-- Do not create parallel roadmap, optimization-plan, simplification-plan, or guidance-plan documents.
-- When the target changes, rewrite the single long-term plan and delete superseded planning documents.
+- When the target changes, rewrite the single long-term plan, compact completed phases into locked invariants, and delete superseded planning documents.
+
+## Verify Before Diagnosing
+
+- Never propose a refactoring, claim a capability gap, or mark code as dead based solely on static reading or file line counts.
+- Every architectural diagnosis or boundary-replacement proposal must be backed by a reproducible test, runtime experiment, or verified cross-module call graph (including `app/guidance/`, `app/polish/`, and `app/core/`).
+- File-size splitting is secondary to behavioral and mathematical correctness; do not split modules unless explicitly scheduled in the active plan.
 
 ## Test First
 
@@ -19,7 +25,7 @@ These rules are mandatory for every agent modifying this repository.
 ## Refactor Instead of Patching
 
 - If the current module boundary conflicts with the requested behavior, do not add an `if`/`else`, feature flag, compatibility branch, or pass-through adapter.
-- Stop implementation and explain the conflicting data flow and coupling.
+- Stop implementation and explain the conflicting data flow and coupling with empirical evidence.
 - Propose the module-level replacement, including affected files, migration boundary, and verification.
 - Obtain explicit user approval before replacing the conflicting module.
 
@@ -27,6 +33,7 @@ These rules are mandatory for every agent modifying this repository.
 
 - After completing each subtask, immediately change its checkbox from `[ ]` to `[x]` in the long-term plan.
 - Keep exactly one explicit `CURRENT` step in the plan.
+- Compact completed phases into concise locked invariants rather than accumulating historical `[x]` logs.
 - Remove obsolete plan versions instead of archiving them beside the active plan.
 
 ## Mandatory Current-State Summary
@@ -38,4 +45,3 @@ After every modification, report a `现状摘要` containing:
 3. What changed in this modification.
 4. Which long-term-plan checkbox was completed.
 5. The next unchecked step.
-

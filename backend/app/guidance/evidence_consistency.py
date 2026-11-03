@@ -7,7 +7,12 @@ import re
 from app.artifacts.evidence_profile import EvidenceProfile
 from app.artifacts.input_catalog import InputCatalog
 from app.guidance.contracts import ProblemSpec
-from app.guidance.model_ir import ModelIR
+from app.guidance.indexed_linear import validate_indexed_linear_core
+from app.guidance.model_ir import (
+    IndexedLinearExecutionComponent,
+    ModelIR,
+    SolvableModelIR,
+)
 
 
 MISSING_MARKERS = (
@@ -53,9 +58,21 @@ def validate_model_evidence_consistency(
     model_ir: ModelIR,
     evidence_profile: dict,
 ) -> None:
-    del problem_spec
     labels = _available_labels(evidence_profile)
     for subproblem in model_ir.subproblems:
+        if isinstance(subproblem, SolvableModelIR):
+            for component in subproblem.execution_components:
+                if not isinstance(component, IndexedLinearExecutionComponent):
+                    continue
+                issues = validate_indexed_linear_core(
+                    component.model,
+                    locked_facts=problem_spec.locked_facts,
+                    evidence_profile=evidence_profile,
+                )
+                for issue in issues:
+                    if issue.code == "indexed_parameter_evidence_mismatch":
+                        raise ValueError(f"{issue.code}: {issue.message}")
+            continue
         if subproblem.execution_status != "blocked":
             continue
         for missing_input in subproblem.missing_inputs:

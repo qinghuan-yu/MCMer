@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from app.core.figure_gate import quality_gate_before_writing
+from app.core.figure_requests import normalize_workflow_issues, workflow_issue_summary as summarize_workflow_issues
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,7 +18,6 @@ from app.artifacts.diagnostics import (
 )
 from app.artifacts.protocols import RESULT_OVERVIEW_ROLE, normalize_figure_role
 from app.artifacts.registry import ArtifactRegistry, FigureBundle
-from app.core.figure_stage import FigureStage
 
 
 @dataclass(frozen=True)
@@ -130,8 +132,8 @@ class QualityGateStage:
             question=question,
         )
         AnswerPlanBuilder.save(work_dir, answer_plan)
-        workflow_issues = FigureStage.normalize_workflow_issues(figure_plan_payload)
-        workflow_issue_summary = FigureStage.workflow_issue_summary(workflow_issues)
+        workflow_issues = normalize_workflow_issues(figure_plan_payload)
+        workflow_issue_summary = summarize_workflow_issues(workflow_issues)
         diagnostic_summary = summarize_visualization_issues([
             *workflow_issues,
             *figure_bundle.blocked_requests,
@@ -173,7 +175,7 @@ class QualityGateStage:
         if protocol_warnings:
             figure_plan_diagnostics["protocol_warnings"] = protocol_warnings
 
-        gate_passed, gate_reason = FigureStage.quality_gate_before_writing(
+        gate_passed, gate_reason = quality_gate_before_writing(
             result_registry,
             effective_expected_figures,
             figure_bundle.required_requests,

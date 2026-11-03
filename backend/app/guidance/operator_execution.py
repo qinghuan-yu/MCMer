@@ -36,7 +36,7 @@ class OperatorExecutionFailure(ExecutionContract):
 class OperatorExecutionManifest(ExecutionContract):
     schema_version: Literal["1.0"] = "1.0"
     model_id: str
-    status: Literal["passed", "failed", "blocked"]
+    status: Literal["passed", "partial", "failed", "blocked"]
     execution_plan_ref: str = "execution_plan.json"
     execution_plan_sha256: str
     executed_node_ids: list[str]
@@ -61,8 +61,22 @@ class OperatorGraphExecutor:
         values: dict[str, object] = {}
         artifact_nodes: dict[str, str] = {}
         executed: list[str] = []
+        failures_by_subproblem: dict[str, OperatorExecutionFailure] = {}
+        failures_by_node: dict[str, OperatorExecutionFailure] = {}
+        failed_node_ids: set[str] = set()
 
         for node in execution_plan.graph.nodes:
+            failed_dependencies = [
+                dep for dep in node.dependencies if dep in failed_node_ids
+            ]
+            if node.subproblem_id in failures_by_subproblem or failed_dependencies:
+                failed_node_ids.add(node.node_id)
+                upstream_failure = failures_by_subproblem.get(node.subproblem_id)
+                if upstream_failure is None:
+                    upstream_failure = failures_by_node[failed_dependencies[0]]
+                failures_by_subproblem[node.subproblem_id] = upstream_failure
+                failures_by_node[node.node_id] = upstream_failure
+                continue
             try:
                 registered = self.registry.runtime(node.operator_id)
                 if registered is None or registered.executor is None or registered.validator is None:
@@ -104,22 +118,33 @@ class OperatorGraphExecutor:
                     message=str(error) or type(error).__name__,
                     recovery_action=_failure_recovery_action(error, node.node_id),
                 )
-                return self._write_runtime_failure(
-                    execution_plan=execution_plan,
-                    model_ir=model_ir,
-                    work_dir=work_dir,
-                    values=values,
-                    artifact_nodes=artifact_nodes,
-                    executed=executed,
-                    failure=failure,
-                )
+                failures_by_subproblem.setdefault(node.subproblem_id, failure)
+                failures_by_node[node.node_id] = failure
+                failed_node_ids.add(node.node_id)
 
-        parameter_registry = _parameter_registry(model_ir, values, artifact_nodes)
-        result_registry = _result_registry(model_ir, values, artifact_nodes)
+        first_failure = next(iter(failures_by_subproblem.values()), None)
+        parameter_registry = _parameter_registry(
+            model_ir,
+            values,
+            artifact_nodes,
+            failed_subproblem_ids=set(failures_by_subproblem),
+        )
+        result_registry = _result_registry(
+            model_ir,
+            values,
+            artifact_nodes,
+            failures_by_subproblem=failures_by_subproblem,
+        )
+        has_verified = bool(result_registry["verified_results"])
+        publishable_node_ids = {
+            node.node_id for node in execution_plan.graph.nodes
+            if node.subproblem_id not in failures_by_subproblem
+        }
         figures = [
             value
-            for value in values.values()
-            if isinstance(value, dict)
+            for artifact, value in values.items()
+            if artifact_nodes.get(artifact) in publishable_node_ids
+            and isinstance(value, dict)
             and {"path", "role", "linked_result_ids"} <= set(value)
         ]
         figure_registry = {
@@ -129,7 +154,10 @@ class OperatorGraphExecutor:
         _write_json(work_dir / "parameter_registry.json", parameter_registry)
         _write_json(work_dir / "result_registry.json", result_registry)
         _write_json(work_dir / "figure_registry.json", figure_registry)
-        _write_notebook(work_dir / "notebook.ipynb", execution_plan)
+        if first_failure is not None and not has_verified:
+            _write_failed_notebook(work_dir / "notebook.ipynb", execution_plan, first_failure)
+        else:
+            _write_notebook(work_dir / "notebook.ipynb", execution_plan)
 
         plan_payload = execution_plan.model_dump_json()
         generated_files = [
@@ -140,66 +168,18 @@ class OperatorGraphExecutor:
             "figure_registry.json",
             "execution_manifest.json",
         ]
+        status: Literal["passed", "partial", "failed"] = (
+            "passed"
+            if first_failure is None
+            else ("partial" if has_verified else "failed")
+        )
         manifest = OperatorExecutionManifest(
             model_id=model_ir.model_id,
-            status="passed",
-            execution_plan_sha256=hashlib.sha256(plan_payload.encode("utf-8")).hexdigest(),
-            executed_node_ids=executed,
-            generated_files=generated_files,
-        )
-        _write_json(work_dir / "execution_manifest.json", manifest.model_dump(mode="json"))
-        return manifest
-
-    def _write_runtime_failure(
-        self,
-        *,
-        execution_plan: ExecutionPlan,
-        model_ir: ModelIR,
-        work_dir: Path,
-        values: dict[str, object],
-        artifact_nodes: dict[str, str],
-        executed: list[str],
-        failure: OperatorExecutionFailure,
-    ) -> OperatorExecutionManifest:
-        parameter_registry = _parameter_registry(model_ir, values, artifact_nodes)
-        result_registry = _failed_result_registry(
-            model_ir,
-            values,
-            artifact_nodes,
-            failure,
-        )
-        figures = [
-            value
-            for value in values.values()
-            if isinstance(value, dict)
-            and {"path", "role", "linked_result_ids"} <= set(value)
-        ]
-        _write_json(work_dir / "parameter_registry.json", parameter_registry)
-        _write_json(
-            work_dir / "result_registry.json",
-            result_registry,
-        )
-        _write_json(
-            work_dir / "figure_registry.json",
-            {"figures": figures, "summary": {"total_count": len(figures)}},
-        )
-        _write_failed_notebook(work_dir / "notebook.ipynb", execution_plan, failure)
-        generated_files = [
-            "execution_plan.json",
-            "notebook.ipynb",
-            "parameter_registry.json",
-            "result_registry.json",
-            "figure_registry.json",
-            "execution_manifest.json",
-        ]
-        plan_payload = execution_plan.model_dump_json()
-        manifest = OperatorExecutionManifest(
-            model_id=model_ir.model_id,
-            status="failed",
+            status=status,
             execution_plan_sha256=hashlib.sha256(plan_payload.encode("utf-8")).hexdigest(),
             executed_node_ids=list(executed),
             generated_files=generated_files,
-            failure=failure,
+            failure=first_failure,
         )
         _write_json(work_dir / "execution_manifest.json", manifest.model_dump(mode="json"))
         return manifest
@@ -280,10 +260,16 @@ def _parameter_registry(
     model_ir: ModelIR,
     values: dict[str, object],
     artifact_nodes: dict[str, str],
+    *,
+    failed_subproblem_ids: set[str] | None = None,
 ) -> dict:
+    blocked_subproblems = failed_subproblem_ids or set()
     parameters: list[dict] = []
     for subproblem in model_ir.subproblems:
-        if not isinstance(subproblem, SolvableModelIR):
+        if (
+            not isinstance(subproblem, SolvableModelIR)
+            or subproblem.subproblem_id in blocked_subproblems
+        ):
             continue
         for component in subproblem.execution_components:
             if not isinstance(component, OperatorGraphExecutionComponent):
@@ -309,7 +295,10 @@ def _result_registry(
     model_ir: ModelIR,
     values: dict[str, object],
     artifact_nodes: dict[str, str],
+    *,
+    failures_by_subproblem: dict[str, OperatorExecutionFailure] | None = None,
 ) -> dict:
+    runtime_failures = failures_by_subproblem or {}
     verified: list[dict] = []
     blocked: list[dict] = []
     claims: list[dict] = []
@@ -333,6 +322,28 @@ def _result_registry(
             })
             continue
         if not isinstance(subproblem, SolvableModelIR):
+            continue
+        runtime_failure = runtime_failures.get(subproblem.subproblem_id)
+        if runtime_failure is not None:
+            if subproblem.final_answers:
+                for answer in subproblem.final_answers:
+                    blocked.append({
+                        "id": answer.id,
+                        "subproblem_id": subproblem.subproblem_id,
+                        "reason": f"{runtime_failure.error_type}: {runtime_failure.message}",
+                        "failed_node_id": runtime_failure.node_id,
+                        "failed_operator_id": runtime_failure.operator_id,
+                        "recovery_action": runtime_failure.recovery_action,
+                    })
+            else:
+                blocked.append({
+                    "id": f"execution_failure_{runtime_failure.node_id}",
+                    "subproblem_id": subproblem.subproblem_id,
+                    "reason": f"{runtime_failure.error_type}: {runtime_failure.message}",
+                    "failed_node_id": runtime_failure.node_id,
+                    "failed_operator_id": runtime_failure.operator_id,
+                    "recovery_action": runtime_failure.recovery_action,
+                })
             continue
         assumption_statements = [
             assumption.statement for assumption in subproblem.assumptions
@@ -368,52 +379,32 @@ def _result_registry(
                     else "No additional modeling assumptions are registered."
                 ),
             ).model_dump(mode="json"))
-    return {
-        "verified_results": verified,
-        "blocked_results": blocked,
-        "summary": {
-            "coverage_status": "complete" if not blocked else "partial",
-            "verified_count": len(verified),
-            "blocked_count": len(blocked),
-            "claim_registry": claims,
-        },
+    covered_subproblems = {
+        str(item.get("subproblem_id") or "")
+        for item in blocked
+        if item.get("subproblem_id")
     }
-
-
-def _failed_result_registry(
-    model_ir: ModelIR,
-    values: dict[str, object],
-    artifact_nodes: dict[str, str],
-    failure: OperatorExecutionFailure,
-) -> dict:
-    registry = _result_registry(model_ir, values, artifact_nodes)
-    affected = False
-    for blocked in registry["blocked_results"]:
-        reason = str(blocked.get("reason") or "")
-        if reason.startswith("missing runtime value:"):
-            blocked.update({
-                "reason": f"{failure.error_type}: {failure.message}",
-                "failed_node_id": failure.node_id,
-                "failed_operator_id": failure.operator_id,
-                "recovery_action": failure.recovery_action,
-            })
-            affected = True
-    if not affected:
-        registry["blocked_results"].append({
+    for subproblem_id, failure in runtime_failures.items():
+        if subproblem_id in covered_subproblems:
+            continue
+        blocked.append({
             "id": f"execution_failure_{failure.node_id}",
+            "subproblem_id": subproblem_id,
             "reason": f"{failure.error_type}: {failure.message}",
             "failed_node_id": failure.node_id,
             "failed_operator_id": failure.operator_id,
             "recovery_action": failure.recovery_action,
         })
-    verified_count = len(registry["verified_results"])
-    blocked_count = len(registry["blocked_results"])
-    registry["summary"] = {
-        "coverage_status": "partial" if verified_count else "blocked",
-        "verified_count": verified_count,
-        "blocked_count": blocked_count,
+    return {
+        "verified_results": verified,
+        "blocked_results": blocked,
+        "summary": {
+            "coverage_status": "complete" if not blocked else ("partial" if verified else "blocked"),
+            "verified_count": len(verified),
+            "blocked_count": len(blocked),
+            **({"claim_registry": claims} if (claims or not runtime_failures) else {}),
+        },
     }
-    return registry
 
 
 def _failure_recovery_action(error: Exception, node_id: str) -> str:

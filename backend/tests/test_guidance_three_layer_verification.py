@@ -50,11 +50,9 @@ def test_model_adequate_pass_requires_excluded_route_counterevidence() -> None:
 
 
 def test_model_adequacy_routes_registered_validators_by_declared_family() -> None:
-    from app.guidance.model_ir import ApprovedModelIR, ModelIR
-    from app.guidance.stages import (
-        _assess_model_adequacy,
-        _build_counterevidence_records,
-    )
+    from app.guidance.model_review_contracts import (ApprovedModelIR)
+    from app.guidance.model_ir import (ModelIR)
+    from app.guidance.verification_stage import _assess_model_adequacy, _build_counterevidence_records
 
     backend_root = Path(__file__).resolve().parents[1]
     model_ir = ModelIR.model_validate_json(
@@ -241,11 +239,12 @@ def test_small_residual_cannot_override_failed_adequacy_check(failed_check: str)
 
 
 def test_result_verification_consumes_operator_execution_contract(tmp_path: Path) -> None:
-    from app.guidance.model_ir import ApprovedModelIR, ModelIR
+    from app.guidance.model_review_contracts import (ApprovedModelIR)
+    from app.guidance.model_ir import (ModelIR)
     from app.guidance.model_ir_compiler import ModelIRCompiler
     from app.guidance.operator_catalog import build_default_operator_registry
     from app.guidance.operator_execution import OperatorGraphExecutor
-    from app.guidance.stages import ResultVerificationStage
+    from app.guidance.verification_stage import ResultVerificationStage
 
     backend_root = Path(__file__).resolve().parents[1]
     shutil.copytree(
@@ -298,11 +297,12 @@ def test_result_verification_consumes_operator_execution_contract(tmp_path: Path
 def test_result_verification_consumes_failed_operator_artifacts_without_crashing(
     tmp_path: Path,
 ) -> None:
-    from app.guidance.model_ir import ApprovedModelIR, ModelIR
+    from app.guidance.model_review_contracts import (ApprovedModelIR)
+    from app.guidance.model_ir import (ModelIR)
     from app.guidance.model_ir_compiler import ModelIRCompiler
     from app.guidance.operator_catalog import build_default_operator_registry
     from app.guidance.operator_execution import OperatorGraphExecutor
-    from app.guidance.stages import ResultVerificationStage
+    from app.guidance.verification_stage import ResultVerificationStage
 
     backend_root = Path(__file__).resolve().parents[1]
     model_ir = ModelIR.model_validate_json(

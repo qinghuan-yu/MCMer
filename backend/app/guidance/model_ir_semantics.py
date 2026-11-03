@@ -24,9 +24,11 @@ def validate_model_fact_coverage(
     model_ir: ModelIR,
 ) -> None:
     facts_by_id = {fact.fact_id: fact for fact in problem_spec.locked_facts}
+    subproblems_by_id = {item.id: item for item in problem_spec.subproblems}
     for subproblem in model_ir.subproblems:
         if not isinstance(subproblem, SolvableModelIR):
             continue
+        spec_subproblem = subproblems_by_id.get(subproblem.subproblem_id)
         binding_ids = [binding.fact_id for binding in subproblem.fact_bindings]
         if len(binding_ids) != len(set(binding_ids)):
             raise ValueError(
@@ -36,9 +38,13 @@ def validate_model_fact_coverage(
         if unknown:
             raise ValueError(f"unknown locked fact ids: {unknown!r}")
         expected = sorted(
-            fact.fact_id
-            for fact in problem_spec.locked_facts
-            if subproblem.subproblem_id in fact.subproblem_ids
+            spec_subproblem.required_fact_ids
+            if spec_subproblem is not None
+            else [
+                fact.fact_id
+                for fact in problem_spec.locked_facts
+                if subproblem.subproblem_id in fact.subproblem_ids
+            ]
         )
         modeled = sorted(binding_ids)
         if expected != modeled:
@@ -46,10 +52,18 @@ def validate_model_fact_coverage(
                 f"fact coverage mismatch for {subproblem.subproblem_id!r}: "
                 f"expected={expected!r}; modeled={modeled!r}"
             )
+        required_uncertainty_ids = (
+            spec_subproblem.required_uncertainty_ids
+            if spec_subproblem is not None
+            else [
+                uncertainty.uncertainty_id
+                for uncertainty in problem_spec.uncertainties
+                if subproblem.subproblem_id in uncertainty.subproblem_ids
+            ]
+        )
         allowed_uncertainty_refs = {
-            f"problem_spec.json#uncertainties/{uncertainty.uncertainty_id}"
-            for uncertainty in problem_spec.uncertainties
-            if subproblem.subproblem_id in uncertainty.subproblem_ids
+            f"problem_spec.json#uncertainties/{uncertainty_id}"
+            for uncertainty_id in required_uncertainty_ids
         }
         for assumption in subproblem.assumptions:
             if assumption.basis != "problem_ambiguity":

@@ -1,17 +1,21 @@
+
+from app.core.figure_gate import missing_reason_summary, quality_gate_before_writing
+from app.core.figure_rendering import render_required_requests_deterministically
+from app.core.figure_requests import apply_figure_plan_to_solve_spec, ensure_figure_requests_in_solve_spec, figure_data_protocol_contract, normalize_workflow_issues, required_figure_requests, subproblem_figure_mode, workflow_issue_summary
 import base64
 import json
 import zipfile
 from pathlib import Path
 
 from app.core.agents.coder_agent import CoderAgent
+from app.core.agents.coder_chart_language import _chart_language_guard_message
 from app.core.agents.writer_agent import _contains_tool_protocol_text
-from app.core.figure_stage import FigureStage
 from app.artifacts.artifact_evidence import (
     generated_image_evidence_paths,
     has_generated_image_evidence,
     language_verified_generated_images,
 )
-from app.utils.common_utils import finalize_markdown_export
+from app.utils.document_export import finalize_markdown_export
 from app.utils.figure_artifacts import is_verified_paper_figure, is_placeholder_filename, contains_placeholder_text
 
 
@@ -27,7 +31,7 @@ def _write_png(path: Path) -> None:
 
 
 def test_writer_rejects_tool_protocol_text() -> None:
-    from app.artifacts.exporters import _contains_tool_protocol_text as export_guard
+    from app.artifacts.document_validation import _contains_tool_protocol_text as export_guard
 
     leaked = (
         '<｜｜DSML｜｜tool_calls>\n'
@@ -87,32 +91,32 @@ def test_english_task_rejects_chinese_figure_artifact(tmp_path: Path) -> None:
 def test_chart_guard_blocks_deliverable_savefig_and_wrong_language_labels() -> None:
     agent = CoderAgent(task_id="t", model=None, work_dir=".")
 
-    savefig_message = agent._chart_language_guard_message(
+    savefig_message = _chart_language_guard_message(agent.figure_mode,
         "import matplotlib.pyplot as plt\nplt.plot([1],[1])\nplt.savefig('output/final.png')",
         "English",
     )
     assert "save_paper_figure" in savefig_message
 
     # Must provide complete params to get past param validation to language check
-    language_message = agent._chart_language_guard_message(
+    language_message = _chart_language_guard_message(agent.figure_mode,
         "import matplotlib.pyplot as plt\nplt.title('Result')\nsave_paper_figure(plt.gcf(), 'final.png', visible_text_audit=['title', 'xlabel'], linked_result_ids=['r1'], source_data=['data.csv'])",
         "Simplified Chinese",
     )
     assert "Simplified Chinese" in language_message
 
-    reverse_message = agent._chart_language_guard_message(
+    reverse_message = _chart_language_guard_message(agent.figure_mode,
         "import matplotlib.pyplot as plt\nplt.title('结果')\nsave_paper_figure(plt.gcf(), 'final.png', visible_text_audit=['结果', '横轴'], linked_result_ids=['r1'], source_data=['data.csv'])",
         "English",
     )
     assert "English" in reverse_message
 
-    shadow_message = agent._chart_language_guard_message(
+    shadow_message = _chart_language_guard_message(agent.figure_mode,
         "def save_paper_figure(fig, filename):\n    return None",
         "Simplified Chinese",
     )
     assert "must not be redefined" in shadow_message
 
-    variable_savefig_message = agent._chart_language_guard_message(
+    variable_savefig_message = _chart_language_guard_message(agent.figure_mode,
         "import matplotlib.pyplot as plt\nfilename='output/final.png'\nplt.savefig(filename)",
         "Simplified Chinese",
     )
@@ -319,7 +323,7 @@ def test_quality_gate_blocks_zero_verified() -> None:
         "blocked_results": [{"id": "r1", "status": "blocked"}],
         "summary": {"verified_count": 0, "blocked_count": 1},
     }
-    passed, reason = FigureStage.quality_gate_before_writing(
+    passed, reason = quality_gate_before_writing(
         registry,
         False,
         [],
@@ -338,7 +342,7 @@ def test_quality_gate_passes_with_verified_results() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = FigureStage.quality_gate_before_writing(
+    passed, reason = quality_gate_before_writing(
         registry,
         False,
         [],
@@ -357,7 +361,7 @@ def test_quality_gate_blocks_expected_figures_missing() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = FigureStage.quality_gate_before_writing(
+    passed, reason = quality_gate_before_writing(
         registry,
         True,
         [{"id": "req_1", "required": True}],
@@ -376,7 +380,7 @@ def test_quality_gate_passes_with_verified_and_images() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = FigureStage.quality_gate_before_writing(
+    passed, reason = quality_gate_before_writing(
         registry,
         True,
         [{"id": "req_1", "required": True}],
@@ -546,7 +550,7 @@ def test_guard_blocks_figure_code_in_none_mode():
     """figure_mode=none should block savefig/plt calls."""
     from app.core.agents.coder_agent import CoderAgent
     agent = CoderAgent(task_id="t", model=None, work_dir=".", figure_mode="none")
-    msg = agent._chart_language_guard_message(
+    msg = _chart_language_guard_message(agent.figure_mode,
         "import matplotlib.pyplot as plt\nplt.plot([1],[1])\nplt.savefig('output/fig.png')",
         "Simplified Chinese",
     )
@@ -558,7 +562,7 @@ def test_guard_blocks_incomplete_save_paper_figure():
     """Guard should block save_paper_figure() missing required params (linked_result_ids, source_data)."""
     from app.core.agents.coder_agent import CoderAgent
     agent = CoderAgent(task_id="t", model=None, work_dir=".", figure_mode="paper_required")
-    msg = agent._chart_language_guard_message(
+    msg = _chart_language_guard_message(agent.figure_mode,
         "save_paper_figure(fig, 'test.png', visible_text_audit=['title'])",
         "English",
     )
@@ -570,7 +574,7 @@ def test_guard_blocks_generic_audit_text():
     """Guard should block save_paper_figure() with only generic audit markers."""
     from app.core.agents.coder_agent import CoderAgent
     agent = CoderAgent(task_id="t", model=None, work_dir=".", figure_mode="paper_required")
-    msg = agent._chart_language_guard_message(
+    msg = _chart_language_guard_message(agent.figure_mode,
         "save_paper_figure(fig, 'result.png', visible_text_audit=['title', 'axis labels'], linked_result_ids=['r1'], source_data=['data.csv'])",
         "English",
     )
@@ -581,7 +585,7 @@ def test_guard_blocks_placeholder_filename_in_save_paper_figure():
     """Guard should block save_paper_figure() with placeholder filename."""
     from app.core.agents.coder_agent import CoderAgent
     agent = CoderAgent(task_id="t", model=None, work_dir=".", figure_mode="paper_required")
-    msg = agent._chart_language_guard_message(
+    msg = _chart_language_guard_message(agent.figure_mode,
         "save_paper_figure(fig, 'test_plot.png', visible_text_audit=['标题', '横轴'], linked_result_ids=['r1'], source_data=['data.csv'])",
         "Simplified Chinese",
     )
@@ -592,7 +596,7 @@ def test_guard_allows_complete_save_paper_figure():
     """Guard should pass complete save_paper_figure() with all required params and real content."""
     from app.core.agents.coder_agent import CoderAgent
     agent = CoderAgent(task_id="t", model=None, work_dir=".", figure_mode="paper_required")
-    msg = agent._chart_language_guard_message(
+    msg = _chart_language_guard_message(agent.figure_mode,
         "save_paper_figure(fig, 'problem1_trajectory.png', visible_text_audit=['波长/nm', '反射率/%'], linked_result_ids=['thickness_result'], source_data=['result_registry.json'])",
         "Simplified Chinese",
     )
@@ -609,7 +613,7 @@ def test_guard_catches_second_incomplete_call():
         "save_paper_figure(fig, 'good.png', visible_text_audit=['波长/nm', '反射率/%'], linked_result_ids=['r1'], source_data=['data.csv'])\n"
         "save_paper_figure(fig, 'bad.png', visible_text_audit=['title'])\n"
     )
-    msg = agent._chart_language_guard_message(code, "Simplified Chinese")
+    msg = _chart_language_guard_message(agent.figure_mode, code, "Simplified Chinese")
     # Should block because the second call is missing linked_result_ids
     assert "blocked" in msg.lower() or "missing" in msg.lower()
 
@@ -618,7 +622,7 @@ def test_guard_blocks_helper_exploration():
     """All modes should block inspect.signature exploration."""
     from app.core.agents.coder_agent import CoderAgent
     agent = CoderAgent(task_id="t", model=None, work_dir=".", figure_mode="paper_required")
-    msg = agent._chart_language_guard_message(
+    msg = _chart_language_guard_message(agent.figure_mode,
         "import inspect\ninspect.signature(save_paper_figure)",
         "Simplified Chinese",
     )
@@ -632,7 +636,7 @@ def test_subproblem_figure_mode_none_for_numeric_subproblem():
         "objective": "计算碳化硅外延层厚度",
         "steps": ["加载数据", "拟合参数", "输出数值结果"],
     }
-    assert FigureStage.subproblem_figure_mode(subproblem, True) == "none"
+    assert subproblem_figure_mode(subproblem, True) == "none"
 
 
 def test_subproblem_figure_mode_paper_required_for_chart_subproblem():
@@ -642,7 +646,7 @@ def test_subproblem_figure_mode_paper_required_for_chart_subproblem():
         "objective": "绘制光谱对比图表",
         "steps": ["生成折线图", "保存可视化结果"],
     }
-    assert FigureStage.subproblem_figure_mode(subproblem, True) == "paper_required"
+    assert subproblem_figure_mode(subproblem, True) == "paper_required"
 
 
 def test_subproblem_figure_mode_none_when_task_has_no_figures():
@@ -652,12 +656,12 @@ def test_subproblem_figure_mode_none_when_task_has_no_figures():
         "objective": "绘制图表",
         "steps": ["plot"],
     }
-    assert FigureStage.subproblem_figure_mode(subproblem, False) == "none"
+    assert subproblem_figure_mode(subproblem, False) == "none"
 
 
 def test_deterministic_summary_figure_passes_gate(tmp_path: Path) -> None:
     """Workflow fallback should create a gate-valid figure from verified results."""
-    from app.core.workflow import _create_verified_result_summary_figure
+    from app.core.chart_support import _create_verified_result_summary_figure
 
     registry = {
         "verified_results": [
@@ -783,7 +787,7 @@ def test_artifact_registry_rejects_placeholder(tmp_path: Path) -> None:
 
 def test_confidence_level_classification() -> None:
     """Result entries should get correct confidence levels."""
-    from app.utils.common_utils import _determine_confidence_level
+    from app.utils.result_registry import _determine_confidence_level
 
     # verified_exact: has code_cell and evidence
     assert _determine_confidence_level(
@@ -818,7 +822,7 @@ def test_confidence_level_classification() -> None:
 
 def test_result_registry_adds_visualization_contracts(tmp_path: Path) -> None:
     """Verified results should carry visualization contracts for plan generation."""
-    from app.utils.common_utils import build_result_registry
+    from app.utils.result_registry import build_result_registry
 
     payload = {
         "section": "Problem 1",
@@ -851,7 +855,7 @@ def test_result_registry_adds_visualization_contracts(tmp_path: Path) -> None:
 
 def test_result_registry_preserves_legacy_visualization_contract(tmp_path: Path) -> None:
     """Legacy contract aliases are normalized without losing source binding."""
-    from app.utils.common_utils import build_result_registry
+    from app.utils.result_registry import build_result_registry
 
     payload = {
         "section": "Problem 1",
@@ -1329,7 +1333,7 @@ def test_figure_request_planner(tmp_path: Path) -> None:
 
 def test_renderer_output_passes_figure_artifact_gate(tmp_path: Path) -> None:
     """Deterministic renderer output should pass FigureArtifact gate."""
-    from app.artifacts.renderers import render_verified_summary
+    from app.artifacts.table_renderers import render_verified_summary
 
     verified = [
         {"id": "r1", "name": "厚度", "value": 0.35, "unit": "mm", "status": "verified"},
@@ -1359,7 +1363,7 @@ def test_renderer_output_passes_figure_artifact_gate(tmp_path: Path) -> None:
 
 def test_chinese_renderer_no_english_headers(tmp_path: Path) -> None:
     """Chinese task renderer should use Chinese headers, not English."""
-    from app.artifacts.renderers import render_verified_summary
+    from app.artifacts.table_renderers import render_verified_summary
 
     verified = [{"id": "r1", "name": "测试", "value": 1, "unit": "m", "status": "verified"}]
     artifact = render_verified_summary(
@@ -1492,7 +1496,7 @@ def test_save_revision_prefers_writer_context_allowed_images(tmp_path: Path, mon
 
 def test_deterministic_renderer_requires_cjk_font(monkeypatch) -> None:
     """Chinese deterministic rendering must hard-fail when no CJK font is available."""
-    from app.artifacts import renderers
+    from app.artifacts import plotting as renderers
 
     # Force empty font inventory to emulate missing CJK runtime.
     from matplotlib import font_manager
@@ -1520,7 +1524,7 @@ def test_polish_contract_prefers_parent_contract(tmp_path: Path, monkeypatch) ->
             return {"work_dir": str(parent_dir)}
         return None
 
-    monkeypatch.setattr("app.core.workflow.task_manager.get_task", _fake_get_task)
+    monkeypatch.setattr("app.polish.workflow.task_manager.get_task", _fake_get_task)
 
     # question intentionally misleading Chinese; should still inherit English from parent
     contract = _resolve_polish_contract(
@@ -1628,7 +1632,7 @@ def test_ensure_figure_requests_from_solve_spec() -> None:
         ]
     }
 
-    requests = FigureStage.ensure_figure_requests_in_solve_spec(solve_spec, "Simplified Chinese")
+    requests = ensure_figure_requests_in_solve_spec(solve_spec, "Simplified Chinese")
     assert requests
     req_ids = {item["id"] for item in requests}
     assert "fig_problem_1_geometry_schematic" in req_ids
@@ -1804,7 +1808,7 @@ def test_semantic_bundle_tracks_required_explanatory_images(tmp_path: Path) -> N
 
 def test_render_distance_time_curve_semantic_artifact(tmp_path: Path) -> None:
     """distance_time_curve renderer should output semantic-verified artifact."""
-    from app.artifacts.renderers import render_distance_time_curve
+    from app.artifacts.chart_renderers import render_distance_time_curve
 
     artifact = render_distance_time_curve(
         times=[1, 2, 3, 4],
@@ -1848,7 +1852,7 @@ def test_render_required_requests_deterministically(tmp_path: Path) -> None:
         }
     ]
 
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry=registry,
         required_requests=required_requests,
@@ -1880,7 +1884,7 @@ def test_render_required_requests_rejects_weak_required_data_contract(tmp_path: 
         }
     ]
 
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry=registry,
         required_requests=required_requests,
@@ -1926,7 +1930,7 @@ def test_build_failed_task_result_with_failure_report_paths(tmp_path: Path) -> N
 
 
 def test_classify_failure_maps_finalizer_error() -> None:
-    from app.artifacts.exporters import FinalizationValidationError
+    from app.artifacts.document_validation import FinalizationValidationError
     from app.core.workflow import _classify_failure
 
     exc = FinalizationValidationError(
@@ -2021,7 +2025,7 @@ def test_apply_figure_plan_keeps_plan_owned_counts_out_of_solve_spec() -> None:
         "required_feasible_count": 0,
         "blocked_count": 3,
     }
-    FigureStage.apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
+    apply_figure_plan_to_solve_spec(solve_spec, figure_plan)
 
     assert solve_spec["requires_figures"] is True
     assert solve_spec["requires_result_figures"] is True
@@ -2039,7 +2043,7 @@ def test_render_spectrum_request_from_csv_data_file(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={"verified_results": []},
         required_requests=[
@@ -2067,7 +2071,7 @@ def test_render_spectrum_request_blocks_semantic_data_mismatch(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={"verified_results": []},
         required_requests=[
@@ -2271,7 +2275,7 @@ def test_render_data_overview_request_from_numeric_csv(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={"verified_results": []},
         required_requests=[
@@ -2299,7 +2303,7 @@ def test_quality_gate_reports_blocked_required_by_problem() -> None:
         "blocked_results": [],
         "summary": {"verified_count": 1, "blocked_count": 0},
     }
-    passed, reason = FigureStage.quality_gate_before_writing(
+    passed, reason = quality_gate_before_writing(
         registry,
         True,
         [],
@@ -2326,7 +2330,7 @@ def test_render_fitting_request_from_csv_data_file(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={"verified_results": [{"id": "q1_fit_result", "value": 1.0}]},
         required_requests=[
@@ -2496,12 +2500,12 @@ def test_required_figure_requests_filters_blocked_and_infeasible() -> None:
         ]
     }
 
-    required = FigureStage.required_figure_requests(solve_spec)
+    required = required_figure_requests(solve_spec)
     assert [item["id"] for item in required] == ["a"]
 
 
 def test_figure_data_protocol_contract_includes_phase2_roles() -> None:
-    contract = FigureStage.figure_data_protocol_contract(
+    contract = figure_data_protocol_contract(
         [
             {
                 "id": "fig_q1_fit",
@@ -2533,7 +2537,7 @@ def test_figure_data_protocol_contract_includes_phase2_roles() -> None:
 
 
 def test_missing_reason_summary_groups_phase2_column_missing() -> None:
-    summary = FigureStage.missing_reason_summary(
+    summary = missing_reason_summary(
         [
             {"reason": "missing_fitting_columns"},
             {"reason": "missing_residual_columns"},
@@ -2544,9 +2548,8 @@ def test_missing_reason_summary_groups_phase2_column_missing() -> None:
 
 
 def test_figure_stage_workflow_issue_summary_counts() -> None:
-    from app.core.figure_stage import FigureStage
 
-    issues = FigureStage.normalize_workflow_issues(
+    issues = normalize_workflow_issues(
         {
             "workflow_issues": [
                 {
@@ -2566,7 +2569,7 @@ def test_figure_stage_workflow_issue_summary_counts() -> None:
             ]
         }
     )
-    summary = FigureStage.workflow_issue_summary(issues)
+    summary = workflow_issue_summary(issues)
 
     assert summary["count"] == 2
     assert summary["by_code"].get("FIGURE_REQUEST_BLOCKED") == 2

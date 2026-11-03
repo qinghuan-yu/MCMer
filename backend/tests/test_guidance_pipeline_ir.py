@@ -255,7 +255,7 @@ def test_blocked_review_emits_three_layer_guidance_without_running_calculation(
     tmp_path: Path,
 ) -> None:
     from app.guidance.pipeline import GuidancePipeline
-    from app.guidance.stages import GuidanceStage
+    from app.guidance.guidance_stage import GuidanceStage
 
     calls: list[tuple[str, str | None]] = []
     pipeline = GuidancePipeline(
@@ -374,7 +374,7 @@ def test_modeling_failure_contracts_bound_objectives_for_brief_problem_specs(
     tmp_path: Path,
 ) -> None:
     from app.guidance.pipeline import GuidancePipeline
-    from app.guidance.stages import GuidanceStage
+    from app.guidance.guidance_stage import GuidanceStage
 
     subproblems = [
         {

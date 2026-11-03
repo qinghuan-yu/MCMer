@@ -6,23 +6,16 @@ from typing import AsyncGenerator
 
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import resolve_workflow_budget
-from app.guidance.agents import (
-    LLMModeler,
-    LLMModelReviewer,
-    LLMProblemDecomposer,
-)
+from app.guidance.modeler import LLMModeler
+from app.guidance.reviewer import LLMModelReviewer
+from app.guidance.decomposer import LLMProblemDecomposer
 from app.guidance.model_ir_compiler import ModelIRCompiler
 from app.guidance.operator_catalog import DEFAULT_OPERATOR_IDS, build_default_operator_registry
 from app.guidance.operator_execution import OperatorGraphExecutor
 from app.guidance.pipeline import GuidancePipeline
-from app.guidance.stages import (
-    CalculationStage,
-    DecompositionStage,
-    GuidanceStage,
-    ModelingStage,
-    ModelReviewStage,
-    ResultVerificationStage,
-)
+from app.guidance.stages import CalculationStage, DecompositionStage, ModelingStage, ModelReviewStage
+from app.guidance.guidance_stage import GuidanceStage
+from app.guidance.verification_stage import ResultVerificationStage
 from app.schemas.enums import TaskStatus
 from app.schemas.response import TaskResult
 from app.services.config_manager import config_manager

@@ -631,7 +631,7 @@ def test_graph_executor_records_missing_attachment_without_losing_failure_artifa
 
 
 def test_calculation_stage_blocks_missing_operator_without_program_generation(tmp_path) -> None:
-    from app.guidance.model_ir import ApprovedModelIR
+    from app.guidance.model_review_contracts import (ApprovedModelIR)
     from app.guidance.model_ir_compiler import ModelIRCompiler
     from app.guidance.operator_execution import OperatorGraphExecutor
     from app.guidance.operators import OperatorRegistry

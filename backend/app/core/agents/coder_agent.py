@@ -1,6 +1,7 @@
-"""
-代码手 Agent - 执行代码、纠错、生成可视化
-"""
+"""coder agent responsibilities."""
+
+from __future__ import annotations
+
 from app.core.agents.agent import Agent
 from app.config.setting import settings
 from app.utils.log_util import logger
@@ -10,20 +11,15 @@ from app.tools.base_interpreter import BaseCodeInterpreter
 from app.core.llm.llm import LLM
 from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT, get_reflection_prompt
-from app.utils.common_utils import get_current_files
-from app.utils.figure_artifacts import (
-    PAPER_FIGURE_DIRS,
-    is_image_path,
-    is_verified_paper_figure,
-    normalize_artifact_path,
-)
+from app.utils.file_io import get_current_files
+from app.utils.figure_artifacts import is_image_path, normalize_artifact_path
 from pathlib import Path
-import csv
-import importlib.metadata
 import json
 import re
 import time
 from app.core.functions import coder_tools
+from app.core.agents.coder_artifacts import _dedupe_jsonish_items, _installed_package_summary, _list_existing_artifacts, _list_existing_image_evidence, _looks_like_non_mutating_summary_code, _salvage_artifact_key_results, _salvage_existing_payload_key_results, _sanitize_section_name, _validate_structured_result_file
+from app.core.agents.coder_chart_language import _chart_language_guard_message, _chart_language_from_prompt, _chinese_chart_label_literals, _english_chart_label_literals
 
 
 class CoderAgent(Agent):
@@ -57,293 +53,17 @@ class CoderAgent(Agent):
             figure_mode = "paper_required"
         self.figure_mode = figure_mode
 
-    @staticmethod
-    def _sanitize_section_name(section: str) -> str:
-        sanitized = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "_", (section or "result").strip())
-        sanitized = sanitized.strip("_")
-        return sanitized or "result"
 
     def _structured_result_filename(self, subtask_title: str) -> str:
-        return f"{self._sanitize_section_name(subtask_title)}_structured_results.json"
+        return f"{_sanitize_section_name(subtask_title)}_structured_results.json"
 
-    @staticmethod
-    def _dedupe_jsonish_items(items: list[object]) -> list[object]:
-        deduped: list[object] = []
-        seen: set[str] = set()
-        for item in items:
-            if item is None or item == "":
-                continue
-            try:
-                marker = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
-            except Exception:
-                marker = str(item)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            deduped.append(item)
-        return deduped
 
-    @staticmethod
-    def _is_number_like(value: object) -> bool:
-        text = str(value or "").strip().replace(",", "")
-        if not text:
-            return False
-        try:
-            float(text)
-        except ValueError:
-            return False
-        return True
 
-    @classmethod
-    def _salvage_existing_payload_key_results(
-        cls,
-        payload: object,
-        source_name: str,
-        subtask_title: str,
-        limit: int = 30,
-    ) -> list[dict[str, object]]:
-        results: list[dict[str, object]] = []
 
-        def walk(node: object, path_parts: list[str]) -> None:
-            if len(results) >= limit:
-                return
-            if isinstance(node, dict):
-                for key, value in node.items():
-                    walk(value, [*path_parts, str(key)])
-                return
-            if isinstance(node, list):
-                for index, value in enumerate(node, start=1):
-                    walk(value, [*path_parts, str(index)])
-                return
-            if not cls._is_number_like(node):
-                return
 
-            readable_path = " / ".join(part for part in path_parts if part)
-            if not readable_path:
-                readable_path = subtask_title
-            path_marker = readable_path.lower()
-            metadata_markers = [
-                "metadata",
-                "result_registry_summary",
-                "blocked_count",
-                "verified_count",
-                "warning_count",
-                "info_count",
-                "expected_but_missing",
-                "generated_at",
-            ]
-            if any(marker in path_marker for marker in metadata_markers):
-                return
-            result_markers = [
-                "关键结果",
-                "结果",
-                "统计",
-                "拟合",
-                "误差",
-                "参数",
-                "指标",
-                "预测",
-                "校正",
-                "阶段",
-                "异常",
-                "阈值",
-                "rmse",
-                "mae",
-                "r2",
-                "r²",
-                "metric",
-                "score",
-            ]
-            if not any(marker in path_marker for marker in result_markers):
-                return
-            value_text = str(node).strip()
-            result_id = cls._sanitize_section_name(f"{source_name}_{readable_path}")
-            results.append(
-                {
-                    "id": result_id,
-                    "name": readable_path,
-                    "value": value_text,
-                    "unit": "",
-                    "formula": "",
-                    "inputs": {},
-                    "source_data": [source_name],
-                    "code_cell": "",
-                    "evidence": f"从阻断前已写入的结构化结果 {source_name} 中自动保全数值：{readable_path} = {value_text}",
-                    "source": "existing_structured_payload_salvage",
-                    "verified": False,
-                    "status": "unverified",
-                    "warnings": ["salvaged_from_interrupted_payload_requires_formula_and_unit_verification"],
-                }
-            )
 
-        walk(payload, [])
-        return results
 
-    @classmethod
-    def _csv_summary_result(
-        cls,
-        csv_path: Path,
-        rows: list[dict[str, str]],
-        subtask_title: str,
-        max_preview_rows: int = 8,
-    ) -> dict[str, object] | None:
-        if not rows:
-            return None
 
-        columns = list(rows[0].keys())
-        preview_lines = [" | ".join(columns)]
-        preview_lines.append(" | ".join("---" for _ in columns))
-        for row in rows[:max_preview_rows]:
-            preview_lines.append(" | ".join(str(row.get(column, "")).strip() for column in columns))
-
-        result_id = cls._sanitize_section_name(f"{csv_path.stem}_result_table")
-        return {
-            "id": result_id,
-            "name": f"{csv_path.stem} 结果表",
-            "value": "\n".join(preview_lines),
-            "unit": "",
-            "formula": "",
-            "inputs": {"row_count": len(rows), "columns": columns},
-            "source_data": [csv_path.name],
-            "code_cell": "",
-            "evidence": (
-                f"从已生成结果文件 {csv_path.name} 自动保全表格摘要，共 {len(rows)} 行；"
-                f"预览前 {min(len(rows), max_preview_rows)} 行，供论文写作引用完整结果来源。"
-            ),
-            "source": "artifact_salvage_summary",
-            "verified": False,
-            "status": "unverified",
-            "warnings": ["artifact_table_summary_requires_formula_and_unit_verification"],
-        }
-
-    @classmethod
-    def _salvage_artifact_key_results(cls, work_dir: str, subtask_title: str, limit: int = 40) -> list[dict[str, object]]:
-        results: list[dict[str, object]] = []
-        root = Path(work_dir)
-        if not root.exists():
-            return results
-
-        for csv_path in sorted(root.glob("*.csv")):
-            if len(results) >= limit:
-                break
-            try:
-                with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-                    reader = csv.DictReader(f)
-                    rows = [dict(row) for row in reader]
-                summary = cls._csv_summary_result(csv_path, rows, subtask_title)
-                if summary:
-                    results.append(summary)
-
-                if len(results) >= limit:
-                    break
-
-                columns = list(rows[0].keys()) if rows else []
-                parameter_column = next((column for column in columns if "参数" in column or column.lower() in {"param", "parameter"}), "")
-                value_columns = [
-                    column
-                    for column in columns
-                    if column != parameter_column and ("值" in column or "value" in column.lower() or "参数" in column)
-                ]
-                is_parameter_table = bool(parameter_column and value_columns)
-                if not is_parameter_table:
-                    continue
-
-                for row_index, row in enumerate(rows, start=1):
-                    if len(results) >= limit:
-                        break
-                    parameter_name = str(row.get(parameter_column, "") or f"row{row_index}").strip()
-                    for column in value_columns:
-                        if len(results) >= limit:
-                            break
-                        value_text = str(row.get(column) or "").strip()
-                        if not cls._is_number_like(value_text):
-                            continue
-                        result_id = cls._sanitize_section_name(f"{csv_path.stem}_{parameter_name}_{column}")
-                        display_name = f"{parameter_name}（{column}）" if parameter_name else str(column or result_id)
-                        results.append(
-                            {
-                                "id": result_id,
-                                "name": display_name,
-                                "value": value_text,
-                                "unit": "",
-                                "formula": "",
-                                "inputs": {},
-                                "source_data": [csv_path.name],
-                                "code_cell": "",
-                                "evidence": f"从已生成参数文件 {csv_path.name} 第 {row_index} 行自动保全，避免工具预算阻断后丢失已计算参数。",
-                                "source": "artifact_salvage",
-                                "verified": False,
-                                "status": "unverified",
-                                "warnings": ["artifact_scalar_salvage_requires_formula_and_unit_verification"],
-                            }
-                        )
-            except Exception as exc:
-                logger.warning("自动保全 CSV 结果失败 {}: {}", csv_path, exc)
-        return results
-
-    @staticmethod
-    def _list_existing_artifacts(work_dir: str) -> list[str]:
-        root = Path(work_dir)
-        if not root.exists():
-            return []
-        suffixes = {".csv", ".json", ".txt", ".md", ".png", ".jpg", ".jpeg", ".svg"}
-        ignored = {"task_info.json", "problem_facts.json", "solve_spec.json", "verify_plan.json", "result_registry.json"}
-        return sorted(
-            path.name
-            for path in root.iterdir()
-            if path.is_file() and path.suffix.lower() in suffixes and path.name not in ignored
-        )
-
-    @staticmethod
-    def _list_existing_image_evidence(work_dir: str) -> list[str]:
-        root = Path(work_dir)
-        if not root.exists():
-            return []
-        suffixes = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
-        evidence: list[str] = []
-        for dirname in ("debug_artifacts", "output", "figures", "final_results"):
-            folder = root / dirname
-            if not folder.exists():
-                continue
-            for path in sorted(folder.rglob("*")):
-                if path.is_file() and path.suffix.lower() in suffixes:
-                    evidence.append(path.relative_to(root).as_posix())
-        return evidence
-
-    @staticmethod
-    def _looks_like_non_mutating_summary_code(code: str) -> bool:
-        normalized = (code or "").lower()
-        if not normalized.strip():
-            return False
-
-        summary_markers = [
-            "最终总结报告",
-            "检查是否还有其他需要修复的问题",
-            "所有检查通过",
-            "任务已完成",
-            "print(",
-        ]
-        has_summary_intent = any(marker.lower() in normalized for marker in summary_markers)
-        if not has_summary_intent:
-            return False
-
-        write_markers = [
-            "write_text(",
-            "write_bytes(",
-            "to_csv(",
-            "to_excel(",
-            "to_json(",
-            "json.dump(",
-            "savefig(",
-            "document.save(",
-            "open(",
-        ]
-
-        if "open(" in normalized:
-            if any(mode in normalized for mode in ["'w'", '"w"', "'a'", '"a"', "'wb'", '"wb"']):
-                return False
-
-        return not any(marker in normalized for marker in write_markers if marker != "open(")
 
     async def _handle_completion_loop(
         self,
@@ -352,11 +72,11 @@ class CoderAgent(Agent):
         expected_result_file: Path,
         tool_id: str,
     ) -> bool:
-        is_valid, _ = self._validate_structured_result_file(expected_result_file, subtask_title)
+        is_valid, _ = _validate_structured_result_file(expected_result_file, subtask_title)
         if not is_valid:
             return False
 
-        if not self._looks_like_non_mutating_summary_code(code):
+        if not _looks_like_non_mutating_summary_code(code):
             return False
 
         logger.warning("检测到已完成任务仍在执行只读收尾脚本，强制要求模型直接输出最终结论")
@@ -384,173 +104,11 @@ class CoderAgent(Agent):
         )
         return True
 
-    @staticmethod
-    def _installed_package_summary(limit: int = 80) -> str:
-        preferred = [
-            "numpy", "pandas", "scipy", "matplotlib", "seaborn", "openpyxl",
-            "pypdf", "python-docx", "aiofiles", "fastapi", "pydantic",
-        ]
-        installed = {dist.metadata.get("Name", "") for dist in importlib.metadata.distributions()}
-        ordered = [name for name in preferred if name in installed]
-        remaining = sorted(name for name in installed if name and name not in ordered)
-        package_names = ordered + remaining
-        if len(package_names) > limit:
-            package_names = package_names[:limit] + ["..."]
-        return ", ".join(package_names)
 
-    @staticmethod
-    def _validate_structured_result_file(file_path: Path, expected_section: str) -> tuple[bool, str]:
-        if not file_path.exists() or not file_path.is_file():
-            return False, "结构化结果文件不存在"
-
-        try:
-            payload = json.loads(file_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return False, f"结构化结果文件不是有效 JSON: {exc}"
-
-        if not isinstance(payload, dict):
-            return False, "结构化结果文件顶层必须是 JSON 对象"
-
-        required_keys = ["section", "summary", "key_results", "generated_files", "warnings"]
-        missing = [key for key in required_keys if key not in payload]
-        if missing:
-            return False, f"结构化结果文件缺少字段: {', '.join(missing)}"
-
-        if not isinstance(payload.get("summary"), str) or not payload.get("summary", "").strip():
-            return False, "summary 必须是非空字符串"
-
-        if not isinstance(payload.get("key_results"), list):
-            return False, "key_results 必须是数组"
-
-        if not isinstance(payload.get("generated_files"), list):
-            return False, "generated_files 必须是数组"
-
-        if not isinstance(payload.get("warnings"), list):
-            return False, "warnings 必须是数组"
-
-        final_image_prefixes = PAPER_FIGURE_DIRS
-        for index, generated_file in enumerate(payload.get("generated_files", []), start=1):
-            raw_path = ""
-            if isinstance(generated_file, str):
-                raw_path = generated_file
-            elif isinstance(generated_file, dict):
-                raw_path = (
-                    generated_file.get("path")
-                    or generated_file.get("filename")
-                    or generated_file.get("file")
-                    or generated_file.get("name")
-                    or ""
-                )
-            else:
-                return False, f"generated_files[{index}] must be a string or object"
-
-            normalized_path = normalize_artifact_path(raw_path)
-            if not normalized_path:
-                return False, f"generated_files[{index}] is missing a file path"
-            if not is_image_path(normalized_path):
-                continue
-
-            if isinstance(generated_file, str):
-                return False, (
-                    f"generated_files[{index}] image entries must be objects with "
-                    "path/kind/paper_ready/visible_text_language/chart_language_verified/"
-                    "visible_text_audit; bare image paths are not accepted"
-                )
-
-            paper_ready = bool(generated_file.get("paper_ready"))
-            is_final_dir = normalized_path.startswith(final_image_prefixes)
-            if paper_ready and not is_final_dir:
-                return False, f"generated_files[{index}] paper_ready images must be under output/, figures/, or final_results/"
-            if paper_ready and normalized_path.startswith("debug_artifacts/"):
-                return False, f"generated_files[{index}] paper_ready images cannot be under debug_artifacts/"
-
-            if is_final_dir or paper_ready:
-                expected_language = (
-                    str(generated_file.get("expected_chart_language") or generated_file.get("document_language") or "").strip()
-                    or str(generated_file.get("visible_text_language") or "").strip()
-                )
-                if not expected_language:
-                    return False, f"generated_files[{index}] final image is missing visible_text_language"
-                if not is_verified_paper_figure(generated_file, expected_language, file_path.parent):
-                    return False, f"generated_files[{index}] final image must satisfy the FigureArtifact contract"
-
-        if payload.get("section") != expected_section:
-            return False, f"section 字段必须为 {expected_section}"
-
-        key_results = payload.get("key_results", [])
-        if not key_results:
-            return False, "key_results 不能为空"
-
-        status_allowed = {"verified", "mismatch", "blocked", "unverified"}
-        verification_section = expected_section == "数值复核"
-
-        for index, item in enumerate(key_results, start=1):
-            if not isinstance(item, dict):
-                return False, f"key_results[{index}] 必须是对象"
-
-            common_required = ["id", "name", "verified", "status", "warnings"]
-            common_missing = [key for key in common_required if key not in item]
-            if common_missing:
-                return False, f"key_results[{index}] 缺少字段: {', '.join(common_missing)}"
-
-            if str(item.get("status", "")).strip() not in status_allowed:
-                return False, f"key_results[{index}].status 非法"
-
-            if not isinstance(item.get("warnings"), list):
-                return False, f"key_results[{index}].warnings 必须是数组"
-
-            if verification_section:
-                required = ["unit", "source_data"]
-                missing_fields = [key for key in required if key not in item]
-                if missing_fields:
-                    return False, f"key_results[{index}] 缺少字段: {', '.join(missing_fields)}"
-
-                if not isinstance(item.get("source_data"), list):
-                    return False, f"key_results[{index}].source_data 必须是数组"
-
-                has_verification_value = any(
-                    item.get(key) not in {None, "", "见论文", "无法确认"}
-                    for key in ["paper_value", "value", "computed_value"]
-                )
-                if not has_verification_value:
-                    return False, f"key_results[{index}] 缺少可复核的 paper_value/value/computed_value"
-
-                if item.get("status") == "verified" and not item.get("source_data"):
-                    return False, f"key_results[{index}] 为 verified 时 source_data 不能为空"
-            else:
-                required = [
-                    "value",
-                    "unit",
-                    "formula",
-                    "inputs",
-                    "source_data",
-                    "code_cell",
-                    "evidence",
-                    "source",
-                ]
-                missing_fields = [key for key in required if key not in item]
-                if missing_fields:
-                    return False, f"key_results[{index}] 缺少字段: {', '.join(missing_fields)}"
-
-                if not isinstance(item.get("inputs"), dict):
-                    return False, f"key_results[{index}].inputs 必须是对象"
-
-                if not isinstance(item.get("source_data"), list):
-                    return False, f"key_results[{index}].source_data 必须是数组"
-
-                if item.get("status") == "verified":
-                    if item.get("value") in {None, "", "见论文", "无法确认"}:
-                        return False, f"key_results[{index}] 为 verified 时 value 不能为空且不能是占位文本"
-                    if not item.get("source_data"):
-                        return False, f"key_results[{index}] 为 verified 时 source_data 不能为空"
-                    if not str(item.get("code_cell", "")).strip() and not str(item.get("source", "")).strip():
-                        return False, f"key_results[{index}] 为 verified 时 code_cell 或 source 至少一个非空"
-
-        return True, ""
 
     async def _ensure_structured_result_contract(self, subtask_title: str) -> None:
         result_filename = self._structured_result_filename(subtask_title)
-        installed_packages = self._installed_package_summary()
+        installed_packages = _installed_package_summary()
         contract_prompt = (
             f"当前子任务必须遵守以下执行契约：\n"
             f"1. 只能使用当前环境已安装的库；已知可用包示例：{installed_packages}\n"
@@ -663,7 +221,7 @@ class CoderAgent(Agent):
         subtask_title: str,
         reason: str,
     ) -> CoderToWriter:
-        blocked_id = f"{self._sanitize_section_name(subtask_title)}_blocked"
+        blocked_id = f"{_sanitize_section_name(subtask_title)}_blocked"
         blocked_result = {
             "id": blocked_id,
             "name": f"{subtask_title}执行状态",
@@ -699,14 +257,14 @@ class CoderAgent(Agent):
         has_verified = any(item.get("status") == "verified" for item in filtered_key_results if isinstance(item, dict))
         if not has_verified:
             filtered_key_results.extend(
-                self._salvage_existing_payload_key_results(
+                _salvage_existing_payload_key_results(
                     existing_payload,
                     expected_result_file.name,
                     subtask_title,
                 )
             )
             filtered_key_results.extend(
-                self._salvage_artifact_key_results(self.work_dir, subtask_title)
+                _salvage_artifact_key_results(self.work_dir, subtask_title)
             )
             has_verified = any(item.get("status") == "verified" for item in filtered_key_results if isinstance(item, dict))
 
@@ -727,7 +285,7 @@ class CoderAgent(Agent):
         ]
         salvage_files = [
             item
-            for item in self._list_existing_artifacts(self.work_dir)
+            for item in _list_existing_artifacts(self.work_dir)
             if not is_image_path(normalize_artifact_path(item))
         ]
         existing_generated_files = [
@@ -756,9 +314,9 @@ class CoderAgent(Agent):
             "section": existing_payload.get("section") or subtask_title,
             "summary": summary,
             "key_results": filtered_key_results,
-            "generated_files": self._dedupe_jsonish_items(existing_generated_files),
-            "artifact_evidence": self._dedupe_jsonish_items(self._list_existing_image_evidence(self.work_dir)),
-            "warnings": self._dedupe_jsonish_items([*existing_warnings, warning_reason]),
+            "generated_files": _dedupe_jsonish_items(existing_generated_files),
+            "artifact_evidence": _dedupe_jsonish_items(_list_existing_image_evidence(self.work_dir)),
+            "warnings": _dedupe_jsonish_items([*existing_warnings, warning_reason]),
         }
         expected_result_file.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -817,231 +375,13 @@ class CoderAgent(Agent):
         )
         return True
 
-    @staticmethod
-    def _chart_language_from_prompt(prompt: str) -> str:
-        if (
-            "document/problem language is Simplified Chinese" in prompt
-            or "visible_text_language\":\"Simplified Chinese" in prompt
-            or '"chart_language": "Simplified Chinese"' in prompt
-            or '"document_language": "Simplified Chinese"' in prompt
-        ):
-            return "Simplified Chinese"
-        if (
-            "document/problem language is English" in prompt
-            or "visible_text_language\":\"English" in prompt
-            or '"chart_language": "English"' in prompt
-            or '"document_language": "English"' in prompt
-        ):
-            return "English"
-        return ""
 
-    @staticmethod
-    def _english_chart_label_literals(code: str) -> list[str]:
-        label_patterns = [
-            r"(?:plt\.)?(?:title|xlabel|ylabel|suptitle)\(\s*f?[\"']([^\"']*[A-Za-z][^\"']*)[\"']",
-            r"\.(?:set_title|set_xlabel|set_ylabel)\(\s*f?[\"']([^\"']*[A-Za-z][^\"']*)[\"']",
-            r"\blabel\s*=\s*f?[\"']([^\"']*[A-Za-z][^\"']*)[\"']",
-        ]
-        allowed_fragments = {
-            "cm", "m", "s", "kg", "rad", "hz", "db", "rgb", "cmyk", "fft", "fp", "sic",
-            "si", "r", "r2", "aic", "bic", "rmse", "mae",
-        }
-        labels: list[str] = []
-        for pattern in label_patterns:
-            for match in re.finditer(pattern, code, flags=re.IGNORECASE):
-                text = match.group(1).strip()
-                words = re.findall(r"[A-Za-z]{2,}", text)
-                meaningful = [word for word in words if word.lower() not in allowed_fragments]
-                if meaningful:
-                    labels.append(text)
-        return labels
 
-    @staticmethod
-    def _chinese_chart_label_literals(code: str) -> list[str]:
-        label_patterns = [
-            r"(?:plt\.)?(?:title|xlabel|ylabel|suptitle)\(\s*f?[\"']([^\"']*[\u4e00-\u9fff][^\"']*)[\"']",
-            r"\.(?:set_title|set_xlabel|set_ylabel)\(\s*f?[\"']([^\"']*[\u4e00-\u9fff][^\"']*)[\"']",
-            r"\blabel\s*=\s*f?[\"']([^\"']*[\u4e00-\u9fff][^\"']*)[\"']",
-        ]
-        labels: list[str] = []
-        for pattern in label_patterns:
-            for match in re.finditer(pattern, code, flags=re.IGNORECASE):
-                labels.append(match.group(1).strip())
-        return labels
 
-    def _chart_language_guard_message(self, code: str, expected_chart_language: str) -> str:
-        # --- Helper exploration blocking (all modes) ---
-        if re.search(r"\bdef\s+save_paper_figure\b|\bsave_paper_figure\s*=", code):
-            return (
-                "FigureArtifact guard blocked this execute_code call: save_paper_figure is a protected "
-                "kernel helper and must not be redefined, shadowed, or monkey-patched. Use the injected helper directly."
-            )
-        if re.search(r"inspect\.signature|inspect\.getsource|pkgutil\.iter_modules|importlib\.import_module.*mcmer", code):
-            return (
-                "Guard blocked: do not inspect or explore helper modules. save_paper_figure is already "
-                "injected into the kernel — call it directly when needed. Focus on computation, not environment exploration."
-            )
-
-        # --- figure_mode=none: block ALL figure code ---
-        if self.figure_mode == "none":
-            figure_signals = re.findall(
-                r"savefig|save_paper_figure|pyplot|plt\.show|fig\.savefig|\.savefig|imshow|plt\.",
-                code, flags=re.IGNORECASE,
-            )
-            if figure_signals:
-                return (
-                    "当前子任务是纯数值任务 (figure_mode=none)，禁止生成任何图表。"
-                    "请删除所有绘图/保存图像代码，只输出数值和结构化结果。"
-                    "不要 import matplotlib.pyplot，不要调用 savefig/save_paper_figure。"
-                )
-            return ""
-
-        savefig_targets = [
-            match.group(1).replace("\\", "/").lstrip("./")
-            for match in re.finditer(
-                r"(?:\.savefig|savefig)\(\s*f?[\"']([^\"']+\.(?:png|jpg|jpeg|svg|webp))[\"']",
-                code,
-                flags=re.IGNORECASE,
-            )
-        ]
-        writes_deliverable_image = any(
-            not target.startswith("debug_artifacts/")
-            for target in savefig_targets
-        )
-        savefig_calls = re.findall(r"(?:[\w.]+\.)?savefig\s*\(", code, flags=re.IGNORECASE)
-        has_unparsed_savefig = bool(savefig_calls) and len(savefig_targets) < len(savefig_calls)
-        uses_paper_figure_helper = "save_paper_figure(" in code
-        if not writes_deliverable_image and not uses_paper_figure_helper:
-            if has_unparsed_savefig:
-                return (
-                    "FigureArtifact guard blocked this execute_code call: savefig calls with variable or "
-                    "non-literal targets are not allowed. Use save_paper_figure for final figures, or save "
-                    "diagnostics with an explicit debug_artifacts/... literal path."
-                )
-            return ""
-        if writes_deliverable_image or has_unparsed_savefig:
-            return (
-                "FigureArtifact guard blocked this execute_code call: final paper images must be saved "
-                "with save_paper_figure(fig, filename, visible_text_audit=[...], linked_result_ids=[...], source_data=[...]) so language metadata is registered. "
-                "Use plt.savefig/fig.savefig only for diagnostics under debug_artifacts/."
-            )
-        # --- Pre-validate save_paper_figure() call arguments (AST-based) ---
-        if uses_paper_figure_helper:
-            import ast as _ast
-            from app.utils.figure_artifacts import is_placeholder_filename as _is_ph, contains_placeholder_text as _has_ph
-            try:
-                tree = _ast.parse(code)
-            except SyntaxError:
-                tree = None
-            if tree is not None:
-                for node in _ast.walk(tree):
-                    if not isinstance(node, _ast.Call):
-                        continue
-                    # Match save_paper_figure(...) calls
-                    func = node.func
-                    if isinstance(func, _ast.Name) and func.id == "save_paper_figure":
-                        pass
-                    elif isinstance(func, _ast.Attribute) and func.attr == "save_paper_figure":
-                        pass
-                    else:
-                        continue
-
-                    # Extract keyword arguments
-                    kw_map = {kw.arg: kw.value for kw in node.keywords}
-
-                    # --- filename (2nd positional arg) ---
-                    fname = None
-                    if len(node.args) >= 2:
-                        a = node.args[1]
-                        if isinstance(a, _ast.Constant) and isinstance(a.value, str):
-                            fname = a.value
-                    if fname and _is_ph(fname):
-                        return (
-                            f"FigureArtifact guard blocked: filename '{fname}' matches placeholder/test pattern. "
-                            "Use a descriptive name like problem1_trajectory.png."
-                        )
-
-                    # --- Helper: check that a kwarg is a literal non-empty list ---
-                    def _require_literal_list(node: object, param_name: str) -> str | None:
-                        if not isinstance(node, _ast.List):
-                            return (
-                                f"FigureArtifact guard blocked: '{param_name}' must be a literal list, not a variable or expression. "
-                                "Inline the values directly so the guard can validate them."
-                            )
-                        if len(node.elts) == 0:
-                            return (
-                                f"FigureArtifact guard blocked: {param_name}=[] is empty. "
-                                "Must contain at least one entry."
-                            )
-                        return None
-
-                    # --- linked_result_ids ---
-                    if "linked_result_ids" not in kw_map:
-                        return (
-                            "FigureArtifact guard blocked: save_paper_figure() call is missing required 'linked_result_ids' parameter. "
-                            "Add linked_result_ids=['result_id'] referencing verified results."
-                        )
-                    err = _require_literal_list(kw_map["linked_result_ids"], "linked_result_ids")
-                    if err:
-                        return err
-
-                    # --- source_data ---
-                    if "source_data" not in kw_map:
-                        return (
-                            "FigureArtifact guard blocked: save_paper_figure() call is missing required 'source_data' parameter. "
-                            "Add source_data=['result_registry.json'] listing data sources."
-                        )
-                    err = _require_literal_list(kw_map["source_data"], "source_data")
-                    if err:
-                        return err
-
-                    # --- visible_text_audit ---
-                    if "visible_text_audit" in kw_map:
-                        va_node = kw_map["visible_text_audit"]
-                        if not isinstance(va_node, _ast.List):
-                            return (
-                                "FigureArtifact guard blocked: 'visible_text_audit' must be a literal list, not a variable or expression. "
-                                "Inline the actual visible text strings directly."
-                            )
-                        if len(va_node.elts) < 2:
-                            return (
-                                "FigureArtifact guard blocked: visible_text_audit must contain at least 2 real visible text strings "
-                                "(e.g. ['波长/nm', '反射率/%']), not just one generic field name."
-                            )
-                        # Check if all elements are generic markers
-                        _generic_markers = {"title", "axis labels", "legend", "annotations", "colorbar", "tick labels"}
-                        vals = []
-                        for elt in va_node.elts:
-                            if isinstance(elt, _ast.Constant) and isinstance(elt.value, str):
-                                vals.append(elt.value.strip().lower())
-                        if vals and all(v in _generic_markers for v in vals):
-                            return (
-                                "FigureArtifact guard blocked: visible_text_audit contains only generic field names "
-                                f"({vals}). Must contain actual visible text strings like ['波长/nm', '反射率/%']."
-                            )
-        if expected_chart_language == "Simplified Chinese":
-            english_labels = self._english_chart_label_literals(code)
-            if english_labels:
-                preview = "; ".join(english_labels[:8])
-                return (
-                    "Chart language guard blocked this execute_code call: the task requires Simplified Chinese "
-                    "visible chart text, but deliverable image code contains English chart labels: "
-                    f"{preview}. Rewrite titles, axis labels, legends, annotations and tick/category labels in Chinese."
-                )
-        if expected_chart_language == "English":
-            chinese_labels = self._chinese_chart_label_literals(code)
-            if chinese_labels:
-                preview = "; ".join(chinese_labels[:8])
-                return (
-                    "Chart language guard blocked this execute_code call: the task requires English "
-                    "visible chart text, but deliverable image code contains Chinese chart labels: "
-                    f"{preview}. Rewrite titles, axis labels, legends, annotations and tick/category labels in English."
-                )
-        return ""
 
     async def run(self, prompt: str, subtask_title: str) -> CoderToWriter:
         logger.info(f"{self.__class__.__name__}:开始:执行子任务: {subtask_title}")
-        expected_chart_language = self._chart_language_from_prompt(prompt)
+        expected_chart_language = _chart_language_from_prompt(prompt)
         if self.code_interpreter:
             self.code_interpreter.add_section(subtask_title)
         self.current_chat_turns = 0
@@ -1153,7 +493,7 @@ class CoderAgent(Agent):
                         if await self._handle_repeated_code(code, subtask_title):
                             continue
 
-                        chart_guard_message = self._chart_language_guard_message(code, expected_chart_language)
+                        chart_guard_message = _chart_language_guard_message(self.figure_mode, code, expected_chart_language)
                         if chart_guard_message:
                             await self.append_chat_history(
                                 {
@@ -1277,7 +617,7 @@ class CoderAgent(Agent):
                 else:
                     # 没有工具调用，表示任务完成
                     logger.info("没有工具调用，任务完成")
-                    is_valid, validation_error = self._validate_structured_result_file(
+                    is_valid, validation_error = _validate_structured_result_file(
                         expected_result_file,
                         subtask_title,
                     )

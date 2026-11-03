@@ -64,7 +64,7 @@ def _mixed_model_ir() -> dict:
 
 
 def test_model_review_derives_partial_status_from_per_subproblem_decisions():
-    from app.guidance.model_ir import ModelIRReview
+    from app.guidance.model_review_contracts import (ModelIRReview)
 
     review = ModelIRReview.model_validate({
         "model_id": "generic_multiperiod_inventory",
@@ -89,7 +89,7 @@ def test_model_review_derives_partial_status_from_per_subproblem_decisions():
 def test_calculation_executes_approved_subset_and_preserves_blocked_results(
     tmp_path: Path,
 ):
-    from app.guidance.model_ir import ApprovedModelIR
+    from app.guidance.model_review_contracts import (ApprovedModelIR)
     from app.guidance.model_ir_compiler import ModelIRCompiler
     from app.guidance.operator_catalog import build_default_operator_registry
     from app.guidance.operator_execution import OperatorGraphExecutor
@@ -133,15 +133,13 @@ def test_calculation_executes_approved_subset_and_preserves_blocked_results(
 def test_verification_reports_partial_coverage_without_failing_execution(
     tmp_path: Path,
 ):
-    from app.guidance.model_ir import ApprovedModelIR
+    from app.guidance.model_review_contracts import (ApprovedModelIR)
     from app.guidance.model_ir_compiler import ModelIRCompiler
     from app.guidance.operator_catalog import build_default_operator_registry
     from app.guidance.operator_execution import OperatorGraphExecutor
-    from app.guidance.stages import (
-        CalculationStage,
-        GuidanceStage,
-        ResultVerificationStage,
-    )
+    from app.guidance.stages import CalculationStage
+    from app.guidance.guidance_stage import GuidanceStage
+    from app.guidance.verification_stage import ResultVerificationStage
 
     approved = ApprovedModelIR.model_validate({
         "review_status": "partial",
@@ -196,7 +194,7 @@ def test_verification_reports_partial_coverage_without_failing_execution(
 def test_model_review_stage_projects_per_subproblem_decisions(
     tmp_path: Path,
 ):
-    from app.guidance.model_ir import ModelIRReview, ModelReviewSubmission
+    from app.guidance.model_review_contracts import (ModelIRReview, ModelReviewSubmission)
     from app.guidance.stages import ModelReviewStage
 
     class PartialReviewer:
@@ -263,3 +261,150 @@ def test_model_review_stage_projects_per_subproblem_decisions(
         item["execution_status"]
         for item in approved["approved_model_ir"]["subproblems"]
     ] == ["blocked", "solvable"]
+
+
+def test_runtime_failure_in_one_subproblem_isolates_and_preserves_independent_verified_subproblem(
+    tmp_path: Path,
+):
+    from app.guidance.model_review_contracts import (ApprovedModelIR)
+    from app.guidance.model_ir import (ModelIR)
+    from app.guidance.model_ir_compiler import ModelIRCompiler
+    from app.guidance.operator_catalog import build_default_operator_registry
+    from app.guidance.operator_execution import OperatorGraphExecutor
+    from app.guidance.stages import CalculationStage
+    from app.guidance.guidance_stage import GuidanceStage
+    from app.guidance.verification_stage import ResultVerificationStage
+
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "model_ir"
+        / "generic_multiperiod_inventory.json"
+    )
+    q2_subproblem = json.loads(fixture.read_text(encoding="utf-8"))["subproblems"][0]
+    q1_subproblem = {
+        "execution_status": "solvable",
+        "subproblem_id": "missing_attachment_subproblem",
+        "objective": "Read a missing attachment for Q1.",
+        "assumptions": [],
+        "fact_bindings": [],
+        "execution_components": [{
+            "kind": "operator_graph",
+            "component_id": "q1_reader_graph",
+            "variables": [{
+                "id": "q1_table",
+                "role": "derived",
+                "symbol": "T_1",
+                "unit": "unspecified",
+                "shape": ["row", "column", "table"],
+            }],
+            "operators": [{
+                "node_id": "q1_read_missing",
+                "operator_id": "data.read_excel_table",
+                "inputs": {"source": "data/missing_q1.xlsx"},
+                "outputs": ["q1_table"],
+                "parameters": {"sheet": 0},
+            }],
+        }],
+        "data": [{
+            "id": "q1_missing_source",
+            "source_ref": "data/missing_q1.xlsx",
+            "fields": {"observations": "Sheet1"},
+        }],
+        "equations": [],
+        "constraints": [],
+        "candidate_models": [
+            {
+                "id": "q1_baseline",
+                "role": "baseline",
+                "operator_node_ids": ["q1_read_missing"],
+                "selection_metric": "availability",
+                "applicability_boundary": "Requires data/missing_q1.xlsx.",
+            },
+            {
+                "id": "q1_recommended",
+                "role": "recommended",
+                "operator_node_ids": ["q1_read_missing"],
+                "selection_metric": "availability",
+                "applicability_boundary": "Requires data/missing_q1.xlsx.",
+            },
+        ],
+        "validation": {
+            "model_families": ["regression"],
+            "identifiability_checks": ["source_exists"],
+            "evidence_checks": ["source_trace"],
+            "robustness_checks": ["missing_input"],
+        },
+        "final_answers": [{
+            "id": "q1_answer",
+            "item": "Q1 table summary",
+            "value_ref": "q1_table",
+            "status": "evidence_verified",
+            "evidence_ids": ["q1_read_missing"],
+        }],
+    }
+    model_ir = ModelIR.model_validate({
+        "schema_version": "1.0",
+        "model_id": "runtime_partial_isolation",
+        "subproblems": [q1_subproblem, q2_subproblem],
+    })
+    approved = ApprovedModelIR(
+        review_status="approved",
+        model_id=model_ir.model_id,
+        model_ir_ref="model_ir.json",
+        review_ref="model_review.json",
+        executable_subproblem_ids=[
+            "missing_attachment_subproblem",
+            "finite_inventory_policy",
+        ],
+        approved_model_ir=model_ir,
+    )
+    approved_path = tmp_path / "approved_model_ir.json"
+    approved_path.write_text(approved.model_dump_json(indent=2), encoding="utf-8")
+
+    registry = build_default_operator_registry()
+    manifest_path = asyncio.run(CalculationStage(
+        compiler=ModelIRCompiler(registry=registry),
+        executor=OperatorGraphExecutor(registry=registry),
+    ).run(
+        task_id="runtime-partial",
+        task={"work_dir": str(tmp_path)},
+        input_path=approved_path,
+        output_path=tmp_path / "execution_manifest.json",
+    ))
+
+    results = json.loads((tmp_path / "result_registry.json").read_text(encoding="utf-8"))
+    assert [item["subproblem_id"] for item in results["verified_results"]] == [
+        "finite_inventory_policy"
+    ]
+    assert [item["subproblem_id"] for item in results["blocked_results"]] == [
+        "missing_attachment_subproblem"
+    ]
+    assert results["blocked_results"][0]["failed_node_id"] == "q1_read_missing"
+    assert results["summary"]["coverage_status"] == "partial"
+
+    report_path = asyncio.run(ResultVerificationStage().run(
+        task_id="runtime-partial",
+        task={"work_dir": str(tmp_path)},
+        input_path=manifest_path,
+        output_path=tmp_path / "verification_report.json",
+    ))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["coverage_status"] == "partial"
+    assert report["execution_verified"]["status"] == "passed"
+    assert report["status"] == "partial"
+    assert any(
+        "missing_attachment_subproblem" in issue
+        for issue in report["blocking_issues"]
+    )
+
+    guidance_path = asyncio.run(GuidanceStage().run(
+        task_id="runtime-partial",
+        task={"work_dir": str(tmp_path)},
+        input_path=report_path,
+        output_path=tmp_path / "guidance.md",
+    ))
+    guidance = guidance_path.read_text(encoding="utf-8")
+    assert "流程聚合状态为 `partial`" in guidance
+    assert "`policy`" in guidance
+    assert "missing_attachment_subproblem" in guidance

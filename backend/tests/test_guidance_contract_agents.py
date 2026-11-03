@@ -107,6 +107,24 @@ def _revision_requirement(requirement_id: str, description: str) -> dict:
     }
 
 
+def _indexed_evidence(core: dict) -> dict:
+    # 从固定测试模型构造正式证据表，草稿引用明确列而非首个单元格。
+    evidence = []
+    for number, parameter in enumerate(core["parameters"], start=1):
+        if parameter.get("source_kind") == "runtime_artifact":
+            continue
+        reference = f"inputs/inventory.docx#table-{number}"
+        values = list(parameter["dense_values"])
+        parameter["dense_source_ref"] = reference + "/value"
+        evidence.append({
+            "evidence_id": f"question.table.{number}", "kind": "embedded_table",
+            "source_ref": reference, "source_file": "inputs/inventory.docx",
+            "labels": [], "sha256": "a" * 64, "size_bytes": 64,
+            "rows": [["value"], *[[value] for value in values]], "profile": {},
+        })
+    return {"evidence": evidence}
+
+
 def _prepare_indexed_draft(payload: dict) -> tuple[dict, dict, dict]:
     subproblem = payload["subproblems"][0]
     component = next(
@@ -123,7 +141,7 @@ def _prepare_indexed_draft(payload: dict) -> tuple[dict, dict, dict]:
 
 
 def test_problem_decomposer_owns_task_summary_when_llm_omits_it() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
 
     llm = StubLLM(_split_decomposition_payload({
         "subproblems": [_subproblem(
@@ -156,7 +174,7 @@ def test_problem_decomposer_owns_task_summary_when_llm_omits_it() -> None:
 
 
 def test_problem_decomposer_regenerates_complete_json_once_after_syntax_error() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
 
     llm = StubLLM([
         '{"subproblems": [{"id": "problem_1"} {"id": "problem_2"}]}',
@@ -191,7 +209,7 @@ def test_problem_decomposer_regenerates_complete_json_once_after_syntax_error() 
 
 
 def test_contract_request_prompts_for_strict_json_without_markdown_fences() -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
 
     llm = StubLLM([
         "```json\n{\"subproblems\": [{\"id\": \"problem1\"} {\"id\": \"problem2\"}]}\n```",
@@ -224,7 +242,7 @@ def test_contract_request_prompts_for_strict_json_without_markdown_fences() -> N
 
 
 def test_modeler_requests_typed_model_ir_and_retries_complete_contract(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
     from app.guidance.model_ir import ModelIR
 
@@ -250,9 +268,10 @@ def test_modeler_requests_typed_model_ir_and_retries_complete_contract(tmp_path:
 
 
 def test_modeler_and_reviser_receive_the_same_architecture_contract(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
-    from app.guidance.model_ir import ModelIR, ModelIRReview
+    from app.guidance.model_ir import (ModelIR)
+    from app.guidance.model_review_contracts import (ModelIRReview)
 
     problem_spec = ProblemSpec(
         task_summary="Build an evidence-bound model.",
@@ -312,7 +331,7 @@ def test_modeler_and_reviser_receive_the_same_architecture_contract(tmp_path: Pa
 
 
 def test_modeler_preserves_long_problem_context_and_evidence_profile(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
     task_summary = "common physical premise: four operators per robot. " + "A" * 2000
@@ -342,9 +361,10 @@ def test_modeler_preserves_long_problem_context_and_evidence_profile(tmp_path: P
 
 
 def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
-    from app.guidance.model_ir import ModelIR, ModelIRReview
+    from app.guidance.model_ir import (ModelIR)
+    from app.guidance.model_review_contracts import (ModelIRReview)
 
     fixture_path = (
         Path(__file__).parent
@@ -397,6 +417,7 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
             )],
         }],
     )
+    evidence_profile = _indexed_evidence(core)
     llm = StubLLM([draft, core, constraints])
 
     asyncio.run(LLMModeler(
@@ -409,7 +430,7 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
         ),
         previous_model_ir=previous_model,
         review=review,
-        evidence_profile={"evidence": []},
+        evidence_profile=evidence_profile,
         task={},
         work_dir=tmp_path,
     ))
@@ -441,9 +462,10 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
         )]
 
 
+
 def test_modeler_scopes_review_payload_to_target_subproblem() -> None:
-    from app.guidance.agents import _subproblem_review_payload
-    from app.guidance.model_ir import ModelIRReview
+    from app.guidance.modeling_context import _subproblem_review_payload
+    from app.guidance.model_review_contracts import (ModelIRReview)
 
     review = ModelIRReview(
         model_id="mixed-review",
@@ -483,9 +505,9 @@ def test_modeler_scopes_review_payload_to_target_subproblem() -> None:
 
 
 def test_modeler_rejects_milp_as_an_untyped_operator_graph() -> None:
-    from app.guidance.agents import _validate_generation_draft_slice
+    from app.guidance.generation_validation import _validate_generation_draft_slice
     from app.guidance.contracts import ProblemSpec
-    from app.guidance.model_ir import ModelIRGenerationDraft
+    from app.guidance.model_ir_drafts import (ModelIRGenerationDraft)
 
     fixture_path = (
         Path(__file__).parent
@@ -517,7 +539,7 @@ def test_modeler_rejects_milp_as_an_untyped_operator_graph() -> None:
 
 
 def test_combination_draft_preserves_forecast_when_adding_indexed_solver() -> None:
-    from app.guidance.model_ir import ModelIRGenerationDraft
+    from app.guidance.model_ir_drafts import (ModelIRGenerationDraft)
 
     fixture_path = (
         Path(__file__).parent
@@ -565,7 +587,7 @@ def test_combination_draft_preserves_forecast_when_adding_indexed_solver() -> No
 def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
     tmp_path: Path,
 ) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
     from app.guidance.model_ir_compiler import ModelIRCompiler
     from app.guidance.operator_catalog import build_default_operator_registry
@@ -639,6 +661,7 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
         "constraints": indexed["constraints"],
     }
 
+    evidence_profile = _indexed_evidence(core)
     model_ir = asyncio.run(LLMModeler(
         StubLLM([architecture, core, constraints]),
         available_operator_ids=["forecast.test", "optimization.milp"],
@@ -650,7 +673,7 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
                 objective="Produce a forecast-bound policy.",
             )],
         ),
-        evidence_profile={"evidence": []},
+        evidence_profile=evidence_profile,
         task={},
         work_dir=tmp_path,
     ))
@@ -675,6 +698,7 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
     assert solve.inputs == {"demand": "forecast_bundle"}
 
 
+
 def test_canonical_fact_binding_rejects_uri_fragment() -> None:
     from app.guidance.model_ir import FactBindingSpec
 
@@ -686,10 +710,7 @@ def test_canonical_fact_binding_rejects_uri_fragment() -> None:
 
 
 def test_indexed_core_draft_exposes_runtime_parameter_source_to_constraints() -> None:
-    from app.guidance.model_ir import (
-        ConstraintGenerationContext,
-        IndexedLinearCoreDraft,
-    )
+    from app.guidance.model_ir_drafts import (ConstraintGenerationContext, IndexedLinearCoreDraft)
 
     core = IndexedLinearCoreDraft.model_validate({
         "index_sets": [{"id": "period", "values": ["p1", "p2"]}],
@@ -730,7 +751,7 @@ def test_indexed_core_draft_exposes_runtime_parameter_source_to_constraints() ->
 
 
 def test_indexed_draft_allows_system_managed_candidate_node_refs() -> None:
-    from app.guidance.model_ir import ModelIRGenerationDraft
+    from app.guidance.model_ir_drafts import (ModelIRGenerationDraft)
 
     fixture_path = (
         Path(__file__).parent
@@ -755,7 +776,7 @@ def test_indexed_draft_allows_system_managed_candidate_node_refs() -> None:
 
 
 def test_pure_indexed_draft_rejects_unmanaged_candidate_node_refs() -> None:
-    from app.guidance.model_ir import ModelIRGenerationDraft
+    from app.guidance.model_ir_drafts import (ModelIRGenerationDraft)
 
     fixture_path = (
         Path(__file__).parent
@@ -773,7 +794,7 @@ def test_pure_indexed_draft_rejects_unmanaged_candidate_node_refs() -> None:
 
 
 def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
     llm = StubLLM(_blocked_ir())
@@ -801,7 +822,7 @@ def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
 
 
 def test_modeler_generates_each_subproblem_separately_and_merges_contracts(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
     llm = StubLLM([
@@ -834,7 +855,7 @@ def test_modeler_generates_each_subproblem_separately_and_merges_contracts(tmp_p
 def test_modeler_isolates_subproblem_contract_failure_and_continues(
     tmp_path: Path,
 ) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
     llm = StubLLM([
@@ -891,7 +912,7 @@ def test_modeler_isolates_subproblem_contract_failure_and_continues(
 
 
 def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
     fixture_path = (
@@ -927,6 +948,7 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
         ],
         "constraints": indexed["constraints"],
     }
+    evidence_profile = _indexed_evidence(core)
     llm = StubLLM([draft, core, constraints])
 
     result = asyncio.run(LLMModeler(
@@ -937,7 +959,7 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
             task_summary="Optimize a generic finite inventory system.",
             subproblems=[_subproblem(objective="Minimize total cost.")],
         ),
-        evidence_profile={"evidence": []},
+        evidence_profile=evidence_profile,
         task={},
         work_dir=tmp_path,
     ))
@@ -993,15 +1015,12 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
     ]
 
 
+
 def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> None:
     from pydantic import ValidationError
 
-    from app.guidance.agents import _validate_indexed_parts
-    from app.guidance.model_ir import (
-        ConstraintGenerationContext,
-        IndexedLinearConstraintsDraft,
-        IndexedLinearCoreDraft,
-    )
+    from app.guidance.generation_validation import _validate_indexed_parts
+    from app.guidance.model_ir_drafts import (ConstraintGenerationContext, IndexedLinearConstraintsDraft, IndexedLinearCoreDraft)
 
     core = IndexedLinearCoreDraft.model_validate({
         "index_sets": [{"id": "period", "values": [1, 2]}],
@@ -1056,14 +1075,8 @@ def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> Non
 
 
 def test_indexed_core_generation_rejects_large_literal_period_unrolling() -> None:
-    from app.guidance.agents import (
-        _validate_indexed_constraints_compactness,
-        _validate_indexed_core_compactness,
-    )
-    from app.guidance.model_ir import (
-        IndexedLinearConstraintsDraft,
-        IndexedLinearCoreDraft,
-    )
+    from app.guidance.generation_validation import _validate_indexed_constraints_compactness, _validate_indexed_core_compactness
+    from app.guidance.model_ir_drafts import (IndexedLinearConstraintsDraft, IndexedLinearCoreDraft)
 
     expanded = IndexedLinearCoreDraft.model_validate({
         "index_sets": [{"id": "week", "values": list(range(1, 105))}],
@@ -1157,10 +1170,7 @@ def test_indexed_core_generation_rejects_large_literal_period_unrolling() -> Non
 def test_indexed_generation_drafts_limit_model_family_count() -> None:
     from pydantic import ValidationError
 
-    from app.guidance.model_ir import (
-        IndexedLinearConstraintsDraft,
-        IndexedLinearCoreDraft,
-    )
+    from app.guidance.model_ir_drafts import (IndexedLinearConstraintsDraft, IndexedLinearCoreDraft)
 
     term = {
         "coefficient": {"kind": "constant", "value": 1.0},
@@ -1200,7 +1210,7 @@ def test_indexed_generation_drafts_limit_model_family_count() -> None:
 def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Path) -> None:
     from copy import deepcopy
 
-    from app.guidance.agents import LLMModeler
+    from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
     fixture_path = (
@@ -1236,6 +1246,7 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
         ],
         "constraints": indexed["constraints"],
     }
+    evidence_profile = _indexed_evidence(core)
     invalid_core = deepcopy(core)
     invalid_core["objective"]["terms"][0]["variable"]["selectors"] = []
     llm = StubLLM([draft, invalid_core, core, constraints])
@@ -1248,7 +1259,7 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
             task_summary="Optimize a generic finite inventory system.",
             subproblems=[_subproblem(objective="Minimize total cost.")],
         ),
-        evidence_profile={"evidence": []},
+        evidence_profile=evidence_profile,
         task={},
         work_dir=tmp_path,
     ))
@@ -1262,13 +1273,12 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
     assert "indexed_dimension_mismatch" in llm.calls[2]["history"][1]["content"]
 
 
+
 def test_indexed_constraint_draft_normalizes_null_without_weakening_canonical() -> None:
     from pydantic import ValidationError
 
-    from app.guidance.model_ir import (
-        IndexedLinearConstraint,
-        IndexedLinearConstraintsDraft,
-    )
+    from app.guidance.model_ir import (IndexedLinearConstraint)
+    from app.guidance.model_ir_drafts import (IndexedLinearConstraintsDraft)
 
     constraint_payload = {
         "id": "capacity",
@@ -1314,7 +1324,7 @@ def test_indexed_constraint_draft_normalizes_null_without_weakening_canonical() 
 
 
 def test_model_reviewer_receives_problem_and_model_ir_contracts(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMModelReviewer
+    from app.guidance.reviewer import LLMModelReviewer
     from app.guidance.contracts import ProblemSpec
     from app.guidance.model_ir import ModelIR
 
@@ -1354,7 +1364,7 @@ def test_model_reviewer_receives_problem_and_model_ir_contracts(tmp_path: Path) 
 def test_model_reviewer_rejects_runtime_parameter_without_producing_operator(
     tmp_path: Path,
 ) -> None:
-    from app.guidance.agents import LLMModelReviewer
+    from app.guidance.reviewer import LLMModelReviewer
     from app.guidance.contracts import ProblemSpec
     from app.guidance.model_ir import ModelIR
 
@@ -1406,7 +1416,7 @@ def test_model_reviewer_rejects_runtime_parameter_without_producing_operator(
 
 
 def test_contract_failure_stops_after_two_attempts_and_saves_diagnostics(tmp_path: Path) -> None:
-    from app.guidance.agents import LLMProblemDecomposer
+    from app.guidance.decomposer import LLMProblemDecomposer
     from app.guidance.contract_request import ContractGenerationError
 
     llm = StubLLM(["{bad json", "{still bad json"])

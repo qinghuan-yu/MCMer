@@ -1,3 +1,6 @@
+
+from app.core.figure_data import coerce_numeric_value, deterministic_overview_columns_from_registry
+from app.core.figure_rendering import render_required_requests_deterministically
 import asyncio
 import json
 from pathlib import Path
@@ -13,7 +16,6 @@ from app.core.stages.figure_recovery_stage import FigureRecoveryStage
 from app.core.stages.finalizer_stage import FinalizerStage
 from app.core.stages.quality_gate_stage import QualityGateStage
 from app.core.stages.writer_stage import WriterStage
-from app.core.figure_stage import FigureStage
 from app.artifacts.visualization_schema import supported_views_for_result_type
 
 
@@ -66,10 +68,10 @@ def test_result_overview_fallback_is_required_and_canonical(tmp_path: Path) -> N
 
 
 def test_result_overview_renders_from_verified_results_without_csv(tmp_path: Path) -> None:
-    assert FigureStage.coerce_numeric_value("f1(t) = 8.0000") == 8.0
-    assert FigureStage.coerce_numeric_value("Flow=66.35") == 66.35
+    assert coerce_numeric_value("f1(t) = 8.0000") == 8.0
+    assert coerce_numeric_value("Flow=66.35") == 66.35
 
-    columns, linked_ids, sources = FigureStage.deterministic_overview_columns_from_registry(
+    columns, linked_ids, sources = deterministic_overview_columns_from_registry(
         {
             "verified_results": [
                 {"id": "r1", "name": "First metric", "value": 1.2, "source_data": ["result_registry.json"]},
@@ -89,7 +91,7 @@ def test_result_overview_renders_from_verified_results_without_csv(tmp_path: Pat
     assert linked_ids == ["r1", "r2", "r3"]
     assert sources == ["result_registry.json"]
 
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={
             "verified_results": [
@@ -118,7 +120,7 @@ def test_result_overview_renders_from_verified_results_without_csv(tmp_path: Pat
 
 
 def test_result_overview_renders_single_scalar_verified_result(tmp_path: Path) -> None:
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={
             "verified_results": [
@@ -152,7 +154,7 @@ def test_result_overview_rejects_unbound_overview(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    report = FigureStage.render_required_requests_deterministically(
+    report = render_required_requests_deterministically(
         work_dir=str(tmp_path),
         result_registry={"verified_results": []},
         required_requests=[
@@ -573,7 +575,7 @@ def test_figure_gate_stage_builds_bundle_snapshot(monkeypatch) -> None:
             return ["output/fig.png"]
 
     monkeypatch.setattr(
-        "app.core.stages.figure_gate_stage.LegacyFigureStage.build_bundle_snapshot",
+        "app.core.stages.figure_gate_stage.build_bundle_snapshot",
         lambda registry: {
             "figure_bundle": bundle,
             "figure_bundle_dict": bundle.to_dict(),
@@ -757,7 +759,7 @@ def test_quality_gate_ignores_legacy_expected_figures_when_plan_says_no_figures(
 
 
 def test_workflow_expected_figures_prefers_figure_plan_over_legacy_solve_spec() -> None:
-    from app.core.workflow import _expected_figures_from_plan_or_legacy
+    from app.core.chart_support import _expected_figures_from_plan_or_legacy
 
     solve_spec = {
         "requires_figures": True,

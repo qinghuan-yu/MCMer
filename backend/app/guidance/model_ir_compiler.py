@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.guidance.contracts import ProblemSpec
 from app.guidance.indexed_linear import (
     expand_indexed_linear_model,
     validate_indexed_linear_model_structure,
@@ -80,10 +82,19 @@ class ModelIRCompiler:
         model_ir: ModelIR,
         *,
         model_ir_ref: str = "model_ir.json",
+        problem_spec: ProblemSpec | Mapping[str, Any] | None = None,
+        evidence_profile: Mapping[str, Any] | Any | None = None,
     ) -> CompilationResult:
         diagnostics: list[CompilationDiagnostic] = []
         blocked: list[BlockedCompilation] = []
         nodes: list[ExecutionNode] = []
+        locked_facts: Sequence[Any] | None = None
+        if isinstance(problem_spec, ProblemSpec):
+            locked_facts = problem_spec.locked_facts
+        elif isinstance(problem_spec, Mapping):
+            raw_facts = problem_spec.get("locked_facts")
+            if isinstance(raw_facts, Sequence):
+                locked_facts = raw_facts
 
         for subproblem in model_ir.subproblems:
             if isinstance(subproblem, BlockedModelIR):
@@ -95,6 +106,8 @@ class ModelIRCompiler:
             sub_diagnostics, sub_nodes, missing = self._compile_subproblem(
                 subproblem,
                 model_ir_ref=model_ir_ref,
+                locked_facts=locked_facts,
+                evidence_profile=evidence_profile,
             )
             diagnostics.extend(sub_diagnostics)
             nodes.extend(sub_nodes)
@@ -131,8 +144,15 @@ class ModelIRCompiler:
         *,
         output_path,
         model_ir_ref: str = "model_ir.json",
+        problem_spec: ProblemSpec | Mapping[str, Any] | None = None,
+        evidence_profile: Mapping[str, Any] | Any | None = None,
     ) -> CompilationResult:
-        result = self.compile(model_ir, model_ir_ref=model_ir_ref)
+        result = self.compile(
+            model_ir,
+            model_ir_ref=model_ir_ref,
+            problem_spec=problem_spec,
+            evidence_profile=evidence_profile,
+        )
         if result.execution_plan is None:
             return result
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,6 +169,8 @@ class ModelIRCompiler:
         subproblem: SolvableModelIR,
         *,
         model_ir_ref: str,
+        locked_facts: Sequence[Any] | None = None,
+        evidence_profile: Mapping[str, Any] | Any | None = None,
     ) -> tuple[list[CompilationDiagnostic], list[ExecutionNode], list[str]]:
         diagnostics: list[CompilationDiagnostic] = []
         variables, invocation_list, indexed_component, ir_sources = _execution_parts(
@@ -204,7 +226,11 @@ class ModelIRCompiler:
                         node_id=indexed_node_id,
                         message=issue.message,
                     )
-                    for issue in validate_indexed_linear_model_structure(indexed_model)
+                    for issue in validate_indexed_linear_model_structure(
+                        indexed_model,
+                        locked_facts=locked_facts,
+                        evidence_profile=evidence_profile,
+                    )
                 )
                 artifact_producers = _artifact_producers(invocation_list)
                 runtime_parameter_inputs = {
@@ -230,7 +256,9 @@ class ModelIRCompiler:
                 }
             else:
                 compiled_indexed_model, indexed_issues = expand_indexed_linear_model(
-                    indexed_model
+                    indexed_model,
+                    locked_facts=locked_facts,
+                    evidence_profile=evidence_profile,
                 )
                 diagnostics.extend(
                     CompilationDiagnostic(

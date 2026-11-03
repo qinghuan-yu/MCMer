@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Literal
 
-from app.utils.common_utils import save_json
+from app.utils.file_io import save_json
 
 
 @dataclass

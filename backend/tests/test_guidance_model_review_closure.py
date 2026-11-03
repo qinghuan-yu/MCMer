@@ -19,11 +19,7 @@ def _model_ir():
 
 
 def test_approved_rereview_requires_complete_accepted_revision_evidence() -> None:
-    from app.guidance.model_ir import (
-        ModelIRReview,
-        RevisionCheckSpec,
-        RevisionRequirementSpec,
-    )
+    from app.guidance.model_review_contracts import (ModelIRReview, RevisionCheckSpec, RevisionRequirementSpec)
     from app.guidance.model_review_validation import validate_model_review
 
     model_ir = _model_ir()

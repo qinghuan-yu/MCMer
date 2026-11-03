@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.utils.common_utils import load_json
+from app.utils.file_io import load_json
 from app.utils.figure_artifacts import (
     FIGURE_MANIFEST,
     figure_artifact_path,

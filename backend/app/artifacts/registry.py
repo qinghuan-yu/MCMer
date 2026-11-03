@@ -23,7 +23,8 @@ from app.utils.figure_artifacts import (
     normalize_artifact_path,
     is_image_path,
 )
-from app.utils.common_utils import build_result_registry, load_json
+from app.utils.result_registry import build_result_registry
+from app.utils.file_io import load_json
 
 logger = logging.getLogger(__name__)
 
