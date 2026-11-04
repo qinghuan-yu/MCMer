@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-from app.guidance.contracts import ProblemSpec
+from app.guidance.contracts import ModelingRequirementSpec, ProblemSpec
 from app.guidance.evidence_consistency import validate_model_evidence_consistency
 from app.guidance.indexed_linear import (
     validate_indexed_linear_core,
@@ -29,6 +29,10 @@ from app.guidance.model_ir_semantics import (
     validate_model_fact_coverage,
 )
 from app.guidance.modeling_context import _remaining_locked_facts
+from app.guidance.requirement_coverage import (
+    indexed_requirement_errors,
+    validate_requirement_coverage,
+)
 
 
 def _validate_indexed_core_stage(
@@ -57,8 +61,16 @@ def _validate_indexed_constraint_stage(
     constraints: IndexedLinearConstraintsDraft,
     context: ConstraintGenerationContext,
     locked_facts: list[dict[str, Any]],
+    requirements: Sequence[ModelingRequirementSpec],
 ) -> None:
     _validate_indexed_parts(core, constraints, context)
+    model = core.promote(constraints.promote_constraints(), constraints.additional_index_sets)
+    requirement_errors = indexed_requirement_errors(requirements, model, model.constraints)
+    if requirement_errors:
+        raise ValueError(
+            "requirement coverage mismatch in indexed constraints: "
+            + "; ".join(requirement_errors)
+        )
     remaining = _remaining_locked_facts(
         locked_facts,
         [
@@ -251,6 +263,7 @@ def _validate_model_ir_slice(
         )
     validate_model_evidence_consistency(problem_spec, model_ir, evidence_profile)
     validate_model_fact_coverage(problem_spec, model_ir)
+    validate_requirement_coverage(problem_spec, model_ir)
     if available_operator_ids:
         supported = set(available_operator_ids)
         unsupported = sorted({
@@ -284,6 +297,7 @@ def _validate_model_ir_contract(
         )
     validate_model_evidence_consistency(problem_spec, model_ir, evidence_profile)
     validate_model_fact_coverage(problem_spec, model_ir)
+    validate_requirement_coverage(problem_spec, model_ir)
     _validate_model_ir_semantics(model_ir)
 
 def _validate_model_ir_semantics(model_ir: ModelIR) -> None:

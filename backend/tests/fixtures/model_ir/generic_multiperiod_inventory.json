@@ -11,9 +11,7 @@
       "data": [
         {"id": "source", "source_ref": "input_catalog.json#table-1", "fields": {"value": "value"}}
       ],
-      "equations": [
-        {"id": "indexed_state_system", "left": {"kind": "literal", "value": 0.0}, "right": {"kind": "literal", "value": 0.0}}
-      ],
+      "equations": [],
       "constraints": [],
       "execution_components": [{
         "kind": "indexed_linear",
@@ -85,6 +83,7 @@
           {"id": "fix_maintenance", "for_each": {"t": "period"}, "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "maintenance_state", "selectors": [{"binder": "t"}]}}], "relation": "equal", "rhs": {"kind": "parameter", "parameter_id": "maintenance", "selectors": [{"binder": "t"}]}},
           {
             "id": "initial_balance",
+            "fulfills_requirement_ids": ["req.stock_conservation", "req.demand"],
             "terms": [
               {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "inventory", "selectors": [{"value": "p0"}]}},
               {"coefficient": {"kind": "constant", "value": -1.0}, "variable": {"variable_id": "initial_stock_state", "selectors": []}},
@@ -96,6 +95,7 @@
           },
           {
             "id": "state_balance",
+            "fulfills_requirement_ids": ["req.stock_conservation", "req.demand"],
             "for_each": {"t": "transition_period"},
             "terms": [
               {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "inventory", "selectors": [{"binder": "t"}]}},
@@ -107,9 +107,10 @@
             "relation": "equal",
             "rhs": {"kind": "parameter", "parameter_id": "demand", "selectors": [{"binder": "t"}], "multiplier": -1.0}
           },
-          {"id": "initial_commissioned", "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "commissioned", "selectors": [{"value": "p0"}]}}], "relation": "equal", "rhs": {"kind": "constant", "value": 0.0}},
+          {"id": "initial_commissioned", "fulfills_requirement_ids": ["req.commissioning_lag"], "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "commissioned", "selectors": [{"value": "p0"}]}}], "relation": "equal", "rhs": {"kind": "constant", "value": 0.0}},
           {
             "id": "commissioning_delay",
+            "fulfills_requirement_ids": ["req.commissioning_lag"],
             "for_each": {"t": "transition_period"},
             "terms": [
               {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "commissioned", "selectors": [{"binder": "t"}]}},
@@ -129,9 +130,10 @@
             "relation": "equal",
             "rhs": {"kind": "constant", "value": 0.0}
           },
-          {"id": "tier_capacity", "for_each": {"t": "period"}, "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "tier_one", "selectors": [{"binder": "t"}]}}], "relation": "less_equal", "rhs": {"kind": "parameter", "parameter_id": "tier_capacity", "selectors": []}},
+          {"id": "tier_capacity", "fulfills_requirement_ids": ["req.tier_capacity"], "for_each": {"t": "period"}, "terms": [{"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "tier_one", "selectors": [{"binder": "t"}]}}], "relation": "less_equal", "rhs": {"kind": "parameter", "parameter_id": "tier_capacity", "selectors": []}},
           {
             "id": "setup_capacity",
+            "fulfills_requirement_ids": ["req.setup_capacity"],
             "for_each": {"t": "period"},
             "terms": [
               {"coefficient": {"kind": "constant", "value": 1.0}, "variable": {"variable_id": "purchase", "selectors": [{"binder": "t"}]}},

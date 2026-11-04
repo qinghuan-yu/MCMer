@@ -125,13 +125,19 @@ def _indexed_evidence(core: dict) -> dict:
     return {"evidence": evidence}
 
 
-def _prepare_indexed_draft(payload: dict) -> tuple[dict, dict, dict]:
+def _prepare_indexed_draft(
+    payload: dict, *, keep_requirement_claims: bool = False,
+) -> tuple[dict, dict, dict]:
     subproblem = payload["subproblems"][0]
     component = next(
         item
         for item in subproblem.pop("execution_components")
         if item["kind"] == "indexed_linear"
     )
+    if not keep_requirement_claims:
+        # 未声明 modeling_requirements 的题面下，约束不得声称履行需求。
+        for constraint in component["model"]["constraints"]:
+            constraint.pop("fulfills_requirement_ids", None)
     subproblem.pop("equations")
     subproblem.pop("constraints")
     subproblem.pop("fact_bindings")
@@ -171,6 +177,60 @@ def test_problem_decomposer_owns_task_summary_when_llm_omits_it() -> None:
     assert result.task_summary == "分析题目中的矩阵并完成各子问题。"
     assert result.subproblems[0].id == "problem1"
     assert "目标 JSON Schema" in llm.calls[0]["history"][0]["content"]
+
+
+def test_problem_decomposer_fact_audit_produces_modeling_requirements() -> None:
+    from app.guidance.decomposer import LLMProblemDecomposer
+
+    question = "每期采购在下一期投产，库存逐期结转。"
+    structure, facts = _split_decomposition_payload({
+        "subproblems": [_subproblem("problem_1", objective="最小化成本")],
+    })
+    facts["modeling_requirements"] = [{
+        "requirement_id": "req.lag",
+        "kind": "lagged_link",
+        "lag": 1,
+        "statement": "采购在下一期投产。",
+        "subproblem_ids": ["problem_1"],
+        "source_refs": ["inputs/problem.txt#paragraph-1"],
+    }]
+    llm = StubLLM([structure, facts])
+
+    result = asyncio.run(LLMProblemDecomposer(llm).decompose(
+        question=question,
+        evidence_profile={"evidence": []},
+        input_catalog=_input_catalog(question),
+        task={},
+    ))
+
+    fact_prompt = llm.calls[1]["history"][0]["content"]
+    assert "题意中的状态守恒、滞后联动、容量上限和需求满足规则必须登记为 modeling_requirements" in (
+        fact_prompt
+    )
+    requirement = result.modeling_requirements[0]
+    assert (requirement.kind, requirement.lag, requirement.subproblem_ids) == (
+        "lagged_link", 1, ["problem1"],
+    )
+
+
+def test_problem_evidence_rejects_requirement_with_unregistered_source() -> None:
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.evidence_consistency import validate_problem_evidence_consistency
+
+    question = "库存逐期结转。"
+    spec = ProblemSpec(
+        task_summary=question,
+        subproblems=[_subproblem(objective="最小化成本")],
+        modeling_requirements=[{
+            "requirement_id": "req.stock",
+            "kind": "state_conservation",
+            "statement": "库存逐期结转。",
+            "subproblem_ids": ["problem1"],
+            "source_refs": ["inputs/invented.txt#paragraph-9"],
+        }],
+    )
+    with pytest.raises(ValueError, match="inputs/invented.txt#paragraph-9"):
+        validate_problem_evidence_consistency(spec, {"evidence": []}, _input_catalog(question))
 
 
 def test_problem_decomposer_regenerates_complete_json_once_after_syntax_error() -> None:
@@ -1014,6 +1074,130 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
         for variable in core["variables"]
     ]
 
+
+
+def _inventory_generation_responses() -> tuple[dict, dict, dict, dict]:
+    fixture_path = (
+        Path(__file__).parent / "fixtures" / "model_ir" / "generic_multiperiod_inventory.json"
+    )
+    draft = json.loads(fixture_path.read_text(encoding="utf-8"))
+    draft_subproblem, indexed, _ = _prepare_indexed_draft(draft, keep_requirement_claims=True)
+    draft_subproblem["subproblem_id"] = "problem1"
+    draft_subproblem["execution_components"] = ["indexed_linear_model"]
+    for candidate in draft_subproblem["candidate_models"]:
+        candidate["operator_node_ids"] = []
+    for parameter in indexed["parameters"]:
+        values = parameter.pop("values")
+        parameter["source_kind"] = "static"
+        parameter["dense_values"] = [item["value"] for item in values]
+        parameter["dense_source_ref"] = values[0]["source_ref"]
+    core = {
+        "index_sets": [
+            item for item in indexed["index_sets"] if item["id"] != "transition_period"
+        ],
+        "parameters": indexed["parameters"],
+        "variables": indexed["variables"],
+        "objective": indexed["objective"],
+    }
+    constraints = {
+        "additional_index_sets": [
+            item for item in indexed["index_sets"] if item["id"] == "transition_period"
+        ],
+        "constraints": indexed["constraints"],
+    }
+    return draft, core, constraints, _indexed_evidence(core)
+
+
+def _inventory_problem_spec_with_requirements():
+    from app.guidance.contracts import ProblemSpec
+
+    spec = json.loads((
+        Path(__file__).parent / "fixtures" / "model_ir"
+        / "generic_multiperiod_inventory_problem_spec.json"
+    ).read_text(encoding="utf-8"))
+    for requirement in spec["modeling_requirements"]:
+        requirement["subproblem_ids"] = ["problem1"]
+    return ProblemSpec(
+        task_summary=spec["task_summary"],
+        subproblems=[_subproblem(objective="Minimize total cost.")],
+        modeling_requirements=spec["modeling_requirements"],
+    )
+
+
+def test_constraint_stage_receives_scoped_requirements_and_retries_unfulfilled_lag(
+    tmp_path: Path,
+) -> None:
+    from app.guidance.modeler import LLMModeler
+
+    draft, core, constraints, evidence_profile = _inventory_generation_responses()
+    missing_lag = json.loads(json.dumps(constraints))
+    missing_lag["constraints"] = [
+        item for item in missing_lag["constraints"] if item["id"] != "commissioning_delay"
+    ]
+    llm = StubLLM([draft, core, missing_lag, constraints])
+
+    result = asyncio.run(LLMModeler(llm, available_operator_ids=["optimization.milp"]).model(
+        problem_spec=_inventory_problem_spec_with_requirements(),
+        evidence_profile=evidence_profile,
+        task={},
+        work_dir=tmp_path,
+    ))
+
+    assert len(llm.calls) == 4
+    constraint_prompt = llm.calls[2]["history"][0]["content"]
+    assert "fulfills_requirement_ids" in constraint_prompt
+    constraint_payload = json.loads(llm.calls[2]["history"][1]["content"])
+    assert [item["requirement_id"] for item in constraint_payload["modeling_requirements"]] == [
+        "req.stock_conservation", "req.commissioning_lag", "req.demand",
+        "req.tier_capacity", "req.setup_capacity",
+    ]
+    retry_feedback = json.dumps(llm.calls[3]["history"], ensure_ascii=False)
+    assert "req.commissioning_lag" in retry_feedback
+    component = result.subproblems[0].execution_components[0]
+    assert {
+        constraint.id: constraint.fulfills_requirement_ids
+        for constraint in component.model.constraints
+    }["commissioning_delay"] == ["req.commissioning_lag"]
+
+
+def test_model_contract_rejects_unfulfilled_requirement() -> None:
+    from app.guidance.generation_validation import _validate_model_ir_contract
+    from app.guidance.model_ir import ModelIR
+
+    model = json.loads((
+        Path(__file__).parent / "fixtures" / "model_ir" / "generic_multiperiod_inventory.json"
+    ).read_text(encoding="utf-8"))
+    subproblem = model["subproblems"][0]
+    subproblem["subproblem_id"] = "problem1"
+    indexed = subproblem["execution_components"][0]["model"]
+    indexed["constraints"] = [
+        item for item in indexed["constraints"] if item["id"] != "commissioning_delay"
+    ]
+    tables = {
+        "table-1": [
+            ["period", "demand", "loss", "maintenance", "initial_stock"],
+            ["p0", 2.0, 1.0, 0.0, 5.0], ["p1", 4.0, 0.0, 1.0, ""], ["p2", 3.0, 1.0, 0.0, ""],
+        ],
+        "table-2": [
+            ["item", "value"], ["tier_one_cost", 2.0], ["tier_two_cost", 5.0],
+            ["setup_cost", 1.0], ["holding_cost", 0.5], ["tier_capacity", 2.0],
+            ["setup_capacity", 20.0],
+        ],
+    }
+    evidence = {"evidence": [
+        {
+            "evidence_id": f"question.{name}", "kind": "embedded_table",
+            "source_ref": f"input_catalog.json#{name}", "source_file": "input_catalog.json",
+            "labels": [], "sha256": "a" * 64, "size_bytes": 64, "rows": rows, "profile": {},
+        }
+        for name, rows in tables.items()
+    ]}
+    with pytest.raises(ValueError, match="req.commissioning_lag"):
+        _validate_model_ir_contract(
+            _inventory_problem_spec_with_requirements(),
+            ModelIR.model_validate(model),
+            evidence,
+        )
 
 
 def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> None:

@@ -52,6 +52,50 @@ class UncertaintySpec(BaseModel):
     unit: str = Field(max_length=100)
 
 
+RequirementKind = Literal[
+    "state_conservation",
+    "lagged_link",
+    "upper_capacity",
+    "demand_satisfaction",
+]
+
+
+class ModelingRequirementSpec(BaseModel):
+    """题意要求的结构义务；由索引约束经 fulfills_requirement_ids 按类型履行。"""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    requirement_id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$", max_length=120)
+    kind: RequirementKind
+    statement: str = Field(min_length=1, max_length=800)
+    subproblem_ids: list[str] = Field(min_length=1, max_length=50)
+    source_refs: list[str] = Field(min_length=1, max_length=20)
+    source_fact_ids: list[str] = Field(default_factory=list, max_length=50)
+    lag: int | None = Field(default=None, ge=1, le=10000)
+
+    @model_validator(mode="after")
+    def require_lag_only_for_lagged_link(self) -> ModelingRequirementSpec:
+        if self.kind == "lagged_link" and self.lag is None:
+            raise ValueError("lagged_link requires lag")
+        if self.kind != "lagged_link" and self.lag is not None:
+            raise ValueError("lag is only valid for lagged_link")
+        if len(self.source_fact_ids) != len(set(self.source_fact_ids)):
+            raise ValueError("requirement source_fact_ids must be unique")
+        return self
+
+
+class ModelingRequirementGenerationDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    requirement_id: str = Field(min_length=1, max_length=400)
+    kind: RequirementKind
+    statement: str = Field(min_length=1, max_length=800)
+    subproblem_ids: list[str] = Field(min_length=1, max_length=50)
+    source_refs: list[str] = Field(min_length=1, max_length=20)
+    source_fact_ids: list[str] = Field(default_factory=list, max_length=50)
+    lag: int | None = Field(default=None, ge=1, le=10000)
+
+
 class LockedFactGenerationDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -126,6 +170,7 @@ class ProblemSpec(BaseModel):
     source_requirements: list[SourceRequirement] = Field(default_factory=list)
     locked_facts: list[LockedFactSpec] = Field(default_factory=list)
     uncertainties: list[UncertaintySpec] = Field(default_factory=list)
+    modeling_requirements: list[ModelingRequirementSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def assign_stable_subproblem_ids(self) -> ProblemSpec:
@@ -141,7 +186,7 @@ class ProblemSpec(BaseModel):
             }))
         self.subproblems = normalized
         valid_ids = {item.id for item in normalized}
-        for record in [*self.locked_facts, *self.uncertainties]:
+        for record in [*self.locked_facts, *self.uncertainties, *self.modeling_requirements]:
             record.subproblem_ids = list(dict.fromkeys(
                 canonical_subproblem_id(item) for item in record.subproblem_ids
             ))
@@ -175,6 +220,29 @@ class ProblemSpec(BaseModel):
             )
 
         facts_by_id = {item.fact_id: item for item in self.locked_facts}
+        requirement_ids = [item.requirement_id for item in self.modeling_requirements]
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError("modeling requirement ids must be unique")
+        for requirement in self.modeling_requirements:
+            unknown_requirement_facts = sorted(
+                set(requirement.source_fact_ids) - set(facts_by_id)
+            )
+            if unknown_requirement_facts:
+                raise ValueError(
+                    f"requirement {requirement.requirement_id!r} cites unknown locked "
+                    f"fact ids: {unknown_requirement_facts!r}"
+                )
+            out_of_scope = [
+                fact_id
+                for fact_id in requirement.source_fact_ids
+                if not set(requirement.subproblem_ids)
+                <= set(facts_by_id[fact_id].subproblem_ids)
+            ]
+            if out_of_scope:
+                raise ValueError(
+                    f"requirement {requirement.requirement_id!r} cites facts outside "
+                    f"its subproblem scope: {out_of_scope!r}"
+                )
         uncertainties_by_id = {
             item.uncertainty_id: item for item in self.uncertainties
         }
@@ -323,6 +391,9 @@ class ProblemFactsGenerationDraft(BaseModel):
 
     locked_facts: list[LockedFactGenerationDraft] = Field(default_factory=list)
     uncertainties: list[UncertaintyGenerationDraft] = Field(default_factory=list)
+    modeling_requirements: list[ModelingRequirementGenerationDraft] = Field(
+        default_factory=list
+    )
 
 
 class ProblemStructureGenerationDraft(BaseModel):
@@ -384,6 +455,33 @@ class ProblemStructureGenerationDraft(BaseModel):
             })
             for index, item in enumerate(facts.uncertainties)
         ]
+        promoted_fact_ids = {
+            unicodedata.normalize("NFKC", item.fact_id).strip(): fact_ids[index]
+            for index, item in enumerate(facts.locked_facts)
+        }
+        requirement_ids = _promote_identifier_sequence(
+            [item.requirement_id for item in facts.modeling_requirements],
+            field_name="requirement_id",
+            fallback_prefix="requirement",
+            max_length=120,
+        )
+        modeling_requirements = [
+            ModelingRequirementSpec.model_validate({
+                **item.model_dump(mode="python"),
+                "requirement_id": requirement_ids[index],
+                "subproblem_ids": [
+                    _promote_subproblem_identifier(value)
+                    for value in item.subproblem_ids
+                ],
+                "source_fact_ids": [
+                    promoted_fact_ids.get(
+                        unicodedata.normalize("NFKC", value).strip(), value
+                    )
+                    for value in item.source_fact_ids
+                ],
+            })
+            for index, item in enumerate(facts.modeling_requirements)
+        ]
         subproblems = _promote_subproblems(self.subproblems)
         subproblems = [
             item.model_copy(update={
@@ -408,6 +506,7 @@ class ProblemStructureGenerationDraft(BaseModel):
             source_requirements=self.source_requirements,
             locked_facts=locked_facts,
             uncertainties=uncertainties,
+            modeling_requirements=modeling_requirements,
         )
 
 

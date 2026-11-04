@@ -40,7 +40,11 @@ def validate_problem_evidence_consistency(
     } | {
         item.source_ref for item in profile.evidence
     }
-    for record in [*problem_spec.locked_facts, *problem_spec.uncertainties]:
+    for record in [
+        *problem_spec.locked_facts,
+        *problem_spec.uncertainties,
+        *problem_spec.modeling_requirements,
+    ]:
         for source_ref in record.source_refs:
             if source_ref not in registered_source_refs:
                 raise ValueError(f"unknown registered evidence source_ref: {source_ref}")

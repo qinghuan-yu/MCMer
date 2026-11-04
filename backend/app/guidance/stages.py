@@ -34,6 +34,7 @@ from app.guidance.model_review_contracts import (
 )
 from app.guidance.model_review_validation import validate_model_review
 from app.guidance.operator_execution import OperatorGraphExecutor
+from app.guidance.requirement_coverage import validate_requirement_coverage
 from app.guidance.stage_contracts import (
     ModelReviewer,
     Modeler,
@@ -122,6 +123,7 @@ class ModelingStage:
             )
         _validate_model_ir_coverage(problem_spec, model_ir)
         validate_model_fact_coverage(problem_spec, model_ir)
+        validate_requirement_coverage(problem_spec, model_ir)
         validate_model_evidence_consistency(problem_spec, model_ir, evidence_profile)
         diagnostics = ModelIRSemanticValidator().validate(model_ir)
         if diagnostics:

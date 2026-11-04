@@ -332,6 +332,7 @@ class IndexedLinearObjectiveDraft(IRModel):
 class IndexedLinearConstraintDraft(IRModel):
     id: str = Field(min_length=1, max_length=100)
     source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
+    fulfills_requirement_ids: list[str] = Field(default_factory=list, max_length=20)
     for_each: dict[str, str] | None = Field(default=None, max_length=4)
     terms: list[IndexedLinearTermDraft] = Field(min_length=1, max_length=1000)
     relation: Literal["equal", "less_equal", "greater_equal"]
@@ -346,6 +347,7 @@ class IndexedLinearConstraintDraft(IRModel):
         return IndexedLinearConstraint(
             id=self.id,
             source_fact_ids=self.source_fact_ids,
+            fulfills_requirement_ids=self.fulfills_requirement_ids,
             for_each=self.for_each or {},
             terms=[item.promote() for item in self.terms],
             relation=self.relation,

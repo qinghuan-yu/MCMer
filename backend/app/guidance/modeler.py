@@ -151,6 +151,11 @@ async def _request_subproblem_models(
                 if uncertainty.get("uncertainty_id")
                 in required_uncertainty_ids
             ],
+            "modeling_requirements": [
+                requirement
+                for requirement in compact_spec["modeling_requirements"]
+                if target_id in requirement["subproblem_ids"]
+            ],
             "dependency_subproblems": [
                 item
                 for item in compact_subproblems

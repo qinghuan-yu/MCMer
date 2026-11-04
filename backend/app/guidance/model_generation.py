@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.llm.llm import LLM
 from app.guidance.contract_request import StructuredContractRequester
-from app.guidance.contracts import ProblemSpec
+from app.guidance.contracts import ModelingRequirementSpec, ProblemSpec
 from app.guidance.generation_validation import (
     _validate_generation_draft_slice,
     _validate_indexed_constraint_stage,
@@ -179,6 +179,10 @@ async def _request_single_subproblem_model(
             ],
         )
         constraint_context = ConstraintGenerationContext.from_core(core)
+        requirements = [
+            ModelingRequirementSpec.model_validate(item)
+            for item in slice_spec["modeling_requirements"]
+        ]
         constraints = await _request_model(
             llm=llm,
             model_type=IndexedLinearConstraintsDraft,
@@ -194,6 +198,13 @@ async def _request_single_subproblem_model(
                 "首期或末期边界条件必须使用独立约束族，禁止让全域 binder 携带非零 offset。"
                 "每个约束的 source_fact_ids 只能登记 locked_facts 中实际使用的事实，"
                 "并且全部约束合计必须覆盖本阶段收到的所有 locked_facts。"
+                "modeling_requirements 的每一项必须由约束的 fulfills_requirement_ids 履行，"
+                "且结构必须符合其 kind：state_conservation 用等式连接同一状态的 t 期与更早期"
+                "（常数系数反号）并另设字面索引的首期边界；lagged_link 用一个变量的 t 期与另一"
+                "变量的 t-lag 期联动，并为目标变量设字面索引的边界；upper_capacity 用 less_equal"
+                "并引用容量参数；demand_satisfaction 用 equal 或 greater_equal 并引用需求参数；"
+                "需求声明 source_fact_ids 时，所引参数必须登记同一事实。"
+                "不得登记未收到的 requirement_id。"
                 "不得写条件表达式、不得把参数当变量、不得输出解释或代码。"
             ),
             payload={
@@ -202,6 +213,7 @@ async def _request_single_subproblem_model(
                 "model_architecture": draft.model_dump(mode="json"),
                 "locked_facts": remaining_after_core,
                 "uncertainties": slice_spec["uncertainties"],
+                "modeling_requirements": slice_spec["modeling_requirements"],
                 "constraint_context": constraint_context.model_dump(mode="json"),
                 **(
                     {"model_review": review_payload}
@@ -216,6 +228,7 @@ async def _request_single_subproblem_model(
                 constraints=constraint_draft,
                 context=constraint_context,
                 locked_facts=remaining_after_core,
+                requirements=requirements,
             ),
             request_timeout=indexed_constraints_timeout,
         )

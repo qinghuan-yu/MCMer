@@ -14,6 +14,7 @@ from app.guidance.model_ir import (
     IndexedLinearExecutionComponent,
     OperatorGraphExecutionComponent,
     OperatorInvocation,
+    ParameterLinearValue,
     SolvableModelIR,
     SymbolExpression,
 )
@@ -194,6 +195,19 @@ class ModelIRSemanticValidator:
                 subproblem.subproblem_id,
                 f"{base}.equations[{equation_index}].right",
             )
+            if not (
+                self._contains_symbol(equation.left)
+                or self._contains_symbol(equation.right)
+            ):
+                diagnostics.append(SemanticDiagnostic(
+                    code="vacuous_equation",
+                    subproblem_id=subproblem.subproblem_id,
+                    path=f"{base}.equations[{equation_index}]",
+                    message=(
+                        f"equation {equation.id!r} contains no model symbol and "
+                        "constrains nothing"
+                    ),
+                ))
             if left_shape is not None and right_shape is not None and left_shape != right_shape:
                 diagnostics.append(SemanticDiagnostic(
                     code="dimension_mismatch",
@@ -273,6 +287,30 @@ class ModelIRSemanticValidator:
                             f"unknown operator artifact: {source.artifact_ref}"
                         ),
                     ))
+            used_parameters = {
+                value.parameter_id
+                for value in [
+                    *(term.coefficient for term in indexed_model.objective.terms),
+                    *(
+                        term.coefficient
+                        for constraint in indexed_model.constraints
+                        for term in constraint.terms
+                    ),
+                    *(constraint.rhs for constraint in indexed_model.constraints),
+                ]
+                if isinstance(value, ParameterLinearValue) and value.multiplier != 0.0
+            }
+            for parameter_index, parameter in enumerate(indexed_model.parameters):
+                if parameter.id not in used_parameters:
+                    diagnostics.append(SemanticDiagnostic(
+                        code="indexed_parameter_unused",
+                        subproblem_id=subproblem.subproblem_id,
+                        path=f"{component_path}.parameters[{parameter_index}]",
+                        message=(
+                            f"indexed parameter {parameter.id!r} has no nonzero use in "
+                            "the objective or any constraint"
+                        ),
+                    ))
             for variable_index, variable in enumerate(indexed_model.variables):
                 if variable.id not in used_references:
                     diagnostics.append(SemanticDiagnostic(
@@ -286,6 +324,16 @@ class ModelIRSemanticValidator:
                     ))
 
         return diagnostics
+
+    @classmethod
+    def _contains_symbol(cls, expression: Expression) -> bool:
+        if isinstance(expression, SymbolExpression):
+            return True
+        if isinstance(expression, BinaryExpression):
+            return cls._contains_symbol(expression.left) or cls._contains_symbol(expression.right)
+        if isinstance(expression, FunctionExpression):
+            return any(cls._contains_symbol(argument) for argument in expression.arguments)
+        return False
 
     def _expression_shape(
         self,

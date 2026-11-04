@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "task_summary": "Plan finite-horizon purchases with delayed commissioning, stock conservation, demand, tier and setup capacity.",
+  "subproblems": [
+    {
+      "id": "finite_inventory_policy",
+      "objective": "Minimize tiered acquisition, setup and holding costs.",
+      "required_fact_ids": [],
+      "required_uncertainty_ids": [],
+      "depends_on_subproblem_ids": []
+    }
+  ],
+  "locked_facts": [],
+  "uncertainties": [],
+  "modeling_requirements": [
+    {
+      "requirement_id": "req.stock_conservation",
+      "kind": "state_conservation",
+      "statement": "Stock carries over between periods and starts from the given initial stock.",
+      "subproblem_ids": ["finite_inventory_policy"],
+      "source_refs": ["input_catalog.json#paragraph-1"]
+    },
+    {
+      "requirement_id": "req.commissioning_lag",
+      "kind": "lagged_link",
+      "lag": 1,
+      "statement": "Units purchased in one period are commissioned in the next period.",
+      "subproblem_ids": ["finite_inventory_policy"],
+      "source_refs": ["input_catalog.json#paragraph-2"]
+    },
+    {
+      "requirement_id": "req.demand",
+      "kind": "demand_satisfaction",
+      "statement": "Each period's demand must be met from stock.",
+      "subproblem_ids": ["finite_inventory_policy"],
+      "source_refs": ["input_catalog.json#table-1"]
+    },
+    {
+      "requirement_id": "req.tier_capacity",
+      "kind": "upper_capacity",
+      "statement": "The first price tier is limited per period.",
+      "subproblem_ids": ["finite_inventory_policy"],
+      "source_refs": ["input_catalog.json#table-2"]
+    },
+    {
+      "requirement_id": "req.setup_capacity",
+      "kind": "upper_capacity",
+      "statement": "Purchases require a setup and are limited by setup capacity.",
+      "subproblem_ids": ["finite_inventory_policy"],
+      "source_refs": ["input_catalog.json#table-2"]
+    }
+  ]
+}

@@ -207,6 +207,7 @@ class IndexedLinearObjective(IRModel):
 class IndexedLinearConstraint(IRModel):
     id: str = Field(min_length=1, max_length=100)
     source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
+    fulfills_requirement_ids: list[str] = Field(default_factory=list, max_length=20)
     for_each: dict[str, str] = Field(default_factory=dict, max_length=4)
     terms: list[IndexedLinearTerm] = Field(min_length=1, max_length=1000)
     relation: Literal["equal", "less_equal", "greater_equal"]
@@ -215,6 +216,8 @@ class IndexedLinearConstraint(IRModel):
     @model_validator(mode="after")
     def require_unique_source_fact_ids(self) -> IndexedLinearConstraint:
         _require_unique_source_fact_ids(self.source_fact_ids)
+        if len(self.fulfills_requirement_ids) != len(set(self.fulfills_requirement_ids)):
+            raise ValueError("fulfills_requirement_ids must be unique")
         return self
 
 
