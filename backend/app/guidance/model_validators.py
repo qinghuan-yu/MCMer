@@ -114,6 +114,11 @@ def build_default_model_validator_registry() -> ModelValidatorRegistry:
     registry.register("mixed_integer_linear_optimization", "integrality_recompute", milp.milp_integrality)
     registry.register("mixed_integer_linear_optimization", "bound_and_gap", milp.milp_bounds)
     registry.register("mixed_integer_linear_optimization", "baseline_comparison", milp.milp_baseline)
+    registry.register(
+        "mixed_integer_linear_optimization",
+        "constraint_relevance",
+        milp.milp_constraint_relevance,
+    )
     registry.register("evaluation", "normalization_recompute", evaluation.evaluation_normalization)
     registry.register("evaluation", "weight_recompute", evaluation.evaluation_weights)
     registry.register("evaluation", "ranking_recompute", evaluation.evaluation_ranking)

@@ -158,6 +158,7 @@ def test_milp_family_independently_recomputes_objective_feasibility_and_bounds()
         "integrality_recompute",
         "bound_and_gap",
         "baseline_comparison",
+        "constraint_relevance",
     }
 
     evidence["objective_value"] = 7.0
@@ -176,6 +177,72 @@ def test_milp_family_independently_recomputes_objective_feasibility_and_bounds()
         evidence=[evidence],
     )
     assert forged_integer.checks["integrality_recompute"].status == "failed"
+
+
+def _degenerate_milp_evidence() -> dict:
+    # 约束 x_a + x_b >= 0 不起作用：最优解与仅凭变量界得到的解相同。
+    evidence = _milp_evidence()
+    evidence["x"] = [0.0, 0.0]
+    evidence["objective_value"] = 0.0
+    evidence["compiled_model"]["constraint_lower"] = [0.0]
+    evidence["compiled_model"]["constraint_upper"] = [None]
+    evidence["baseline"] = {"x": [0.0, 0.0], "objective_value": 0.0, "feasible": True}
+    evidence["bound_certificate"] = {"dual_bound": 0.0, "primal_bound": 0.0}
+    return evidence
+
+
+def _assess_milp(evidence: dict):
+    return build_default_model_validator_registry().assess(
+        family="mixed_integer_linear_optimization",
+        candidate_roles={"baseline", "recommended"},
+        evidence=[evidence],
+    )
+
+
+def test_milp_optimum_equal_to_bounds_only_optimum_fails_constraint_relevance() -> None:
+    assessment = _assess_milp(_degenerate_milp_evidence())
+
+    assert assessment.status == "failed"
+    check = assessment.checks["constraint_relevance"]
+    assert check.status == "failed"
+    assert "variable bounds alone" in check.reason
+    assert all(
+        item.status == "passed"
+        for name, item in assessment.checks.items()
+        if name != "constraint_relevance"
+    )
+
+
+def test_constraint_relevance_passes_when_bounds_alone_leave_objective_unbounded() -> None:
+    evidence = _degenerate_milp_evidence()
+    evidence["compiled_model"]["upper_bounds"] = [None, None]
+    evidence["compiled_model"]["objective_sense"] = "maximize"
+    evidence["compiled_model"]["constraint_lower"] = [None]
+    evidence["compiled_model"]["constraint_upper"] = [0.0]
+    assert _assess_milp(evidence).checks["constraint_relevance"].status == "passed"
+
+
+def test_constraint_relevance_is_vacuous_for_constant_objective() -> None:
+    evidence = _degenerate_milp_evidence()
+    evidence["compiled_model"]["objective"] = [0.0, 0.0]
+    check = _assess_milp(evidence).checks["constraint_relevance"]
+    assert check.status == "passed"
+    assert "constant objective" in check.reason
+
+
+def test_constraint_relevance_rounds_integer_bounds_toward_feasibility() -> None:
+    # 整数变量下界 0.5 时仅凭变量界的最小值为 2*1 = 2，而非 1；约束推高至 6 仍有效。
+    evidence = _milp_evidence()
+    evidence["compiled_model"]["lower_bounds"] = [0.5, 0.0]
+    assert _assess_milp(evidence).checks["constraint_relevance"].status == "passed"
+
+    evidence = _degenerate_milp_evidence()
+    evidence["compiled_model"]["lower_bounds"] = [0.5, 0.0]
+    evidence["x"] = [1.0, 0.0]
+    evidence["objective_value"] = 2.0
+    evidence["baseline"] = {"x": [1.0, 0.0], "objective_value": 2.0, "feasible": True}
+    evidence["bound_certificate"] = {"dual_bound": 2.0, "primal_bound": 2.0}
+    assert _assess_milp(evidence).checks["constraint_relevance"].status == "failed"
 
 
 def test_evaluation_family_independently_recomputes_ranking_and_stability() -> None:

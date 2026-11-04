@@ -177,6 +177,53 @@ def milp_bounds(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
         return failed("MILP solver gap disagrees with bound recomputation")
     return passed_check("MILP primal bound, dual bound, and relative gap were independently checked")
 
+def _bounds_only_optimum(parsed: tuple) -> float | None:
+    """仅凭变量界的线性目标最优值（逐坐标闭式求解）；无界返回 None。"""
+    _, _, _, objective, integrality, _, lower, upper, _, _, sense = parsed
+    direction = 1.0 if sense == "minimize" else -1.0
+    total = 0.0
+    for coefficient, low, high, integer in zip(objective, lower, upper, integrality):
+        effective = direction * float(coefficient)
+        if effective == 0.0:
+            continue
+        bound = low if effective > 0 else high
+        if bound is None or not finite_number(bound):
+            return None
+        bound = float(bound)
+        if integer:
+            bound = math.ceil(bound - 1e-9) if effective > 0 else math.floor(bound + 1e-9)
+        total += float(coefficient) * bound
+    return total
+
+
+def milp_constraint_relevance(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
+    parsed = _milp_problem(nodes)
+    if parsed is None:
+        return not_assessed("compiled MILP relevance evidence was not recorded")
+    node, _, _, objective, *_ = parsed
+    if not np.any(objective):
+        return passed_check(
+            "constant objective: optimality is defined by feasibility, so constraint "
+            "relevance to the optimum is vacuous"
+        )
+    relaxed = _bounds_only_optimum(parsed)
+    if relaxed is None:
+        return passed_check(
+            "linear constraints are required to bound the objective beyond variable bounds"
+        )
+    optimum = float(node["objective_value"])
+    if math.isclose(optimum, relaxed, rel_tol=1e-9, abs_tol=1e-9):
+        return failed(
+            f"MILP optimum {optimum:g} equals the optimum from variable bounds alone; "
+            "no linear constraint shapes the solution, so linking, balance or demand "
+            "equations are likely missing"
+        )
+    return passed_check(
+        f"linear constraints move the optimum from {relaxed:g} (variable bounds alone) "
+        f"to {optimum:g}"
+    )
+
+
 def milp_baseline(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     parsed = _milp_problem(nodes)
     if parsed is None:

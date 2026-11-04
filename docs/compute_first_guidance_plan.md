@@ -38,7 +38,7 @@ GO：用户于 2026-11-04 批准按本计划重写。涉及 ModelIR 合同、生
 
 ## 当前步骤
 
-CURRENT：F3。
+CURRENT：F4。
 
 ## 活动任务
 
@@ -49,7 +49,7 @@ CURRENT：F3。
 - [x] F1 RED：`tests/test_guidance_model_completeness.py` 锁定删平衡、删延迟、删容量三种变体必须被确定性层（事实/需求覆盖 → 语义 → 编译 → 执行 → 适用性）拒绝，完整模型为正对照；三项已由 F2a/F2b 转绿，无 xfail。
 - [x] F2a 使用覆盖：`ModelIRSemanticValidator` 新增 `indexed_parameter_unused`（参数在目标/约束中无非零使用）与 `vacuous_equation`（方程不含任何符号）；约束非空已由 schema `terms min_length=1` 保证。删平衡、删容量变体转绿，fixture 移除 `0 = 0` 占位方程；后端 523 passed、1 xfailed（删延迟留给 F2b）。
 - [x] F2b 结构需求义务：ProblemSpec 新增封闭类型 `modeling_requirements`（state_conservation、lagged_link、upper_capacity、demand_satisfaction；lag 仅限 lagged_link；来源与事实须已登记且同作用域），索引约束新增 `fulfills_requirement_ids`。`guidance/requirement_coverage.py` 按类型检查结构：守恒为同一状态 t 与更早期常数反号等式加字面边界；滞后为跨变量 offset=-lag 联动加目标边界；容量为引用参数的 less_equal；需求为引用参数的 equal/greater_equal；需求绑定事实时参数须登记同一事实。事实审计提示登记需求，约束阶段接收作用域内需求并以校验失败触发重生成；规范层在 generation_validation 与 stages 两处复核。后端 550 passed。边界：需求由 LLM 事实审计产生；仅覆盖索引线性模型，算子图路径留待 I 阶段。
-- [ ] F3 退化解探测：执行后检查全零决策、目标为 0 而需求为正、约束全部松弛等退化信号，转为验证失败并给出原因。
+- [x] F3 退化解探测：MILP 适用性评估新增 `constraint_relevance`（`model_validation/milp.py`）。以编译矩阵中的目标与变量界逐坐标闭式求出“仅凭变量界”的最优值（整数变量按可行方向取整），若与约束最优值相等则判失败：约束未塑造解，联动/平衡/需求方程大概率缺失；仅凭变量界目标无界时约束必要，判通过；常数目标为可行性问题，判通过并注明不适用。实验：删平衡变体最优 0 = 仅凭变量界 0，被执行后层独立拦截；删延迟（1 vs 0）、删容量（15 vs 0）不触发，依赖 F2b。后端 555 passed。
 - [ ] F4 独立参考解：小规模实例用独立构造（枚举或另一求解路径）对拍目标值与关键决策，不一致即阻断。
 - [ ] F5 可读方程预览：由同一份 ModelIR 渲染首期、转移期、末期方程与参数来源表，进入 Guidance 供人工复核。
 

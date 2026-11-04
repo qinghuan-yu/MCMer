@@ -109,6 +109,28 @@ def test_inventory_model_missing_required_equations_is_rejected(
     assert verdict == "rejected"
 
 
+def test_post_execution_layer_alone_rejects_model_without_stock_balance(tmp_path: Path) -> None:
+    # 绕过事实/需求/语义层，只看执行后验证：独立第二道防线（F3）。
+    model_ir = ModelIR.model_validate(_without_constraints({"initial_balance", "state_balance"}))
+    registry = build_default_operator_registry()
+    compilation = ModelIRCompiler(registry=registry).compile(model_ir)
+    assert compilation.status == "compiled", compilation.diagnostics
+    runtime = registry.runtime("optimization.milp")
+    outputs = runtime.executor(
+        inputs={},
+        parameters=compilation.execution_plan.graph.nodes[0].parameters,
+        random_seed=None,
+        work_dir=tmp_path,
+    )
+    assessment = build_default_model_validator_registry().assess(
+        family="mixed_integer_linear_optimization",
+        candidate_roles={"baseline", "recommended"},
+        evidence=[outputs["solution"]],
+    )
+    assert assessment.checks["constraint_relevance"].status == "failed"
+    assert assessment.status == "failed"
+
+
 def _parameter_path(payload: dict, parameter_id: str) -> str:
     ids = [parameter["id"] for parameter in _indexed_model(payload)["parameters"]]
     return (
