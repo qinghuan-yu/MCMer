@@ -248,7 +248,7 @@ def test_result_verification_consumes_operator_execution_contract(tmp_path: Path
 
     backend_root = Path(__file__).resolve().parents[1]
     shutil.copytree(
-        backend_root / "project/work_dir/20260629-guidance-final-answer-95dd18ea/data",
+        backend_root / "tests/fixtures/real_attachments/wuyi_traffic_flow/data",
         tmp_path / "data",
     )
     model_ir = ModelIR.model_validate_json(

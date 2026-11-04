@@ -1,87 +1,98 @@
-# Guider 长线计划：数值可信与可维护模块边界
+# Guider 长线计划：可复查、数值精准的建模 Agent 工具
 
 本文件是唯一长期执行计划；执行规则以 AGENTS.md 为准。
 
 ## 目标与授权
 
-GO：用户于 2026-11-01 明确要求完成优化、更新并拆分超长文件。本轮先修复已复现的验收缺陷，再按职责迁移模块，保持 API、数学算子与润色行为。保留已有未提交更新，不自动提交或推送。
+目标（用户 2026-11-04 设定）：使 MCMer 对现实问题与数学建模题目都能给出有效、数据计算科学可复查、相对精准的结果。“计算通过”不得被解释为“模型完整表达题意”；所有数值必须能从原始材料逐项复算。
 
-证据：后端 411 项回归通过，但独立实验复现成本错序/错列仍通过、artifact: 静态来源绕过核验、失败子题图表污染成功子题验证。共享函数由 app/polish/workflow.py 实际调用，禁止当作死代码删除。
+GO：用户于 2026-11-04 批准按本计划重写。涉及 ModelIR 合同、生成合同或证据画像结构变更的步骤（标注【需批准】），实施前须先提交 RED 证据与替换方案并获用户确认。
 
-## 已锁定不变量
+## 已锁定不变量（前期阶段 A–C 压缩）
 
 1. InputCatalog/EvidenceProfile 是题面与附件唯一证据入口，不得将已登记来源误报缺失。
 2. ProblemSpec 使用强类型子题、事实、歧义与依赖；Draft 仅单向提升至 canonical，拒绝未知符号、跨作用域引用和依赖环。
 3. ModelIR 使用类型化执行组件，支持预测工件到 MILP 的运行时物化，禁止任意生成代码或题名路由。
 4. 建模、审核和执行按子题保留可解结果；三层验证不能把子集通过冒充整题完成。
-5. 子题结构化字段与列表保真传递；共用生成合同、分阶段预算、事实路径由系统组装。
-6. 静态参数按确切文档、列/单元格和索引标签核对；拒绝错序、错列、未知来源与伪造 artifact 前缀，运行时占位只用于强类型 runtime_source。
-7. 运行失败沿全部跳过节点传播；失败子题的参数、结果和图表均不进入独立成功子题的公开注册表。
-8. 注册器、领域实现、生成合同、阶段验证、呈现和共享写作支持分别拥有实现；调用方直接导入实际 owner，无旧入口兼容门面或循环依赖。
+5. 静态参数按确切文档、列/单元格和索引标签核对；拒绝错序、错列、未知来源与伪造 artifact 前缀。
+6. 运行失败沿全部跳过节点传播；失败子题的参数、结果和图表不进入独立成功子题的公开注册表。
+7. 注册器、领域实现、生成合同、阶段验证、呈现和共享写作支持分别拥有实现；调用方直接导入实际 owner，无兼容门面或循环依赖。
+8. 测试只依赖入库 fixture：真实附件完整保存在 `backend/tests/fixtures/real_attachments/<case>/data/`，基线 `input_sha256` 校验原件；`test_fixture_reproducibility.py` 拒绝引用 `project/work_dir`。新 clone 后端全量 517 passed。
+
+## 2026-11-04 已验证缺口（本计划的依据）
+
+| 编号 | 缺口 | 复现证据 |
+| --- | --- | --- |
+| G-完整性 | 漏写业务方程仍全部通过 | `generic_multiperiod_inventory.json` 删除 `initial_balance`+`state_balance` 后目标 26→0、采购全 0；删延迟目标→1；删容量目标→15。三种变体运行时校验 ok，MILP 适用性评估 passed。顶层方程可为 `0 = 0`。 |
+| G-数据 | Excel 未被完整物化 | `artifacts/evidence_profile.py` 每表仅采样至多 6 行；大表参数仍由 LLM 手抄；`validate_static_parameter_evidence` 在事实与画像均缺失时静默返回 `[]`。 |
+| G-单位 | 优化主路径无单位/量纲 | `IndexedParameterSpec`、`IndexedVariableSpec` 无 unit 字段；其他路径仅字符串相等比较，无换算与量纲推导。 |
+| G-覆盖 | 算子族窄 | 算子目录 20 项；无随机仿真/蒙特卡洛、非线性 ODE、一般 NLP、统计检验、敏感性分析算子（仅目录核对，尚无真实题实验）。 |
 
 ## 核心流与模块归属
 
 ```text
-题面/附件 -> 证据目录 -> ProblemSpec -> Modeling -> Review
-  -> 编译/执行 -> 结果与图表注册表 -> 独立验证 -> Guidance/ZIP
-                    ^
-         算子目录负责注册，领域模块拥有算法和输出校验
-API -> core 工作流路由 -> guidance / polish
-                           -> 明确归属的文本、导出、写作和图表模块
+题面/附件 -> 证据目录(完整物化) -> ProblemSpec(需求义务) -> Modeling -> Review
+  -> 编译(量纲+义务覆盖) -> 执行 -> 完整性探测/参考解对拍 -> 结果与图表注册表
+  -> 独立验证 -> Guidance(可读方程预览+复算清单)/ZIP
 ```
-
-- 数值证据解析由独立解析器拥有，索引展开器只负责索引与矩阵；删除全表数字集合匹配、模糊文档匹配和字符串前缀豁免。
-- canonical 模型与 Draft 分离；生成、审核、约束校验与上下文处理分离；阶段入口与验证/打包分离。
-- 算子实现和模型充分性验证按数学领域归属；注册表保留实际编排职责。
-- core/workflow.py 保留路由和任务结果边界，polish 共用写作/图表支持迁移到明确归属模块。
-- common_utils 按文本提取、结果登记、Markdown/文档导出和审计拆分；其他超长图表/文档/编码模块先验证函数依赖再拆分。
-
-## 取舍与迁移规则
-
-采用职责迁移而非仅缩短文件：证据解析不并入编译器；共享写作不由 Guidance 私有模块拥有。不逐函数拆文件，不建立泛用 helpers 或透传门面。直接迁移所有仓库内调用方、测试和导入。防误用由错序、错列、伪来源、失败图表和跨工作流回归约束；剩余数学充分性通过真实题和人工审核。
 
 ## 当前步骤
 
-CURRENT：D1 真实题复测（独立于本轮已完成的工程优化）。
+CURRENT：F1。
 
 ## 活动任务
 
-本轮 A1/A2/B1/B2/B3/C1 已完成并收敛至上述不变量，不保留重复历史勾选日志。
+阶段 E（可复现基线）已完成并压缩为不变量 8。
 
-### D：保留的真实题数学验收
+### F：模型完整性（不再仅依赖 LLM Reviewer）
+
+- [ ] F1 RED：把删平衡、删延迟、删容量三种变体写成回归测试，断言必须被阻断或标记为不完整。
+- [ ] F2 需求义务：ProblemSpec 中需求、守恒、容量、延迟类事实生成必须覆盖的约束义务；编译期检查每条义务都绑定到非平凡约束，拒绝 `0 = 0` 等空方程。【需批准：ProblemSpec/ModelIR 合同扩展】
+- [ ] F3 退化解探测：执行后检查全零决策、目标为 0 而需求为正、约束全部松弛等退化信号，转为验证失败并给出原因。
+- [ ] F4 独立参考解：小规模实例用独立构造（枚举或另一求解路径）对拍目标值与关键决策，不一致即阻断。
+- [ ] F5 可读方程预览：由同一份 ModelIR 渲染首期、转移期、末期方程与参数来源表，进入 Guidance 供人工复核。
+
+### G：数据统一物化
+
+- [ ] G1 RED：真实 Excel 中第 6 行以后的参数可被精确绑定与核验；事实与画像均缺失时核验不得静默通过。
+- [ ] G2 证据画像对已登记表格完整物化原始单元格（含工作表、坐标、文件哈希），采样仅用于提示词上下文。【需批准：证据画像结构变更】
+- [ ] G3 参数由系统按引用读取填值，LLM 只写来源引用与索引映射；保留现有错序/错列/伪来源拒绝回归。【需批准：生成合同变更】
+
+### H：单位与量纲
+
+- [ ] H1 RED：同一约束中混用不同量纲（如元与万元、小时与分钟）的模型必须被拒绝。
+- [ ] H2 为索引参数与变量增加单位，编译期做量纲一致性检查；换算因子显式记录来源。【需批准：ModelIR 合同变更；引入新依赖须说明】
+
+### I：按真实题补齐能力
+
+- [ ] I1 选一道现实题（非线性动态或随机类），确认阻断原因后再补对应算子，每个新算子必须同时有独立验证器和反例测试。
+- [ ] I2 敏感性分析：对关键参数扰动输出结论稳定性，作为 Guidance 标准段落。
+
+### D：真实题数学验收
 
 - [ ] D1 复跑 2022 五一 A 题（基线任务 20260715-135019-066fc4b9），审查证据、ProblemSpec、ModelIR、执行计划、数值、三层报告和 Guidance。
 - [ ] D2 人工核对 Q1–Q4 状态转移、整数损毁、训练容量、阶梯成本及 Q5 两方案口径，不以测试绿色或求解器 success 代替数学审核。
+- [ ] D3 对 I1 选定的现实题做同等端到端验收与人工复算。
 
 ## 模块导航
 
 | 职责 | 实现归属 |
 | --- | --- |
+| 证据入口与画像 | artifacts/input_catalog.py、artifacts/evidence_profile.py |
+| 静态参数核验 | guidance/parameter_evidence.py |
 | 算子注册与数学实现 | guidance/operator_catalog.py + operator_runtimes/ |
 | 模型充分性注册与领域校验 | guidance/model_validators.py + model_validation/ |
 | Canonical、生成草稿、审核合同 | guidance/model_ir.py、model_ir_drafts.py、model_review_contracts.py |
+| 编译与语义校验 | guidance/model_ir_compiler.py、model_ir_semantics.py、indexed_linear.py |
 | 拆题、建模、审核与生成校验 | guidance/decomposer.py、modeler.py、reviewer.py、model_generation.py、generation_validation.py |
 | 阶段编排、结果验证、Guidance 打包 | guidance/stages.py、verification_stage.py、guidance_stage.py |
 | Guidance 主渲染与段落/诊断 | guidance/renderer.py + guidance_rendering/ |
-| 路由与共享写作/图表支持 | core/workflow.py、workflow_runtime.py、writing_support.py、chart_support.py、chart_language.py |
-| 图表请求、数据、门禁和渲染 | core/figure_requests.py、figure_data.py、figure_gate.py、figure_rendering.py |
-| 文档、图表与审计工件 | artifacts/document_*.py、*_renderers.py、guidance_audit*.py、figure_*.py |
-| 文本、Markdown、文档导出与结果登记 | utils/problem_text.py、markdown.py、document_export.py、result_registry.py、result_legacy.py、result_audit.py、paper_audit.py、file_io.py |
-
-## 2026-11-01 工程验收证据
-
-- RED：静态错序/错列/伪来源等首批 6 项失败，图表隔离与跳过节点失败传播分别复现失败；另补索引标签重排、单元格坐标和 DOCX 文本数字匹配的失败测试后转 GREEN。
-- 职责合同先 RED，再原样移动实现并直接迁移导入。算子元数据、审核族检查集及被移动函数/方法的 AST 保持一致；润色预算解析遗漏已用失败合同复现并修复。
-- 正常权限运行完整后端 `pytest tests -q -p no:cacheprovider`：515 passed（20.89 秒），包含真实附件、ZIP、部分执行和跨工作流回归。
-- 前端协议 `node --experimental-strip-types --test tests/*.test.ts`：8 passed；`npm run build` 通过。
-- `ruff check --select F821 backend/app backend/tests`、128 个变更 Python 文件语法/编译与严格 UTF-8/BOM 检查、git diff --check 全部通过；84 个新文件无尾空格/额外末尾空行。
-- 173 个后端模块的顶层导入图无循环；原 16 个超过 700 行的实现文件均已按职责收敛，当前最长实现文件 666 行。删除旧 agents/common_utils/figure_stage/renderers 门面及 20 个纯转发包装函数，保留活跃逻辑。
-- 本地运行缓存已由 .gitignore 排除。本轮未进行新一轮真实题生成或人工数学验收，也未自动提交/推送。
+| 路由与共享写作/图表支持 | core/workflow.py、workflow_runtime.py、writing_support.py、chart_support.py |
 
 ## 执行约束
 
-每次代码修改前完整阅读本文件，确认当前未完成步骤；行为修复先运行最小失败测试，重构由行为回归和模块边界合同约束。子任务完成立即勾选并移动唯一 CURRENT，完成阶段压缩为不变量。修改后报告现状摘要：核心流、危险耦合、本次变化、完成项、下一项。
+每次代码修改前完整阅读本文件，确认当前未完成步骤；行为修复先运行最小失败测试。子任务完成立即勾选并移动唯一 CURRENT，完成阶段压缩为不变量。修改后报告现状摘要：核心流、危险耦合、本次变化、完成项、下一项。
 
 ## 停止条件
 
-需要题目专用字段/模板、重型或商业求解器、任意代码执行，或本计划之外的模块替换时，停止该项并用实验证据说明。真实题外部服务不可用时如实记录；工程优化与数学验收分别报告。
+需要题目专用字段/模板、重型或商业求解器、任意代码执行，或本计划之外的模块替换时，停止该项并用实验证据说明。【需批准】步骤未获确认不得实施。真实题外部服务不可用时如实记录；工程验证与数学验收分别报告。

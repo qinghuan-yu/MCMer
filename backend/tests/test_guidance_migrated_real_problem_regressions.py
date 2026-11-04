@@ -38,7 +38,7 @@ def test_real_attachment_forecast_runs_compiled_graph_and_independent_validation
 
     source_work_dir = (
         REPOSITORY_ROOT
-        / "backend/project/work_dir/20260629-guidance-final-answer-95dd18ea"
+        / "backend/tests/fixtures/real_attachments/wuyi_traffic_flow"
     )
     work_dir = tmp_path / "real-forecast"
     shutil.copytree(source_work_dir / "data", work_dir / "data")
@@ -189,7 +189,7 @@ def test_real_attachment_dynamics_runs_compiled_graph_and_independent_validation
 
     source_work_dir = (
         REPOSITORY_ROOT
-        / "backend/project/work_dir/20260629-guidance-final-answer-95dd18ea"
+        / "backend/tests/fixtures/real_attachments/wuyi_traffic_flow"
     )
     work_dir = tmp_path / "real-dynamics"
     shutil.copytree(source_work_dir / "data", work_dir / "data")
@@ -329,7 +329,7 @@ def test_real_attachment_graph_runs_compiled_time_expanded_network_and_certifica
 
     source_work_dir = (
         REPOSITORY_ROOT
-        / "backend/project/work_dir/20260629-guidance-final-answer-95dd18ea"
+        / "backend/tests/fixtures/real_attachments/wuyi_traffic_flow"
     )
     work_dir = tmp_path / "real-graph"
     shutil.copytree(source_work_dir / "data", work_dir / "data")
@@ -466,7 +466,7 @@ def test_real_attachment_optimization_runs_compiled_graph_and_independent_certif
 
     source_work_dir = (
         REPOSITORY_ROOT
-        / "backend/project/work_dir/20260712-191111-dcd758cf"
+        / "backend/tests/fixtures/real_attachments/wuyi_anchor_bolt"
     )
     work_dir = tmp_path / "real-optimization"
     shutil.copytree(source_work_dir / "data", work_dir / "data")
@@ -616,7 +616,7 @@ def test_real_attachment_evaluation_runs_compiled_graph_and_ranking_audit(
 
     source_work_dir = (
         REPOSITORY_ROOT
-        / "backend/project/work_dir/20260712-191111-dcd758cf"
+        / "backend/tests/fixtures/real_attachments/wuyi_anchor_bolt"
     )
     work_dir = tmp_path / "real-evaluation"
     shutil.copytree(source_work_dir / "data", work_dir / "data")

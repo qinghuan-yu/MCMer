@@ -4,7 +4,7 @@
   "cases": [
     {
       "id": "wuyi_traffic_flow",
-      "source_work_dir": "backend/project/work_dir/20260629-guidance-final-answer-95dd18ea",
+      "source_work_dir": "backend/tests/fixtures/real_attachments/wuyi_traffic_flow",
       "input_sha256": "DC93B1181E52477581AB512C978AA8E625451A9EF523A321CFA5DC1DBA6763AA",
       "expected_task_coverage": "complete_with_model_boundaries",
       "parameters": {
@@ -69,7 +69,7 @@
     },
     {
       "id": "wuyi_anchor_bolt",
-      "source_work_dir": "backend/project/work_dir/20260712-191111-dcd758cf",
+      "source_work_dir": "backend/tests/fixtures/real_attachments/wuyi_anchor_bolt",
       "input_sha256": "063592AD582E43DFF46B4A56799D57BBA6AC2F80335111D58D55705E38C93F15",
       "expected_task_coverage": "partial",
       "parameters": {

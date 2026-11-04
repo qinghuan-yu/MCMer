@@ -338,7 +338,7 @@ def test_real_attachment_execution_exports_complete_reproducibility_zip(
     repo_root = Path(__file__).parents[2]
     source_attachment = (
         repo_root
-        / "backend/project/work_dir/20260629-guidance-final-answer-95dd18ea"
+        / "backend/tests/fixtures/real_attachments/wuyi_traffic_flow"
         / "data/附件(Attachment).xlsx"
     )
     fixture_path = repo_root / "backend/tests/fixtures/model_ir/wuyi_traffic_flow.json"
