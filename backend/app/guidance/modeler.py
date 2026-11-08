@@ -127,10 +127,10 @@ async def _request_subproblem_models(
             raise ValueError(
                 f"previous Model IR missing subproblems {missing_previous!r}"
             )
-    generated: list[ModelIR] = []
+    generated_by_id: dict[str, ModelIR] = {}
     total = len(compact_subproblems)
 
-    for subproblem in compact_subproblems:
+    for subproblem in _dependency_order(compact_subproblems):
         target_id = str(subproblem["id"])
         required_fact_ids = list(subproblem["required_fact_ids"])
         required_uncertainty_ids = list(
@@ -156,6 +156,10 @@ async def _request_subproblem_models(
                 for item in compact_subproblems
                 if item["id"] in dependency_ids
             ],
+            "dependency_models": {
+                identifier: generated_by_id[identifier].subproblems[0].model_dump(mode="json")
+                for identifier in sorted(dependency_ids)
+            },
         }
         request_name = (
             agent_name
@@ -163,7 +167,13 @@ async def _request_subproblem_models(
             else f"{agent_name}_{safe_artifact_component(target_id)}"
         )
         try:
-            generated.append(await _request_single_subproblem_model(
+            blocked_dependencies = [
+                identifier for identifier in sorted(dependency_ids)
+                if isinstance(generated_by_id[identifier].subproblems[0], BlockedModelIR)
+            ]
+            if blocked_dependencies:
+                raise ValueError(f"upstream subproblems are blocked: {', '.join(blocked_dependencies)}")
+            generated_by_id[target_id] = await _request_single_subproblem_model(
                 llm=llm,
                 system_prompt=system_prompt,
                 problem_spec=problem_spec,
@@ -179,22 +189,42 @@ async def _request_subproblem_models(
                 architecture_timeout=architecture_timeout,
                 indexed_core_timeout=indexed_core_timeout,
                 indexed_constraints_timeout=indexed_constraints_timeout,
-            ))
+            )
         except (RuntimeError, ValueError) as exc:
-            generated.append(_write_subproblem_modeling_failure(
+            generated_by_id[target_id] = _write_subproblem_modeling_failure(
                 artifact_dir=artifact_dir,
                 target_id=target_id,
                 subproblem=subproblem,
                 request_name=request_name,
                 exc=exc,
-            ))
+            )
 
+    generated = [generated_by_id[str(item["id"])] for item in compact_subproblems]
     model_ir = ModelIR(
         model_id=_merged_model_id(generated, previous_model_ir),
         subproblems=[item.subproblems[0] for item in generated],
     )
     _validate_model_ir_contract(problem_spec, model_ir, evidence_profile)
     return model_ir
+
+
+def _dependency_order(subproblems: list[dict]) -> list[dict]:
+    # ProblemSpec已拒绝依赖环；生成按拓扑顺序执行，最终合同仍保留题目顺序。
+    by_id = {item["id"]: item for item in subproblems}
+    ordered: list[dict] = []
+    visited: set[str] = set()
+
+    def visit(identifier: str) -> None:
+        if identifier in visited:
+            return
+        for dependency in by_id[identifier]["depends_on_subproblem_ids"]:
+            visit(dependency)
+        visited.add(identifier)
+        ordered.append(by_id[identifier])
+
+    for item in subproblems:
+        visit(item["id"])
+    return ordered
 
 def _write_subproblem_modeling_failure(
     *,

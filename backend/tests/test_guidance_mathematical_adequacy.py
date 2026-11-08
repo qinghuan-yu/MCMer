@@ -211,6 +211,15 @@ def test_source_coverage_failure_remains_separate_from_numerical_success(
             fact["subproblem_ids"] = ["another_problem"]
         problem_path.write_text(json.dumps(spec), encoding="utf-8")
     approved_path.write_text(json.dumps(approved), encoding="utf-8")
+    # 本测试隔离来源覆盖层；改变模型后重新执行，旧执行证据另由恢复测试拒绝。
+    model = ModelIR.model_validate(approved["approved_model_ir"])
+    registry = build_default_operator_registry()
+    compilation = ModelIRCompiler(registry=registry).compile_to_file(
+        model, output_path=tmp_path / "execution_plan.json",
+    )
+    OperatorGraphExecutor(registry=registry).execute(
+        execution_plan=compilation.execution_plan, model_ir=model, work_dir=tmp_path,
+    )
     output = asyncio.run(ResultVerificationStage().run(
         task_id="coverage-tamper", task={},
         input_path=tmp_path / "execution_manifest.json",

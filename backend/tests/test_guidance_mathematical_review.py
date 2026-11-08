@@ -69,6 +69,17 @@ def _review_case(root: Path, alter=None) -> VerificationReport:
         task_id="mathematical-review", task={}, input_path=submission,
         output_path=root / "approved_model_ir.json",
     ))
+    from app.guidance.model_ir_compiler import ModelIRCompiler
+    from app.guidance.operator_catalog import build_default_operator_registry
+    from app.guidance.operator_execution import OperatorGraphExecutor
+    from app.guidance.model_ir import ModelIR
+
+    registry = build_default_operator_registry()
+    model = ModelIR.model_validate_json((root / "model_ir.json").read_text(encoding="utf-8"))
+    compilation = ModelIRCompiler(registry=registry).compile_to_file(model, output_path=root / "execution_plan.json")
+    OperatorGraphExecutor(registry=registry).execute(
+        execution_plan=compilation.execution_plan, model_ir=model, work_dir=root,
+    )
     return _verify(root)
 
 

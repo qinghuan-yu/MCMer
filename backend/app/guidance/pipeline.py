@@ -13,6 +13,7 @@ from app.guidance.failure_contracts import (
 )
 from app.guidance.model_review_contracts import (ApprovedModelIR, ModelIRReview, ModelReviewSubmission)
 from app.guidance.model_ir import (BlockedModelIR, ModelIR)
+from app.guidance.recovery import invalidate_stage_outputs
 from app.schemas.response import (
     TaskProgress,
     TaskResult,
@@ -173,6 +174,7 @@ class GuidancePipeline:
         input_path: Path | None,
         output_path: Path,
     ) -> Path:
+        invalidate_stage_outputs(output_path.parent, stage_name)
         return await self._stages[stage_name].run(
             task_id=task_id,
             task=task,

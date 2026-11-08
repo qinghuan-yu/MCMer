@@ -40,6 +40,7 @@ async def _request_model(
     artifact_dir: Path,
     semantic_validator=None,
     request_timeout: int | float | None = None,
+    checkpoint_context: Any = None,
 ):
     requester = StructuredContractRequester(
         llm=llm,
@@ -49,6 +50,7 @@ async def _request_model(
         artifact_dir=artifact_dir,
         semantic_validator=semantic_validator,
         request_timeout=request_timeout,
+        checkpoint_context=checkpoint_context,
     )
     return await requester.request(payload)
 
@@ -91,6 +93,10 @@ async def _request_single_subproblem_model(
         payload["previous_model_summary"] = _compact_previous_model_summary(previous_model)
     if review_payload is not None:
         payload["model_review"] = review_payload
+    dependencies = {
+        "upstream_models": slice_spec.get("dependency_models", {}),
+        "previous_model": previous_model.model_dump(mode="json") if previous_model is not None else None,
+    }
 
     draft = await _request_model(
         llm=llm,
@@ -112,6 +118,7 @@ async def _request_single_subproblem_model(
             problem_spec=problem_spec,
         ),
         request_timeout=architecture_timeout,
+        checkpoint_context=dependencies,
     )
     indexed_linear_model = None
     architecture = draft.subproblems[0]
@@ -170,6 +177,7 @@ async def _request_single_subproblem_model(
                 evidence_profile=evidence_profile,
             ),
             request_timeout=indexed_core_timeout,
+            checkpoint_context=dependencies,
         )
         materialized_core = core.promote_core(
             locked_facts=fact_scope.payload(), evidence_profile=evidence_profile,
@@ -239,6 +247,11 @@ async def _request_single_subproblem_model(
             artifact_dir=artifact_dir,
             semantic_validator=validate_formulation,
             request_timeout=indexed_constraints_timeout,
+            checkpoint_context={
+                **dependencies,
+                "architecture": draft.model_dump(mode="json"),
+                "materialized_core": materialized_core.model_dump(mode="json"),
+            },
         )
         indexed_linear_model = constraints.promote(materialized_core)
 

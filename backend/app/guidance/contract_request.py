@@ -11,6 +11,8 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from app.guidance.recovery import RecoveryCheckpoint
+
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -46,6 +48,7 @@ class StructuredContractRequester(Generic[ModelT]):
         enrich_payload: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         semantic_validator: Callable[[ModelT], None] | None = None,
         request_timeout: int | float | None = None,
+        checkpoint_context: Any = None,
     ) -> None:
         self.llm = llm
         self.model_type = model_type
@@ -54,6 +57,7 @@ class StructuredContractRequester(Generic[ModelT]):
         self.artifact_dir = artifact_dir
         self.enrich_payload = enrich_payload
         self.semantic_validator = semantic_validator
+        self.checkpoint_context = checkpoint_context
         self.request_timeout = (
             request_timeout
             if request_timeout is not None
@@ -63,6 +67,24 @@ class StructuredContractRequester(Generic[ModelT]):
     async def request(self, payload: Any) -> ModelT:
         attempts: list[dict[str, Any]] = []
         history = self._initial_history(payload)
+        checkpoint = RecoveryCheckpoint(self.artifact_dir, "contracts", self.agent_name)
+        context = {
+            "history": history,
+            "dependencies": self.checkpoint_context,
+            "llm": {name: getattr(self.llm, name, None) for name in (
+                "model", "base_url", "api_base", "max_tokens", "temperature", "top_p", "reasoning_effort",
+            )},
+        }
+        cached = checkpoint.load(context)
+        if cached is not None:
+            try:
+                contract = self.model_type.model_validate(cached)
+                if self.semantic_validator is not None:
+                    self.semantic_validator(contract)
+                return contract
+            except ValueError:
+                pass
+        checkpoint.discard()
 
         for attempt_number in (1, 2):
             for transport_attempt in (1, 2):
@@ -139,6 +161,7 @@ class StructuredContractRequester(Generic[ModelT]):
                 attempts,
                 status="valid" if len(attempts) == 1 else "recovered",
             )
+            checkpoint.save(context, contract.model_dump(mode="json", exclude_computed_fields=True))
             return contract
 
         raise AssertionError("contract request attempt loop did not return")

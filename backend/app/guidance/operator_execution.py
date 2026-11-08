@@ -19,6 +19,10 @@ from app.guidance.model_ir import (
 )
 from app.guidance.model_ir_compiler import CompilationResult, ExecutionPlan
 from app.guidance.operators import OperatorRegistry
+from app.guidance.recovery import (
+    RecoveryCheckpoint, canonical_digest, file_snapshots, generated_figure_paths,
+    invalidate_stage_outputs, model_source_snapshots,
+)
 
 
 class ExecutionContract(BaseModel):
@@ -39,7 +43,11 @@ class OperatorExecutionManifest(ExecutionContract):
     status: Literal["passed", "partial", "failed", "blocked"]
     execution_plan_ref: str = "execution_plan.json"
     execution_plan_sha256: str
+    model_sha256: str
+    source_files_sha256: dict[str, str | None]
+    output_files_sha256: dict[str, str | None]
     executed_node_ids: list[str]
+    reused_node_ids: list[str] = Field(default_factory=list)
     generated_files: list[str]
     failure: OperatorExecutionFailure | None = None
 
@@ -58,9 +66,14 @@ class OperatorGraphExecutor:
         if execution_plan is None:
             raise ValueError("a compiled execution plan is required")
         work_dir.mkdir(parents=True, exist_ok=True)
+        invalidate_stage_outputs(work_dir, "result_verification")
         values: dict[str, object] = {}
         artifact_nodes: dict[str, str] = {}
         executed: list[str] = []
+        reused: list[str] = []
+        node_fingerprints: dict[str, str] = {}
+        subproblems = {item.subproblem_id: item for item in model_ir.subproblems}
+        source_files = model_source_snapshots(work_dir, model_ir)
         failures_by_subproblem: dict[str, OperatorExecutionFailure] = {}
         failures_by_node: dict[str, OperatorExecutionFailure] = {}
         failed_node_ids: set[str] = set()
@@ -90,12 +103,26 @@ class OperatorGraphExecutor:
                     name: _resolve_input(reference, values)
                     for name, reference in node.inputs.items()
                 }
-                raw_outputs = registered.executor(
-                    inputs=resolved_inputs,
-                    parameters=node.parameters,
-                    random_seed=node.random_seed,
-                    work_dir=work_dir,
-                )
+                context = {
+                    "node": node.model_dump(mode="json"),
+                    "registration": definition.model_dump(mode="json"), "inputs": resolved_inputs,
+                    "dependencies": {dep: node_fingerprints[dep] for dep in node.dependencies},
+                    "source_files": {item.source_ref: source_files[item.source_ref]
+                                     for item in subproblems[node.subproblem_id].data},
+                }
+                checkpoint = RecoveryCheckpoint(work_dir, "operators", node.node_id)
+                raw_outputs = checkpoint.load(context)
+                if raw_outputs is not None and registered.validator(outputs=raw_outputs):
+                    raw_outputs = None
+                was_reused = raw_outputs is not None
+                if raw_outputs is None:
+                    checkpoint.discard()
+                    raw_outputs = registered.executor(
+                        inputs=resolved_inputs,
+                        parameters=node.parameters,
+                        random_seed=node.random_seed,
+                        work_dir=work_dir,
+                    )
                 if not isinstance(raw_outputs, dict):
                     raise RuntimeError(f"operator returned a non-mapping result: {node.node_id}")
                 issues = registered.validator(outputs=raw_outputs)
@@ -106,6 +133,10 @@ class OperatorGraphExecutor:
                 output_ports = list(definition.outputs)
                 if set(raw_outputs) != set(output_ports):
                     raise RuntimeError(f"operator output ports do not match registration: {node.node_id}")
+                checkpoint.save(context, raw_outputs, files=generated_figure_paths(raw_outputs))
+                node_fingerprints[node.node_id] = canonical_digest({"context": context, "outputs": raw_outputs})
+                if was_reused:
+                    reused.append(node.node_id)
                 for artifact, port_name in zip(node.outputs, output_ports):
                     values[artifact] = raw_outputs[port_name]
                     artifact_nodes[artifact] = node.node_id
@@ -177,7 +208,13 @@ class OperatorGraphExecutor:
             model_id=model_ir.model_id,
             status=status,
             execution_plan_sha256=hashlib.sha256(plan_payload.encode("utf-8")).hexdigest(),
+            model_sha256=canonical_digest(model_ir),
+            source_files_sha256=source_files,
+            output_files_sha256=file_snapshots(work_dir, [
+                name for name in generated_files if name not in {"execution_manifest.json", "execution_plan.json"}
+            ] + [figure["path"] for figure in figures]),
             executed_node_ids=list(executed),
+            reused_node_ids=reused,
             generated_files=generated_files,
             failure=first_failure,
         )
@@ -238,6 +275,9 @@ class OperatorGraphExecutor:
             model_id=model_ir.model_id,
             status="blocked",
             execution_plan_sha256="",
+            model_sha256=canonical_digest(model_ir),
+            source_files_sha256=model_source_snapshots(work_dir, model_ir),
+            output_files_sha256=file_snapshots(work_dir, [name for name in generated_files if name != "execution_manifest.json"]),
             executed_node_ids=[],
             generated_files=generated_files,
         )

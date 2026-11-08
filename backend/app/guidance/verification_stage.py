@@ -12,6 +12,9 @@ from app.guidance.model_review_contracts import ApprovedModelIR
 from app.guidance.model_review_validation import assess_mathematical_review
 from app.guidance.model_validators import build_default_model_validator_registry
 from app.guidance.operator_execution import OperatorExecutionManifest
+from app.guidance.recovery import (
+    canonical_digest, file_snapshots, generated_figure_paths, model_source_snapshots,
+)
 from app.guidance.stage_io import (
     _read_json,
     _required_input,
@@ -37,14 +40,29 @@ class ResultVerificationStage:
         approved = ApprovedModelIR.model_validate_json(
             (root / "approved_model_ir.json").read_text(encoding="utf-8")
         )
-        execution_plan = ExecutionPlan.model_validate_json(
-            (root / manifest.execution_plan_ref).read_text(encoding="utf-8")
+        plan_path = root / manifest.execution_plan_ref
+        execution_plan = (
+            ExecutionPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+            if plan_path.is_file() else None
         )
         parameters = _read_json(root / "parameter_registry.json")
         results = _read_json(root / "result_registry.json")
         figure_registry = _read_json(root / "figure_registry.json")
 
         execution_issues: list[str] = []
+        if execution_plan is None:
+            execution_issues.append("no compiled execution plan is registered")
+        if manifest.model_sha256 != canonical_digest(approved.approved_model_ir):
+            execution_issues.append("execution model snapshot does not match the current approved model")
+        if manifest.source_files_sha256 != model_source_snapshots(root, approved.approved_model_ir):
+            execution_issues.append("execution source files changed after calculation")
+        required_outputs = {
+            "parameter_registry.json", "result_registry.json", "figure_registry.json", "notebook.ipynb",
+            *generated_figure_paths(figure_registry), *manifest.output_files_sha256,
+        }
+        output_snapshots = file_snapshots(root, required_outputs)
+        if manifest.output_files_sha256 != output_snapshots or any(value is None for value in output_snapshots.values()):
+            execution_issues.append("execution output snapshots are incomplete, changed or missing after calculation")
         if manifest.status not in {"passed", "partial"}:
             execution_issues.append(f"operator execution status is {manifest.status}")
         missing = [
@@ -54,10 +72,11 @@ class ResultVerificationStage:
             execution_issues.append(f"missing generated files: {', '.join(missing)}")
         plan_hash = hashlib.sha256(
             execution_plan.model_dump_json().encode("utf-8")
-        ).hexdigest()
+        ).hexdigest() if execution_plan is not None else ""
         if plan_hash != manifest.execution_plan_sha256:
             execution_issues.append("execution plan hash does not match manifest")
-        expected_node_ids = [node.node_id for node in execution_plan.graph.nodes]
+        plan_nodes = execution_plan.graph.nodes if execution_plan is not None else []
+        expected_node_ids = [node.node_id for node in plan_nodes]
         if manifest.status == "partial":
             verified_subproblem_ids = {
                 str(item.get("subproblem_id") or "")
@@ -66,12 +85,12 @@ class ResultVerificationStage:
             }
             ordered_executed = [
                 node.node_id
-                for node in execution_plan.graph.nodes
+                for node in plan_nodes
                 if node.node_id in set(manifest.executed_node_ids)
             ]
             required_verified_nodes = [
                 node.node_id
-                for node in execution_plan.graph.nodes
+                for node in plan_nodes
                 if node.subproblem_id in verified_subproblem_ids
             ]
             if (

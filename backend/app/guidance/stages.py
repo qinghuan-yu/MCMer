@@ -34,6 +34,7 @@ from app.guidance.model_review_contracts import (
 )
 from app.guidance.model_review_validation import bind_model_review, load_review_catalog, validate_model_review
 from app.guidance.operator_execution import OperatorGraphExecutor
+from app.guidance.recovery import invalidate_stage_outputs
 from app.guidance.stage_contracts import (
     ModelReviewer,
     Modeler,
@@ -266,6 +267,7 @@ class CalculationStage:
         output_path: Path,
     ) -> Path:
         source_path = _required_input(input_path)
+        invalidate_stage_outputs(output_path.parent, "calculation")
         approved = ApprovedModelIR.model_validate_json(
             source_path.read_text(encoding="utf-8")
         )

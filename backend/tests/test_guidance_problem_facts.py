@@ -687,6 +687,7 @@ def test_modeler_slices_structured_facts_by_target_subproblem(tmp_path: Path) ->
 
     from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
+    from test_guidance_fact_provenance import _architecture_payload
 
     payload = _structured_problem_spec_payload()
     payload["locked_facts"].append({
@@ -704,15 +705,32 @@ def test_modeler_slices_structured_facts_by_target_subproblem(tmp_path: Path) ->
         "description": "Historical demand used to forecast future demand.",
         "source_ref": "inputs/problem.docx#paragraph-5",
     }]
-    llm = _StubLLM([_blocked_model("Q1"), _blocked_model("Q2")])
+    first_model = _architecture_payload(
+        execution_components=["operator_graph"],
+        variables=[{
+            "id": "result", "role": "derived", "symbol": "r",
+            "unit": "manipulator/unit", "shape": [],
+        }],
+        operators=[{
+            "node_id": "estimate", "operator_id": "data.scalar_constant",
+            "inputs": {}, "outputs": ["result"], "parameters": {"value": 4},
+            "source_fact_ids": ["fact.component_ratio"],
+        }],
+    )
+    first_model["subproblems"][0]["subproblem_id"] = "Q1"
+    first_model["subproblems"][0]["data"][0]["source_ref"] = "inputs/problem.docx#paragraph-2"
+    first_model["subproblems"][0]["final_answers"][0]["evidence_ids"] = ["estimate"]
+    llm = _StubLLM([first_model, _blocked_model("Q2")])
 
-    asyncio.run(LLMModeler(llm).model(
+    result = asyncio.run(LLMModeler(llm, available_operator_ids=["data.scalar_constant"]).model(
         problem_spec=ProblemSpec.model_validate(payload),
         evidence_profile={"evidence": []},
         task={},
         work_dir=tmp_path,
     ))
 
+    assert result.subproblems[0].execution_status == "solvable"
+    assert len(llm.calls) == 2
     first_payload = json.loads(llm.calls[0]["history"][1]["content"])
     second_payload = json.loads(llm.calls[1]["history"][1]["content"])
     assert [item["fact_id"] for item in first_payload["locked_facts"]] == [
@@ -732,6 +750,7 @@ def test_modeler_slices_structured_facts_by_target_subproblem(tmp_path: Path) ->
         first_payload["subproblems"][0]
     ]
     assert second_payload["data_sources"] == payload["data_sources"]
+    assert second_payload["dependency_models"]["Q1"] == result.subproblems[0].model_dump(mode="json")
 
 
 class _MissingFactBindingModeler:
