@@ -537,21 +537,21 @@ class VerificationLayer(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
-class ModelAdequacyLayer(VerificationLayer):
+class NumericalValidationLayer(VerificationLayer):
     candidate_roles: list[Literal["baseline", "recommended", "alternative"]] = Field(
         default_factory=list
     )
     checks: dict[str, VerificationLayerStatus] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def prevent_unsupported_pass(self) -> ModelAdequacyLayer:
+    def prevent_unsupported_pass(self) -> NumericalValidationLayer:
         if self.status != "passed":
             return self
         roles = set(self.candidate_roles)
         if "baseline" not in roles:
-            raise ValueError("model_adequate requires a baseline candidate")
+            raise ValueError("numerical_validation requires a baseline candidate")
         if "recommended" not in roles:
-            raise ValueError("model_adequate requires a recommended candidate")
+            raise ValueError("numerical_validation requires a recommended candidate")
         failed_checks = [
             name
             for name, status in self.checks.items()
@@ -559,9 +559,39 @@ class ModelAdequacyLayer(VerificationLayer):
         ]
         if failed_checks:
             raise ValueError(
-                "model_adequate cannot pass while checks fail: "
+                "numerical_validation cannot pass while checks fail: "
                 + ", ".join(sorted(failed_checks))
             )
+        return self
+
+
+class ModelAdequacyLayer(VerificationLayer):
+    status: VerificationLayerStatus = "not_assessed"
+    reasons: list[str] = Field(default_factory=list)
+    source_coverage: VerificationLayer
+    mathematical_review: VerificationLayer
+    numerical_validation: NumericalValidationLayer
+
+    @model_validator(mode="after")
+    def derive_adequacy_from_independent_layers(self) -> ModelAdequacyLayer:
+        layers = {
+            "source_coverage": self.source_coverage,
+            "mathematical_review": self.mathematical_review,
+            "numerical_validation": self.numerical_validation,
+        }
+        statuses = {layer.status for layer in layers.values()}
+        self.status = next(
+            (status for status in ("blocked", "failed", "not_assessed") if status in statuses),
+            "passed",
+        )
+        self.reasons = [
+            f"{name}: {reason}"
+            for name, layer in layers.items()
+            for reason in layer.reasons
+        ]
+        self.evidence_refs = list(dict.fromkeys(
+            reference for layer in layers.values() for reference in layer.evidence_refs
+        ))
         return self
 
 

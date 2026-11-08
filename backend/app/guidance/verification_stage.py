@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from app.guidance.contracts import VerificationReport
+from app.guidance.contracts import ModelAdequacyLayer, ProblemSpec, VerificationReport
 from app.guidance.model_ir_compiler import ExecutionPlan
+from app.guidance.model_ir_semantics import validate_model_fact_coverage
 from app.guidance.model_review_contracts import ApprovedModelIR
 from app.guidance.model_validators import build_default_model_validator_registry
 from app.guidance.operator_execution import OperatorExecutionManifest
@@ -89,12 +90,20 @@ class ResultVerificationStage:
             figure_registry=figure_registry,
         )
         coverage_issues = _blocked_result_issues(results)
-        model_adequacy = _assess_model_adequacy(approved, results)
+        problem_path = root / "problem_spec.json"
+        problem_spec = (
+            ProblemSpec.model_validate_json(problem_path.read_text(encoding="utf-8"))
+            if problem_path.is_file() else None
+        )
+        model_adequacy = _assess_model_adequacy(
+            approved, results, problem_spec=problem_spec,
+        )
         if execution_issues or evidence_issues:
-            model_adequacy["status"] = "blocked"
-            model_adequacy["reasons"].append(
-                "model adequacy is blocked until execution and evidence layers pass"
+            model_adequacy["numerical_validation"]["status"] = "blocked"
+            model_adequacy["numerical_validation"]["reasons"].append(
+                "numerical validation is blocked until execution and evidence layers pass"
             )
+            model_adequacy = ModelAdequacyLayer.model_validate(model_adequacy).model_dump()
         counterevidence_records = _build_counterevidence_records(
             approved,
             model_adequacy,
@@ -171,6 +180,55 @@ def _blocked_result_issues(result_registry: dict) -> list[str]:
 def _assess_model_adequacy(
     approved: ApprovedModelIR,
     result_registry: dict,
+    *,
+    problem_spec: ProblemSpec | None,
+) -> dict:
+    # 执行批准尚未携带逐项数学对应证据，不能由数值校验代为批准充分性。
+    return ModelAdequacyLayer(
+        source_coverage=_assess_source_coverage(approved, problem_spec),
+        mathematical_review={
+            "status": "not_assessed",
+            "reasons": [
+                "independent mathematical correspondence evidence was not recorded; "
+                "execution approval and source references do not establish model adequacy"
+            ],
+        },
+        numerical_validation=_assess_numerical_validation(approved, result_registry),
+    ).model_dump()
+
+
+def _assess_source_coverage(
+    approved: ApprovedModelIR,
+    problem_spec: ProblemSpec | None,
+) -> dict:
+    if problem_spec is None or not problem_spec.locked_facts:
+        return {
+            "status": "not_assessed",
+            "reasons": ["no ProblemSpec with locked source facts was registered"],
+        }
+    try:
+        expected_ids = {item.id for item in problem_spec.subproblems}
+        modeled_ids = {item.subproblem_id for item in approved.approved_model_ir.subproblems}
+        if expected_ids != modeled_ids:
+            raise ValueError("ProblemSpec and approved model subproblem IDs do not match")
+        validate_model_fact_coverage(problem_spec, approved.approved_model_ir)
+    except ValueError as exc:
+        status, reasons = "failed", [str(exc)]
+    else:
+        status, reasons = "passed", [
+            "required fact IDs and model paths are covered for executable subproblems; "
+            "this checks references, not mathematical equivalence"
+        ]
+    return {
+        "status": status,
+        "reasons": reasons,
+        "evidence_refs": ["problem_spec.json", "approved_model_ir.json"],
+    }
+
+
+def _assess_numerical_validation(
+    approved: ApprovedModelIR,
+    result_registry: dict,
 ) -> dict:
     registry = build_default_model_validator_registry()
     verified_results = result_registry.get("verified_results")
@@ -230,7 +288,7 @@ def _assess_model_adequacy(
 
     if family_statuses and all(status == "passed" for status in family_statuses):
         status = "passed"
-        reasons.append("all declared model-family validators passed")
+        reasons.append("all declared numerical validators passed for the supplied model")
     elif "failed" in family_statuses:
         status = "failed"
     else:
@@ -250,7 +308,7 @@ def _build_counterevidence_records(
     approved: ApprovedModelIR,
     model_adequacy: dict,
 ) -> list[dict]:
-    checks = model_adequacy.get("checks")
+    checks = model_adequacy["numerical_validation"]["checks"]
     if not isinstance(checks, dict):
         checks = {}
     report_evidence_refs = model_adequacy.get("evidence_refs")

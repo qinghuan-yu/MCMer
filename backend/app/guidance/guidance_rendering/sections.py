@@ -86,15 +86,25 @@ def _append_fact_traceability(
         lines.append("- ProblemSpec 未登记题意歧义。")
     return "\n".join(lines) + "\n"
 
+def _verification_layers(verification_report: dict[str, Any]) -> list[tuple[str, dict]]:
+    adequacy = verification_report.get("model_adequate")
+    adequacy = adequacy if isinstance(adequacy, dict) else {}
+    return [
+        (label, layer if isinstance(layer, dict) else {})
+        for label, layer in (
+            ("执行正确性", verification_report.get("execution_verified")),
+            ("证据可追溯性", verification_report.get("evidence_supported")),
+            ("题面事实覆盖", adequacy.get("source_coverage")),
+            ("数学对应审核", adequacy.get("mathematical_review")),
+            ("数值复核", adequacy.get("numerical_validation")),
+            ("模型充分性", adequacy),
+        )
+    ]
+
+
 def _verification_layer_rows(verification_report: dict[str, Any]) -> list[str]:
     rows: list[str] = []
-    for label, key in (
-        ("执行正确性", "execution_verified"),
-        ("证据可追溯性", "evidence_supported"),
-        ("模型充分性", "model_adequate"),
-    ):
-        layer = verification_report.get(key)
-        layer = layer if isinstance(layer, dict) else {}
+    for label, layer in _verification_layers(verification_report):
         layer_status = _cell(layer.get("status") or "not_assessed")
         reasons = layer.get("reasons")
         reason_text = _join_claim_items(reasons) or "未登记说明"
@@ -103,13 +113,7 @@ def _verification_layer_rows(verification_report: dict[str, Any]) -> list[str]:
 
 def _verification_layer_summaries(verification_report: dict[str, Any]) -> list[str]:
     summaries: list[str] = []
-    for label, key in (
-        ("执行正确性", "execution_verified"),
-        ("证据可追溯性", "evidence_supported"),
-        ("模型充分性", "model_adequate"),
-    ):
-        layer = verification_report.get(key)
-        layer = layer if isinstance(layer, dict) else {}
+    for label, layer in _verification_layers(verification_report):
         summaries.append(f"{label}：`{layer.get('status') or 'not_assessed'}`。")
     return summaries
 

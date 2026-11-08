@@ -283,7 +283,7 @@ def test_blocked_review_emits_three_layer_guidance_without_running_calculation(
     assert report["execution_verified"]["status"] == "not_assessed"
     assert report["evidence_supported"]["status"] == "blocked"
     assert report["model_adequate"]["status"] == "blocked"
-    assert report["model_adequate"]["candidate_roles"] == []
+    assert report["model_adequate"]["numerical_validation"]["candidate_roles"] == []
     assert (tmp_path / "guidance.md").is_file()
     result = next(item for item in messages if item["type"] == "result")
     assert result["data"]["status"] == "blocked"

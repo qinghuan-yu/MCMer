@@ -21,10 +21,14 @@ def test_passing_layers_do_not_hide_incomplete_subproblem_coverage(
         execution_verified={"status": "passed", "reasons": ["Executed subset passed."]},
         evidence_supported={"status": "passed", "reasons": ["Evidence passed."]},
         model_adequate={
-            "status": "passed",
-            "reasons": ["Executed models passed."],
-            "candidate_roles": ["baseline", "recommended"],
-            "checks": {"supported.baseline_comparison": "passed"},
+            "source_coverage": {"status": "passed", "reasons": ["Source coverage checked."]},
+            "mathematical_review": {"status": "passed", "reasons": ["Mathematical correspondence checked."]},
+            "numerical_validation": {
+                "status": "passed",
+                "reasons": ["Executed models passed."],
+                "candidate_roles": ["baseline", "recommended"],
+                "checks": {"supported.baseline_comparison": "passed"},
+            },
         },
         counterevidence_records=[{
             "subproblem_id": "supported",

@@ -276,11 +276,22 @@ def _build_preexecution_blocked_report(
             "evidence_refs": model_refs,
         },
         model_adequate={
-            "status": "blocked",
-            "candidate_roles": [],
-            "checks": {},
-            "reasons": reasons,
-            "evidence_refs": model_refs,
+            "source_coverage": {
+                "status": "not_assessed",
+                "reasons": ["source coverage was not assessed for an executable model"],
+            },
+            "mathematical_review": {
+                "status": "blocked",
+                "reasons": reasons,
+                "evidence_refs": model_refs,
+            },
+            "numerical_validation": {
+                "status": "blocked",
+                "candidate_roles": [],
+                "checks": {},
+                "reasons": ["no model was executed after the review blocked"],
+                "evidence_refs": model_refs,
+            },
         },
         blocking_issues=blocking_issues,
         artifact_refs={

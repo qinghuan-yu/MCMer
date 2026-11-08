@@ -9,6 +9,14 @@ from pydantic import ValidationError
 from app.guidance.contracts import VerificationReport
 
 
+def _adequacy_with_numerics(numerical: dict) -> dict:
+    return {
+        "source_coverage": {"status": "passed", "reasons": ["Source coverage checked."]},
+        "mathematical_review": {"status": "passed", "reasons": ["Independent correspondence checked."]},
+        "numerical_validation": numerical,
+    }
+
+
 def test_unassessed_counterevidence_does_not_require_fabricated_refs() -> None:
     from app.guidance.contracts import CounterevidenceRecord
 
@@ -39,17 +47,17 @@ def test_model_adequate_pass_requires_excluded_route_counterevidence() -> None:
                     "status": "passed",
                     "reasons": ["evidence passed"],
                 },
-                "model_adequate": {
+                "model_adequate": _adequacy_with_numerics({
                     "status": "passed",
                     "candidate_roles": ["baseline", "recommended"],
                     "checks": {"regression.baseline_comparison": "passed"},
                     "reasons": ["recommended route passed all validators"],
-                },
+                }),
             }
         )
 
 
-def test_model_adequacy_routes_registered_validators_by_declared_family() -> None:
+def test_numerical_validators_do_not_supply_mathematical_review() -> None:
     from app.guidance.model_review_contracts import (ApprovedModelIR)
     from app.guidance.model_ir import (ModelIR)
     from app.guidance.verification_stage import _assess_model_adequacy, _build_counterevidence_records
@@ -146,15 +154,18 @@ def test_model_adequacy_routes_registered_validators_by_declared_family() -> Non
         ]
     }
 
-    layer = _assess_model_adequacy(approved, result_registry)
+    layer = _assess_model_adequacy(approved, result_registry, problem_spec=None)
+    numerical = layer["numerical_validation"]
 
-    assert layer["status"] == "passed"
+    assert layer["status"] == "not_assessed"
+    assert layer["mathematical_review"]["status"] == "not_assessed"
+    assert numerical["status"] == "passed"
     assert (
-        layer["checks"]["aggregate_flow_tasks.regression.residual_recompute"]
+        numerical["checks"]["aggregate_flow_tasks.regression.residual_recompute"]
         == "passed"
     )
     assert (
-        layer["checks"]["aggregate_flow_tasks.optimization.multistart"]
+        numerical["checks"]["aggregate_flow_tasks.optimization.multistart"]
         == "passed"
     )
     assert layer["evidence_refs"] == [
@@ -164,9 +175,9 @@ def test_model_adequacy_routes_registered_validators_by_declared_family() -> Non
     records = _build_counterevidence_records(approved, layer)
     assert len(records) == 1
     assert records[0]["challenged_candidate_id"] == "simple_baseline"
-    assert records[0]["status"] == "excluded"
-    assert records[0]["check_refs"]
-    assert records[0]["evidence_refs"] == layer["evidence_refs"]
+    assert records[0]["status"] == "not_assessed"
+    assert records[0]["check_refs"] == []
+    assert records[0]["evidence_refs"] == []
     assert records[0]["applicability_boundary"].startswith("附件给定采样区间")
 
 
@@ -184,11 +195,11 @@ def test_model_adequate_rejects_recommended_route_without_baseline() -> None:
                     "status": "passed",
                     "reasons": ["registered result references available observations"],
                 },
-                "model_adequate": {
+                "model_adequate": _adequacy_with_numerics({
                     "status": "passed",
                     "candidate_roles": ["recommended"],
                     "reasons": ["recommended route has a small training residual"],
-                },
+                }),
             }
         )
 
@@ -228,12 +239,12 @@ def test_small_residual_cannot_override_failed_adequacy_check(failed_check: str)
                     "status": "passed",
                     "reasons": ["training residual is below the declared threshold"],
                 },
-                "model_adequate": {
+                "model_adequate": _adequacy_with_numerics({
                     "status": "passed",
                     "candidate_roles": ["baseline", "recommended"],
                     "checks": checks,
                     "reasons": ["training residual is small"],
-                },
+                }),
             }
         )
 
