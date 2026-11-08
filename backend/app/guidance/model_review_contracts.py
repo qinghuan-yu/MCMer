@@ -20,6 +20,19 @@ class ModelReviewSubmission(IRModel):
     revision_request_ref: str | None = Field(default=None, min_length=1, max_length=300)
 
 
+ReviewDigest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class ModelReviewBinding(IRModel):
+    model_sha256: ReviewDigest
+    approved_model_sha256: ReviewDigest
+    problem_spec_sha256: ReviewDigest
+    evidence_profile_sha256: ReviewDigest
+    input_catalog_sha256: ReviewDigest | None
+    review_sha256: ReviewDigest
+    revision_request_sha256: ReviewDigest | None
+
+
 class ApprovedModelIR(IRModel):
     schema_version: Literal["1.0"] = "1.0"
     review_status: Literal["approved", "partial", "revision_required", "blocked"]
@@ -29,6 +42,7 @@ class ApprovedModelIR(IRModel):
     revision_request_ref: str | None = Field(default=None, min_length=1, max_length=300)
     executable_subproblem_ids: list[str] = Field(max_length=50)
     approved_model_ir: ModelIR
+    review_binding: ModelReviewBinding | None = None
 
     @model_validator(mode="after")
     def require_consistent_execution_projection(self) -> ApprovedModelIR:
@@ -100,6 +114,21 @@ class RevisionCheckSpec(IRModel):
         return self
 
 
+class MathematicalCorrespondenceCheck(IRModel):
+    requirement_id: str = Field(min_length=1, max_length=160)
+    status: Literal["passed", "failed", "not_assessed"]
+    model_paths: list[str] = Field(default_factory=list, max_length=30)
+    rationale: str = Field(min_length=1, max_length=1600)
+
+    @model_validator(mode="after")
+    def require_mathematical_evidence(self) -> MathematicalCorrespondenceCheck:
+        if self.status == "passed" and not self.model_paths:
+            raise ValueError("passed mathematical check requires model_paths")
+        if len(self.model_paths) != len(set(self.model_paths)):
+            raise ValueError("mathematical model_paths must be unique")
+        return self
+
+
 class SubproblemReviewSpec(IRModel):
     subproblem_id: str = Field(min_length=1, max_length=100)
     status: Literal["approved", "revision_required", "blocked"]
@@ -109,9 +138,17 @@ class SubproblemReviewSpec(IRModel):
         max_length=50,
     )
     revision_checks: list[RevisionCheckSpec] = Field(default_factory=list, max_length=50)
+    mathematical_checks: list[MathematicalCorrespondenceCheck] = Field(
+        default_factory=list, max_length=250,
+    )
 
     @model_validator(mode="after")
     def require_consistent_decision(self) -> SubproblemReviewSpec:
+        mathematical_ids = [item.requirement_id for item in self.mathematical_checks]
+        if len(mathematical_ids) != len(set(mathematical_ids)):
+            raise ValueError("mathematical requirement ids must be unique within a subproblem")
+        if self.status == "approved" and any(item.status == "failed" for item in self.mathematical_checks):
+            raise ValueError("approved subproblem contains failed mathematical checks")
         requirement_ids = [item.requirement_id for item in self.required_revisions]
         check_ids = [item.requirement_id for item in self.revision_checks]
         if len(requirement_ids) != len(set(requirement_ids)):

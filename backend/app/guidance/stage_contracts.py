@@ -49,6 +49,7 @@ class ModelReviewer(Protocol):
         model_ir: ModelIR,
         revision_request: ModelIRReview | None,
         evidence_profile: dict,
+        input_catalog: dict | None,
         task: dict,
         work_dir: Path,
     ) -> ModelIRReview: ...

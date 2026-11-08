@@ -39,6 +39,7 @@ class IRReviewer:
         model_ir,
         revision_request,
         evidence_profile,
+        input_catalog,
         task,
         work_dir,
     ):

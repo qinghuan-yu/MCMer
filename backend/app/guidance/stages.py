@@ -32,7 +32,7 @@ from app.guidance.model_review_contracts import (
     ModelIRReview,
     ModelReviewSubmission,
 )
-from app.guidance.model_review_validation import validate_model_review
+from app.guidance.model_review_validation import bind_model_review, load_review_catalog, validate_model_review
 from app.guidance.operator_execution import OperatorGraphExecutor
 from app.guidance.stage_contracts import (
     ModelReviewer,
@@ -163,11 +163,13 @@ class ModelReviewStage:
             (output_path.parent / "problem_spec.json").read_text(encoding="utf-8")
         )
         evidence_profile = load_evidence_profile(output_path.parent).model_dump(mode="json")
+        input_catalog = load_review_catalog(output_path.parent)
         review = await self.reviewer.review(
             problem_spec=problem_spec,
             model_ir=model_ir,
             revision_request=revision_request,
             evidence_profile=evidence_profile,
+            input_catalog=input_catalog,
             task=task,
             work_dir=output_path.parent,
         )
@@ -177,7 +179,7 @@ class ModelReviewStage:
                 "model_ir_ref": model_ir_path.name,
             }
         )
-        validate_model_review(review, model_ir, revision_request=revision_request)
+        validate_model_review(review, model_ir, revision_request=revision_request, problem_spec=problem_spec)
         _write_model(output_path.parent / "model_review.json", review)
         approved_projection = _build_reviewed_model_projection(model_ir, review)
         approved = ApprovedModelIR(
@@ -191,6 +193,11 @@ class ModelReviewStage:
                 if isinstance(subproblem, SolvableModelIR)
             ],
             approved_model_ir=approved_projection,
+            review_binding=bind_model_review(
+                review=review, model_ir=model_ir, approved_model_ir=approved_projection,
+                problem_spec=problem_spec, evidence_profile=evidence_profile,
+                input_catalog=input_catalog, revision_request=revision_request,
+            ),
         )
         _write_model(output_path, approved)
         return output_path

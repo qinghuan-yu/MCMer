@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from app.guidance.contracts import ModelAdequacyLayer, ProblemSpec, VerificationReport
+from app.guidance.contracts import ModelAdequacyLayer, ProblemSpec, VerificationLayer, VerificationReport
 from app.guidance.model_ir_compiler import ExecutionPlan
 from app.guidance.model_ir_semantics import validate_model_fact_coverage
 from app.guidance.model_review_contracts import ApprovedModelIR
+from app.guidance.model_review_validation import assess_mathematical_review
 from app.guidance.model_validators import build_default_model_validator_registry
 from app.guidance.operator_execution import OperatorExecutionManifest
 from app.guidance.stage_io import (
@@ -97,6 +98,7 @@ class ResultVerificationStage:
         )
         model_adequacy = _assess_model_adequacy(
             approved, results, problem_spec=problem_spec,
+            mathematical_review=assess_mathematical_review(approved, root=root, problem_spec=problem_spec),
         )
         if execution_issues or evidence_issues:
             model_adequacy["numerical_validation"]["status"] = "blocked"
@@ -182,17 +184,11 @@ def _assess_model_adequacy(
     result_registry: dict,
     *,
     problem_spec: ProblemSpec | None,
+    mathematical_review: VerificationLayer,
 ) -> dict:
-    # 执行批准尚未携带逐项数学对应证据，不能由数值校验代为批准充分性。
     return ModelAdequacyLayer(
         source_coverage=_assess_source_coverage(approved, problem_spec),
-        mathematical_review={
-            "status": "not_assessed",
-            "reasons": [
-                "independent mathematical correspondence evidence was not recorded; "
-                "execution approval and source references do not establish model adequacy"
-            ],
-        },
+        mathematical_review=mathematical_review,
         numerical_validation=_assess_numerical_validation(approved, result_registry),
     ).model_dump()
 

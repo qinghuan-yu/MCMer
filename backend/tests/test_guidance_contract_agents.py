@@ -498,6 +498,7 @@ def test_modeler_scopes_review_payload_to_target_subproblem() -> None:
                 "Repair only the target subproblem.",
             )],
             "revision_checks": [],
+            "mathematical_checks": [],
         }
     ]
 

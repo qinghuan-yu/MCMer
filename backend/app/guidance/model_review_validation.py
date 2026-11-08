@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
+from pydantic import BaseModel
+
+from app.artifacts.evidence_profile import EvidenceProfile
+from app.artifacts.input_catalog import InputCatalog
+from app.guidance.contracts import ProblemSpec, VerificationLayer
 from app.guidance.model_ir import (BlockedModelIR, ModelIR, SolvableModelIR)
-from app.guidance.model_review_contracts import (ModelIRReview)
+from app.guidance.model_review_contracts import ApprovedModelIR, ModelIRReview, ModelReviewBinding
 
 
 def validate_model_review(
@@ -11,6 +20,7 @@ def validate_model_review(
     model_ir: ModelIR,
     *,
     revision_request: ModelIRReview | None = None,
+    problem_spec: ProblemSpec | None = None,
 ) -> None:
     if review.model_id != model_ir.model_id:
         raise ValueError("model review model_id does not match Model IR")
@@ -31,6 +41,7 @@ def validate_model_review(
     }
     for decision in review.subproblem_reviews:
         subproblem = subproblems_by_id[decision.subproblem_id]
+        _validate_mathematical_checks(decision, subproblem, problem_spec)
         if isinstance(subproblem, BlockedModelIR) and decision.status != "blocked":
             raise ValueError(
                 f"blocked Model IR subproblem {decision.subproblem_id!r} "
@@ -112,6 +123,113 @@ def validate_model_review(
                     "approved subproblem review contains unaccepted revision "
                     f"requirements: {unaccepted_revisions!r}"
                 )
+
+
+def mathematical_requirement_ids(problem_spec: ProblemSpec, subproblem_id: str) -> list[str]:
+    subproblem = next((item for item in problem_spec.subproblems if item.id == subproblem_id), None)
+    if subproblem is None:
+        raise ValueError(f"mathematical review references unknown subproblem {subproblem_id!r}")
+    return [*subproblem.required_fact_ids, "$objective", "$formulation"]
+
+
+def _validate_mathematical_checks(decision, subproblem, problem_spec: ProblemSpec | None) -> None:
+    if not decision.mathematical_checks:
+        return
+    if problem_spec is None:
+        raise ValueError("mathematical correspondence requires a ProblemSpec")
+    expected = set(mathematical_requirement_ids(problem_spec, subproblem.subproblem_id))
+    unknown = {check.requirement_id for check in decision.mathematical_checks} - expected
+    if unknown:
+        raise ValueError(f"unknown mathematical requirements: {sorted(unknown)!r}")
+    document = subproblem.model_dump(mode="json")
+    for check in decision.mathematical_checks:
+        for path in check.model_paths:
+            if not path.startswith(("/execution_components/", "/equations/", "/constraints/", "/assumptions/")):
+                raise ValueError(f"mathematical path must reference this subproblem's model elements: {path!r}")
+            if not _json_pointer_exists(document, path):
+                raise ValueError(f"mathematical evidence path does not exist: {path!r}")
+
+
+def _review_digest(value: BaseModel | dict) -> str:
+    document = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+    serialized = json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def load_review_catalog(root: Path) -> dict | None:
+    path = root / "input_catalog.json"
+    if not path.is_file():
+        return None
+    return InputCatalog.model_validate_json(path.read_text(encoding="utf-8")).model_dump(mode="json")
+
+
+def bind_model_review(
+    *, review: ModelIRReview, model_ir: ModelIR, approved_model_ir: ModelIR,
+    problem_spec: ProblemSpec, evidence_profile: dict, input_catalog: dict | None,
+    revision_request: ModelIRReview | None,
+) -> ModelReviewBinding:
+    # 绑定由系统写入，LLM不能自报审核所用快照的哈希。
+    return ModelReviewBinding(
+        model_sha256=_review_digest(model_ir),
+        approved_model_sha256=_review_digest(approved_model_ir),
+        problem_spec_sha256=_review_digest(problem_spec),
+        evidence_profile_sha256=_review_digest(evidence_profile),
+        input_catalog_sha256=_review_digest(input_catalog) if input_catalog is not None else None,
+        review_sha256=_review_digest(review),
+        revision_request_sha256=_review_digest(revision_request) if revision_request is not None else None,
+    )
+
+
+def assess_mathematical_review(
+    approved: ApprovedModelIR, *, root: Path, problem_spec: ProblemSpec | None,
+) -> VerificationLayer:
+    if approved.review_binding is None or problem_spec is None:
+        return VerificationLayer(status="not_assessed", reasons=["no mathematical review bound to the current model and sources was registered"])
+    try:
+        review = ModelIRReview.model_validate_json((root / approved.review_ref).read_text(encoding="utf-8"))
+        model_ir = ModelIR.model_validate_json((root / approved.model_ir_ref).read_text(encoding="utf-8"))
+        revision_request = (
+            ModelIRReview.model_validate_json((root / approved.revision_request_ref).read_text(encoding="utf-8"))
+            if approved.revision_request_ref is not None else None
+        )
+        current_binding = bind_model_review(
+            review=review, model_ir=model_ir, approved_model_ir=approved.approved_model_ir,
+            problem_spec=problem_spec,
+            evidence_profile=EvidenceProfile.model_validate_json(
+                (root / "evidence_profile.json").read_text(encoding="utf-8")
+            ).model_dump(mode="json"),
+            input_catalog=load_review_catalog(root), revision_request=revision_request,
+        )
+    except (OSError, ValueError) as exc:
+        return VerificationLayer(status="not_assessed", reasons=[f"mathematical review evidence is unavailable or invalid: {exc}"])
+    if current_binding != approved.review_binding:
+        return VerificationLayer(status="not_assessed", reasons=["mathematical review snapshot is stale: model, source, review or revision evidence changed"])
+    try:
+        validate_model_review(review, model_ir, problem_spec=problem_spec, revision_request=revision_request)
+    except ValueError as exc:
+        return VerificationLayer(status="failed", reasons=[str(exc)], evidence_refs=[approved.review_ref])
+    reasons: list[str] = []
+    refs: list[str] = []
+    statuses: list[str] = []
+    for index, decision in enumerate(review.subproblem_reviews):
+        if decision.subproblem_id not in approved.executable_subproblem_ids:
+            continue
+        expected = set(mathematical_requirement_ids(problem_spec, decision.subproblem_id))
+        checks = {item.requirement_id: item for item in decision.mathematical_checks}
+        if decision.status != "approved" or any(item.status == "failed" for item in checks.values()):
+            statuses.append("failed")
+            reasons.append(f"{decision.subproblem_id}: independent mathematical review did not accept the model")
+        elif expected - checks.keys() or any(item.status != "passed" for item in checks.values()):
+            statuses.append("not_assessed")
+            reasons.append(f"{decision.subproblem_id}: mathematical correspondence is incomplete or unassessed")
+        else:
+            statuses.append("passed")
+            reasons.append(f"{decision.subproblem_id}: independent reviewer accepted {len(expected)} mathematical requirements under the bound source snapshots")
+        refs.append(f"{approved.review_ref}#/subproblem_reviews/{index}/mathematical_checks")
+    status = "failed" if "failed" in statuses else "passed" if statuses and all(item == "passed" for item in statuses) else "not_assessed"
+    return VerificationLayer(
+        status=status, reasons=reasons or ["no executable subproblem has mathematical review evidence"], evidence_refs=refs,
+    )
 
 
 def _json_pointer_exists(document: object, pointer: str) -> bool:

@@ -154,7 +154,12 @@ def test_numerical_validators_do_not_supply_mathematical_review() -> None:
         ]
     }
 
-    layer = _assess_model_adequacy(approved, result_registry, problem_spec=None)
+    from app.guidance.contracts import VerificationLayer
+
+    layer = _assess_model_adequacy(
+        approved, result_registry, problem_spec=None,
+        mathematical_review=VerificationLayer(status="not_assessed", reasons=["No mathematical review evidence."]),
+    )
     numerical = layer["numerical_validation"]
 
     assert layer["status"] == "not_assessed"
