@@ -100,6 +100,7 @@ class IndexedParameterValue(IRModel):
     coordinates: list[IndexValue] = Field(default_factory=list, max_length=4)
     value: float
     source_ref: str = Field(min_length=1, max_length=300)
+    source_unit: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class RuntimeIndexedParameterSource(IRModel):

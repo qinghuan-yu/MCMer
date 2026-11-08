@@ -108,14 +108,17 @@ def _revision_requirement(requirement_id: str, description: str) -> dict:
 
 
 def _indexed_evidence(core: dict) -> dict:
-    # 从固定测试模型构造正式证据表，草稿引用明确列而非首个单元格。
+    # 从固定模型的值构造证据表，再让生成草稿只声明列绑定。
     evidence = []
     for number, parameter in enumerate(core["parameters"], start=1):
         if parameter.get("source_kind") == "runtime_artifact":
             continue
         reference = f"inputs/inventory.docx#table-{number}"
-        values = list(parameter["dense_values"])
-        parameter["dense_source_ref"] = reference + "/value"
+        values = [item["value"] for item in parameter.pop("values")]
+        parameter["source_kind"] = "static"
+        parameter["binding"] = {
+            "kind": "table_column", "source_ref": reference, "column": "value",
+        }
         evidence.append({
             "evidence_id": f"question.table.{number}", "kind": "embedded_table",
             "source_ref": reference, "source_file": "inputs/inventory.docx",
@@ -380,11 +383,6 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
     draft_subproblem["execution_components"] = ["indexed_linear_model"]
     for candidate in draft_subproblem["candidate_models"]:
         candidate["operator_node_ids"] = []
-    for parameter in indexed["parameters"]:
-        values = parameter.pop("values")
-        parameter["source_kind"] = "static"
-        parameter["dense_values"] = [item["value"] for item in values]
-        parameter["dense_source_ref"] = values[0]["source_ref"]
     core = {
         "index_sets": [
             item for item in indexed["index_sets"]
@@ -641,8 +639,7 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
                 "source_kind": "static",
                 "id": parameter["id"],
                 "index_sets": parameter["index_sets"],
-                "dense_values": [item["value"] for item in values],
-                "dense_source_ref": values[0]["source_ref"],
+                "values": values,
             })
     core = {
         "index_sets": [
@@ -927,11 +924,6 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
     draft_subproblem["execution_components"] = ["indexed_linear_model"]
     for candidate in draft_subproblem["candidate_models"]:
         candidate["operator_node_ids"] = []
-    for parameter in indexed["parameters"]:
-        values = parameter.pop("values")
-        parameter["source_kind"] = "static"
-        parameter["dense_values"] = [item["value"] for item in values]
-        parameter["dense_source_ref"] = values[0]["source_ref"]
     core = {
         "index_sets": [
             item for item in indexed["index_sets"]
@@ -1001,7 +993,7 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
         {
             "id": parameter["id"],
             "index_sets": parameter["index_sets"],
-            "source_ref": parameter["dense_source_ref"],
+            "source_ref": parameter["binding"]["source_ref"],
         }
         for parameter in core["parameters"]
     ]
@@ -1069,7 +1061,7 @@ def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> Non
         context.variables[0].domain = "integer"
 
     with pytest.raises(ValueError, match="unknown parameter 'undeclared_demand'") as exc_info:
-        _validate_indexed_parts(core, constraints, context)
+        _validate_indexed_parts(core.promote_core(), constraints, context)
     assert "allowed parameter ids=[]" in str(exc_info.value)
     assert "allowed variable ids=['inventory']" in str(exc_info.value)
 
@@ -1225,11 +1217,6 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
     draft_subproblem["execution_components"] = ["indexed_linear_model"]
     for candidate in draft_subproblem["candidate_models"]:
         candidate["operator_node_ids"] = []
-    for parameter in indexed["parameters"]:
-        values = parameter.pop("values")
-        parameter["source_kind"] = "static"
-        parameter["dense_values"] = [item["value"] for item in values]
-        parameter["dense_source_ref"] = values[0]["source_ref"]
     core = {
         "index_sets": [
             item for item in indexed["index_sets"]

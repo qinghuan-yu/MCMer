@@ -13,6 +13,7 @@ from app.guidance.indexed_linear import (
     validate_indexed_linear_model_structure,
 )
 from app.guidance.model_ir import (
+    IndexedLinearCoreSpec,
     IndexedLinearExecutionComponent,
     ModelIR,
     OperatorGraphExecutionComponent,
@@ -36,21 +37,25 @@ def _validate_indexed_core_stage(
     coverage: FactCoverage,
     *,
     evidence_profile: Mapping[str, Any] | None = None,
-) -> FactCoverage:
-    updated = coverage.with_stage(
+) -> IndexedLinearCoreSpec:
+    coverage.with_stage(
         "indexed_core",
         ((parameter.id, parameter.source_fact_ids) for parameter in core.parameters),
     )
-    _validate_indexed_core_draft(
+    materialized = _validate_indexed_core_draft(
         core,
         locked_facts=coverage.scope.payload(),
         evidence_profile=evidence_profile,
     )
-    return updated
+    coverage.with_stage(
+        "indexed_core",
+        ((parameter.id, parameter.source_fact_ids) for parameter in materialized.parameters),
+    )
+    return materialized
 
 def _validate_indexed_constraint_stage(
     *,
-    core: IndexedLinearCoreDraft,
+    core: IndexedLinearCoreSpec,
     constraints: IndexedLinearConstraintsDraft,
     context: ConstraintGenerationContext,
     coverage: FactCoverage,
@@ -105,15 +110,12 @@ def _validate_generation_draft_slice(
     return coverage
 
 def _validate_indexed_parts(
-    core: IndexedLinearCoreDraft,
+    core: IndexedLinearCoreSpec,
     constraints: IndexedLinearConstraintsDraft,
     context: ConstraintGenerationContext,
 ) -> None:
     _validate_indexed_constraints_compactness(core, constraints)
-    indexed_model = core.promote(
-        constraints.promote_constraints(),
-        constraints.additional_index_sets,
-    )
+    indexed_model = constraints.promote(core)
     issues = validate_indexed_linear_model_structure(indexed_model)
     if issues:
         details = "; ".join(f"{item.code}: {item.message}" for item in issues)
@@ -132,22 +134,24 @@ def _validate_indexed_core_draft(
     *,
     locked_facts: list[dict[str, Any]] | None = None,
     evidence_profile: Mapping[str, Any] | None = None,
-) -> None:
+) -> IndexedLinearCoreSpec:
     _validate_indexed_core_compactness(core)
+    materialized = core.promote_core(locked_facts=locked_facts, evidence_profile=evidence_profile)
     issues = validate_indexed_linear_core(
-        core.promote_core(),
+        materialized,
         locked_facts=locked_facts,
         evidence_profile=evidence_profile,
     )
     if issues:
         details = "; ".join(f"{item.code}: {item.message}" for item in issues)
         raise ValueError(f"indexed linear core validation failed: {details}")
+    return materialized
 
 def _validate_indexed_core_compactness(core: IndexedLinearCoreDraft) -> None:
     _validate_compact_literal_references(core, [core.objective.terms])
 
 def _validate_indexed_constraints_compactness(
-    core: IndexedLinearCoreDraft,
+    core: IndexedLinearCoreSpec | IndexedLinearCoreDraft,
     constraints: IndexedLinearConstraintsDraft,
 ) -> None:
     _validate_compact_literal_references(
@@ -160,7 +164,7 @@ def _validate_indexed_constraints_compactness(
     )
 
 def _validate_compact_literal_references(
-    core: IndexedLinearCoreDraft,
+    core: IndexedLinearCoreSpec | IndexedLinearCoreDraft,
     term_groups: list[list[Any]],
 ) -> None:
     index_sets = {item.id: item for item in core.index_sets}

@@ -107,10 +107,13 @@ def test_indexed_core_request_requires_exact_static_parameter_source(monkeypatch
         ))
 
     for rule in (
-        "完整已登记表格 source_ref",
-        "精确列名",
-        "单值 cell/ref",
-        "标量 locked fact",
-        "禁止用向量首个单元格作为整列来源",
+        "binding",
+        "fact",
+        "table_column",
+        "table_range",
+        "零基",
+        "右开",
+        "程序读取",
+        "dense_values",
     ):
         assert rule in captured["prompt"]

@@ -40,6 +40,7 @@ from app.guidance.model_ir import (
     _build_fact_bindings,
     _require_unique_source_fact_ids,
 )
+from app.guidance.static_bindings import FactValueBinding, StaticParameterBinding, materialize_static_parameter
 
 
 class CandidateModelDraft(CandidateModel):
@@ -192,21 +193,16 @@ class StaticIndexedParameterDraft(IRModel):
     id: str = Field(min_length=1, max_length=100)
     index_sets: list[str] = Field(default_factory=list, max_length=4)
     source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
-    dense_values: list[float] = Field(min_length=1, max_length=10000)
-    dense_source_ref: str = Field(min_length=1, max_length=300)
+    binding: StaticParameterBinding
 
     @model_validator(mode="after")
     def require_unique_source_fact_ids(self) -> StaticIndexedParameterDraft:
         _require_unique_source_fact_ids(self.source_fact_ids)
         return self
 
-    def promote(self) -> IndexedParameterSpec:
-        return IndexedParameterSpec(
-            id=self.id,
-            index_sets=self.index_sets,
-            source_fact_ids=self.source_fact_ids,
-            dense_values=self.dense_values,
-            dense_source_ref=self.dense_source_ref,
+    def promote(self, *, index_sets, locked_facts, evidence_profile) -> IndexedParameterSpec:
+        return materialize_static_parameter(
+            self, index_sets=index_sets, locked_facts=locked_facts, evidence_profile=evidence_profile,
         )
 
 
@@ -359,26 +355,16 @@ class IndexedLinearCoreDraft(IRModel):
     variables: list[IndexedVariableSpec] = Field(min_length=1, max_length=100)
     objective: IndexedLinearObjectiveDraft
 
-    def promote_core(self) -> IndexedLinearCoreSpec:
+    def promote_core(self, *, locked_facts=None, evidence_profile=None) -> IndexedLinearCoreSpec:
         return IndexedLinearCoreSpec(
             index_sets=self.index_sets,
-            parameters=[item.promote() for item in self.parameters],
+            parameters=[
+                item.promote(index_sets=self.index_sets, locked_facts=locked_facts, evidence_profile=evidence_profile)
+                if isinstance(item, StaticIndexedParameterDraft) else item.promote()
+                for item in self.parameters
+            ],
             variables=self.variables,
             objective=self.objective.promote(),
-        )
-
-    def promote(
-        self,
-        constraints: list[IndexedLinearConstraint],
-        additional_index_sets: list[IndexSetSpec] | None = None,
-    ) -> IndexedLinearModelSpec:
-        core = self.promote_core()
-        return IndexedLinearModelSpec(
-            index_sets=[*core.index_sets, *(additional_index_sets or [])],
-            parameters=core.parameters,
-            variables=core.variables,
-            objective=core.objective,
-            constraints=constraints,
         )
 
 
@@ -437,7 +423,11 @@ class ConstraintGenerationContext(IRModel):
                     id=item.id,
                     index_sets=tuple(item.index_sets),
                     source_ref=(
-                        item.dense_source_ref
+                        (
+                            f"problem_spec.json#locked_facts/{item.binding.fact_id}"
+                            if isinstance(item.binding, FactValueBinding)
+                            else item.binding.source_ref
+                        )
                         if isinstance(item, StaticIndexedParameterDraft)
                         else _runtime_parameter_source_ref(item.runtime_source)
                     ),
@@ -461,3 +451,12 @@ class IndexedLinearConstraintsDraft(IRModel):
 
     def promote_constraints(self) -> list[IndexedLinearConstraint]:
         return [item.promote() for item in self.constraints]
+
+    def promote(self, core: IndexedLinearCoreSpec) -> IndexedLinearModelSpec:
+        return IndexedLinearModelSpec(
+            index_sets=[*core.index_sets, *self.additional_index_sets],
+            parameters=core.parameters,
+            variables=core.variables,
+            objective=core.objective,
+            constraints=self.promote_constraints(),
+        )

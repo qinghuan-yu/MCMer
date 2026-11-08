@@ -129,11 +129,17 @@ async def _request_single_subproblem_model(
             model_type=IndexedLinearCoreDraft,
             system_prompt=(
                 "你是有限索引线性模型核心构建器。只输出索引集、参数来源、索引变量和线性目标。"
-                "每个参数必须用 source_kind 判别来源：题面或附件常量使用 static、dense_values "
-                "和 dense_source_ref；上游算子工件使用 runtime_artifact 和 runtime_source，"
-                "静态向量的 dense_source_ref 必须使用完整已登记表格 source_ref 加精确列名；"
-                "单值参数可引用单值 cell/ref 或标量 locked fact；"
-                "禁止用向量首个单元格作为整列来源，也不得用文档名或模糊标签替代精确引用。"
+                "每个参数必须用 source_kind 判别来源：静态数据使用 static 和 binding，"
+                "数值由程序读取，禁止输出 dense_values、dense_source_ref 或自行抄写数组。"
+                "binding.kind=fact 只选择 locked_facts 中的 fact_id，标量按索引广播，系统登记该事实；"
+                "table_column 使用完整已登记表格 source_ref 和精确列名 column，首行必须是表头，"
+                "同名索引列存在时按索引标签对齐；table_range 选择原始表格的矩形区域，"
+                "row_start/row_stop、column_start/column_stop 使用零基、右开范围，包含原始表头，"
+                "order 明确选择 row_major 或 column_major；只有一个单元格时起止仍相差1。"
+                "选择的单元格数量必须等于参数索引笛卡尔积大小，禁止用首个单元格代表整列。"
+                "有单位后缀的单元格须在 unit 精确声明后缀，如元/个；百分数转换为比例。"
+                "source_ref 必须逐字选择 evidence_profile 已登记表根，不能自行拼接切片路径。"
+                "上游算子工件使用 runtime_artifact 和 runtime_source，"
                 "其中 artifact_ref 必须精确匹配 model_architecture 中的算子输出，field_path "
                 "必须定位有限数值数组。参数顺序严格按 index_sets 的笛卡尔积。"
                 "每个参数的 source_fact_ids 只能登记 locked_facts 中该参数实际使用的事实；"
@@ -165,9 +171,12 @@ async def _request_single_subproblem_model(
             ),
             request_timeout=indexed_core_timeout,
         )
+        materialized_core = core.promote_core(
+            locked_facts=fact_scope.payload(), evidence_profile=evidence_profile,
+        )
         coverage = coverage.with_stage(
             "indexed_core",
-            ((parameter.id, parameter.source_fact_ids) for parameter in core.parameters),
+            ((parameter.id, parameter.source_fact_ids) for parameter in materialized_core.parameters),
         )
         constraint_context = ConstraintGenerationContext.from_core(core)
         constraints = await _request_model(
@@ -205,17 +214,14 @@ async def _request_single_subproblem_model(
             agent_name=f"{request_name}_indexed_constraints",
             artifact_dir=artifact_dir,
             semantic_validator=lambda constraint_draft: _validate_indexed_constraint_stage(
-                core=core,
+                core=materialized_core,
                 constraints=constraint_draft,
                 context=constraint_context,
                 coverage=coverage,
             ),
             request_timeout=indexed_constraints_timeout,
         )
-        indexed_linear_model = core.promote(
-            constraints.promote_constraints(),
-            constraints.additional_index_sets,
-        )
+        indexed_linear_model = constraints.promote(materialized_core)
 
     promoted = draft.promote(indexed_linear_model)
     _validate_model_ir_slice(

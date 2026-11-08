@@ -661,14 +661,17 @@ def test_static_parameter_tampered_values_are_rejected_against_locked_facts_and_
     from app.guidance.generation_validation import _validate_indexed_core_stage
     from app.guidance.model_ir_drafts import (IndexedLinearCoreDraft)
 
-    tampered_core_draft = IndexedLinearCoreDraft.model_validate({
+    core_payload = {
         "index_sets": [{"id": "period", "values": ["p1", "p2"]}],
         "parameters": [{
             "source_kind": "static",
             "id": "unit_cost",
             "index_sets": ["period"],
-            "dense_values": [999.0, 3.0],
-            "dense_source_ref": "input_catalog.json#table-1/unit-cost",
+            "binding": {
+                "kind": "table_column",
+                "source_ref": "input_catalog.json#table-1",
+                "column": "unit_cost",
+            },
             "source_fact_ids": ["fact.unit_cost_p1", "fact.unit_cost_p2"],
         }],
         "variables": [{
@@ -692,10 +695,24 @@ def test_static_parameter_tampered_values_are_rejected_against_locked_facts_and_
                 },
             }],
         },
-    })
-    with pytest.raises(ValueError, match="indexed_parameter_evidence_mismatch"):
-        _validate_indexed_core_stage(
-            tampered_core_draft,
-            FactCoverage(FactScope.from_problem_spec(problem_spec, problem_spec.subproblems[0].id)),
-            evidence_profile=evidence_profile,
-        )
+    }
+    core_draft = IndexedLinearCoreDraft.model_validate(core_payload)
+    _validate_indexed_core_stage(
+        core_draft,
+        FactCoverage(FactScope.from_problem_spec(problem_spec, problem_spec.subproblems[0].id)),
+        evidence_profile=evidence_profile,
+    )
+    materialized = core_draft.promote_core(
+        locked_facts=problem_spec.locked_facts, evidence_profile=evidence_profile,
+    )
+    assert [item.value for item in materialized.parameters[0].values] == [2.0, 3.0]
+    materialized.parameters[0].values[0].value = 999.0
+    from app.guidance.parameter_evidence import validate_static_parameter_evidence
+
+    errors = validate_static_parameter_evidence(
+        materialized, locked_facts=problem_spec.locked_facts, evidence_profile=evidence_profile,
+    )
+    assert any("disagree with ordered source" in error for error in errors)
+    core_payload["parameters"][0]["dense_values"] = [999.0, 3.0]
+    with pytest.raises(ValueError, match="dense_values"):
+        IndexedLinearCoreDraft.model_validate(core_payload)

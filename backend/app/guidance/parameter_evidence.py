@@ -15,11 +15,16 @@ def _payload(value: Any) -> dict:
     return value.model_dump(mode="json") if hasattr(value, "model_dump") else dict(value)
 
 
-def _number(value: Any, unit: str = "") -> float:
+def _number(value: Any, unit: str = "", *, require_unit_suffix: bool = False) -> float:
     if isinstance(value, bool) or value is None:
         raise ValueError("source is not numeric")
     text = str(value).strip()
-    percent = text.endswith("%") or "%" in unit
+    if unit:
+        match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(.*)", text)
+        if match is None or (match[2] and match[2] != unit) or (require_unit_suffix and match[2] != unit):
+            raise ValueError(f"source unit disagrees with declared unit {unit!r}")
+        text = match[1]
+    percent = text.endswith("%") or unit == "%"
     result = float(text.removesuffix("%"))
     if not math.isfinite(result):
         raise ValueError("source is not finite")
@@ -28,7 +33,7 @@ def _number(value: Any, unit: str = "") -> float:
 
 def _table_values(
     reference: str, tables: list[dict], *,
-    index_sets: Sequence[str], coordinates: list[tuple],
+    index_sets: Sequence[str], coordinates: list[tuple], unit: str = "",
 ) -> list[float] | None:
     matches = [
         table for table in tables
@@ -50,7 +55,7 @@ def _table_values(
         # JSON 单元格指针始终是原始表格内的零基坐标，包含表头。
         row = int(cell[1])
         _check_row_key(rows, row, key_columns, has_named_keys, coordinates)
-        return [_number(rows[row][int(cell[2])])]
+        return [_number(rows[row][int(cell[2])], unit, require_unit_suffix=True)]
     cell = re.fullmatch(r"r([1-9]\d*)c([1-9]\d*)", suffix)
     if cell:
         # r/c 引用采用一基数据行；表头是否存在只按整行结构确定。
@@ -59,21 +64,31 @@ def _table_values(
         )
         row = int(cell[1]) - 1 + int(bool(first_row_is_header))
         _check_row_key(rows, row, key_columns, has_named_keys, coordinates)
-        return [_number(rows[row][int(cell[2]) - 1])]
+        return [_number(rows[row][int(cell[2]) - 1], unit, require_unit_suffix=True)]
     if not rows or not suffix:
         raise ValueError("table source requires an explicit column or cell")
-    if columns.count(suffix) != 1:
-        raise ValueError(f"unknown or ambiguous evidence column {suffix!r}")
-    column = columns.index(suffix)
+    cells = table_column_cells(table, suffix, index_sets=index_sets, coordinates=coordinates)
+    return [_number(rows[row][column], unit, require_unit_suffix=True) for row, column in cells]
+
+
+def table_column_cells(table, column_name, *, index_sets, coordinates):
+    """返回已登记具名列的有序单元格，索引标签存在时按标签对齐。"""
+    rows = table.get("rows") or []
+    columns = [str(value).strip() for value in rows[0]] if rows else []
+    if columns.count(column_name) != 1:
+        raise ValueError(f"unknown or ambiguous evidence column {column_name!r}")
+    column = columns.index(column_name)
+    key_columns = [columns.index(name) for name in index_sets if columns.count(name) == 1]
+    has_named_keys = bool(index_sets) and len(key_columns) == len(index_sets)
     if has_named_keys:
         source = {
-            tuple(str(row[index]).strip() for index in key_columns): _number(row[column])
-            for row in rows[1:]
+            tuple(str(row[index]).strip() for index in key_columns): row_index
+            for row_index, row in enumerate(rows[1:], start=1)
         }
         if len(source) != len(rows) - 1:
             raise ValueError("duplicate evidence index coordinates")
-        return [source[tuple(str(value).strip() for value in key)] for key in coordinates]
-    return [_number(row[column]) for row in rows[1:]]
+        return [(source[tuple(str(value).strip() for value in key)], column) for key in coordinates]
+    return [(row, column) for row in range(1, len(rows))]
 
 
 def _check_row_key(rows, row, key_columns, has_named_keys, coordinates):
@@ -141,7 +156,7 @@ def validate_static_parameter_evidence(
                 for item in parameter.values:
                     values = _table_values(
                         item.source_ref, tables, index_sets=parameter.index_sets,
-                        coordinates=[tuple(item.coordinates)],
+                        coordinates=[tuple(item.coordinates)], unit=item.source_unit or "",
                     )
                     if values is None:
                         values = _fact_values(item.source_ref, bound)
