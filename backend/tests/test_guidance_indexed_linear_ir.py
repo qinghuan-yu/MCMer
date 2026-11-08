@@ -674,27 +674,6 @@ def test_static_parameter_tampered_values_are_rejected_against_locked_facts_and_
             },
             "source_fact_ids": ["fact.unit_cost_p1", "fact.unit_cost_p2"],
         }],
-        "variables": [{
-            "id": "order",
-            "index_sets": ["period"],
-            "domain": "integer",
-            "lower_bound": 0.0,
-        }],
-        "objective": {
-            "sense": "minimize",
-            "terms": [{
-                "for_each": {"t": "period"},
-                "coefficient": {
-                    "kind": "parameter",
-                    "parameter_id": "unit_cost",
-                    "selectors": [{"binder": "t"}],
-                },
-                "variable": {
-                    "variable_id": "order",
-                    "selectors": [{"binder": "t"}],
-                },
-            }],
-        },
     }
     core_draft = IndexedLinearCoreDraft.model_validate(core_payload)
     _validate_indexed_core_stage(

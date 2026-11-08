@@ -389,10 +389,10 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
             if item["id"] != "transition_period"
         ],
         "parameters": indexed["parameters"],
-        "variables": indexed["variables"],
-        "objective": indexed["objective"],
     }
     constraints = {
+        "variables": indexed["variables"],
+        "objective": indexed["objective"],
         "additional_index_sets": [
             item for item in indexed["index_sets"]
             if item["id"] == "transition_period"
@@ -647,10 +647,10 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
             if item["id"] != "transition_period"
         ],
         "parameters": parameters,
-        "variables": indexed["variables"],
-        "objective": indexed["objective"],
     }
     constraints = {
+        "variables": indexed["variables"],
+        "objective": indexed["objective"],
         "additional_index_sets": [
             item for item in indexed["index_sets"]
             if item["id"] == "transition_period"
@@ -707,7 +707,7 @@ def test_canonical_fact_binding_rejects_uri_fragment() -> None:
 
 
 def test_indexed_core_draft_exposes_runtime_parameter_source_to_constraints() -> None:
-    from app.guidance.model_ir_drafts import (ConstraintGenerationContext, IndexedLinearCoreDraft)
+    from app.guidance.model_ir_drafts import (FormulationContext, IndexedLinearCoreDraft)
 
     core = IndexedLinearCoreDraft.model_validate({
         "index_sets": [{"id": "period", "values": ["p1", "p2"]}],
@@ -720,28 +720,11 @@ def test_indexed_core_draft_exposes_runtime_parameter_source_to_constraints() ->
                 "field_path": ["future_predictions"],
             },
         }],
-        "variables": [{
-            "id": "order",
-            "index_sets": ["period"],
-            "domain": "continuous",
-            "lower_bound": 0.0,
-        }],
-        "objective": {
-            "sense": "minimize",
-            "terms": [{
-                "for_each": {"t": "period"},
-                "coefficient": {"kind": "constant", "value": 1.0},
-                "variable": {
-                    "variable_id": "order",
-                    "selectors": [{"binder": "t"}],
-                },
-            }],
-        },
     })
 
     parameter = core.promote_core().parameters[0]
     assert parameter.runtime_source.artifact_ref == "forecast_bundle"
-    context = ConstraintGenerationContext.from_core(core)
+    context = FormulationContext.from_core(core)
     assert context.parameters[0].source_ref == (
         "artifact:forecast_bundle#/future_predictions"
     )
@@ -930,10 +913,10 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
             if item["id"] != "transition_period"
         ],
         "parameters": indexed["parameters"],
-        "variables": indexed["variables"],
-        "objective": indexed["objective"],
     }
     constraints = {
+        "variables": indexed["variables"],
+        "objective": indexed["objective"],
         "additional_index_sets": [
             item for item in indexed["index_sets"]
             if item["id"] == "transition_period"
@@ -997,14 +980,7 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
         }
         for parameter in core["parameters"]
     ]
-    assert constraint_context["variables"] == [
-        {
-            "id": variable["id"],
-            "index_sets": variable["index_sets"],
-            "domain": variable["domain"],
-        }
-        for variable in core["variables"]
-    ]
+    assert "variables" not in constraint_context
 
 
 
@@ -1012,11 +988,13 @@ def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> Non
     from pydantic import ValidationError
 
     from app.guidance.generation_validation import _validate_indexed_parts
-    from app.guidance.model_ir_drafts import (ConstraintGenerationContext, IndexedLinearConstraintsDraft, IndexedLinearCoreDraft)
+    from app.guidance.model_ir_drafts import (FormulationContext, IndexedLinearFormulationDraft, IndexedLinearCoreDraft)
 
     core = IndexedLinearCoreDraft.model_validate({
         "index_sets": [{"id": "period", "values": [1, 2]}],
         "parameters": [],
+    })
+    constraints = IndexedLinearFormulationDraft.model_validate({
         "variables": [{
             "id": "inventory",
             "index_sets": ["period"],
@@ -1033,8 +1011,6 @@ def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> Non
                 },
             }],
         },
-    })
-    constraints = IndexedLinearConstraintsDraft.model_validate({
         "constraints": [{
             "id": "balance",
             "for_each": {"t": "period"},
@@ -1054,11 +1030,11 @@ def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> Non
         }],
     })
 
-    context = ConstraintGenerationContext.from_core(core)
+    context = FormulationContext.from_core(core)
     with pytest.raises(ValidationError, match="Instance is frozen"):
-        context.variables = ()
+        context.index_sets = ()
     with pytest.raises(ValidationError, match="Instance is frozen"):
-        context.variables[0].domain = "integer"
+        context.index_sets[0].values = (3,)
 
     with pytest.raises(ValueError, match="unknown parameter 'undeclared_demand'") as exc_info:
         _validate_indexed_parts(core.promote_core(), constraints, context)
@@ -1066,40 +1042,16 @@ def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> Non
     assert "allowed variable ids=['inventory']" in str(exc_info.value)
 
 
-def test_indexed_core_generation_rejects_large_literal_period_unrolling() -> None:
-    from app.guidance.generation_validation import _validate_indexed_constraints_compactness, _validate_indexed_core_compactness
-    from app.guidance.model_ir_drafts import (IndexedLinearConstraintsDraft, IndexedLinearCoreDraft)
+def test_indexed_formulation_rejects_large_literal_period_unrolling() -> None:
+    from copy import deepcopy
+    from app.guidance.generation_validation import _validate_indexed_formulation_compactness
+    from app.guidance.model_ir_drafts import (IndexedLinearFormulationDraft, IndexedLinearCoreDraft)
 
-    expanded = IndexedLinearCoreDraft.model_validate({
+    core = IndexedLinearCoreDraft.model_validate({
         "index_sets": [{"id": "week", "values": list(range(1, 105))}],
         "parameters": [],
-        "variables": [{
-            "id": "purchase",
-            "index_sets": ["week"],
-            "domain": "integer",
-            "lower_bound": 0,
-        }],
-        "objective": {
-            "sense": "minimize",
-            "terms": [
-                {
-                    "coefficient": {"kind": "constant", "value": 1.0},
-                    "variable": {
-                        "variable_id": "purchase",
-                        "selectors": [{"value": week}],
-                    },
-                }
-                for week in range(1, 13)
-            ],
-        },
-    })
-
-    with pytest.raises(ValueError, match="for_each.*binder"):
-        _validate_indexed_core_compactness(expanded)
-
-    compact = IndexedLinearCoreDraft.model_validate({
-        "index_sets": [{"id": "week", "values": list(range(1, 105))}],
-        "parameters": [],
+    }).promote_core()
+    compact = {
         "variables": [{
             "id": "purchase",
             "index_sets": ["week"],
@@ -1117,31 +1069,6 @@ def test_indexed_core_generation_rejects_large_literal_period_unrolling() -> Non
                 },
             }],
         },
-    })
-
-    _validate_indexed_core_compactness(compact)
-
-    expanded_constraints = IndexedLinearConstraintsDraft.model_validate({
-        "constraints": [
-            {
-                "id": f"capacity_{week}",
-                "terms": [{
-                    "coefficient": {"kind": "constant", "value": 1.0},
-                    "variable": {
-                        "variable_id": "purchase",
-                        "selectors": [{"value": week}],
-                    },
-                }],
-                "relation": "greater_equal",
-                "rhs": {"kind": "constant", "value": 0.0},
-            }
-            for week in range(1, 13)
-        ],
-    })
-    with pytest.raises(ValueError, match="for_each.*binder"):
-        _validate_indexed_constraints_compactness(compact, expanded_constraints)
-
-    compact_constraints = IndexedLinearConstraintsDraft.model_validate({
         "constraints": [{
             "id": "capacity",
             "for_each": {"t": "week"},
@@ -1155,28 +1082,38 @@ def test_indexed_core_generation_rejects_large_literal_period_unrolling() -> Non
             "relation": "greater_equal",
             "rhs": {"kind": "constant", "value": 0.0},
         }],
-    })
-    _validate_indexed_constraints_compactness(compact, compact_constraints)
+    }
+    _validate_indexed_formulation_compactness(core, IndexedLinearFormulationDraft.model_validate(compact))
+    expanded_terms = [{
+        "coefficient": {"kind": "constant", "value": 1},
+        "variable": {"variable_id": "purchase", "selectors": [{"value": week}]},
+    } for week in range(1, 13)]
+    for area in ("objective", "constraints"):
+        expanded = deepcopy(compact)
+        if area == "objective":
+            expanded["objective"]["terms"] = expanded_terms
+        else:
+            expanded["constraints"] = [{
+                "id": f"capacity_{week}", "terms": [term],
+                "relation": "greater_equal", "rhs": {"kind": "constant", "value": 0},
+            } for week, term in enumerate(expanded_terms)]
+        with pytest.raises(ValueError, match="for_each.*binder"):
+            _validate_indexed_formulation_compactness(core, IndexedLinearFormulationDraft.model_validate(expanded))
 
 
 def test_indexed_generation_drafts_limit_model_family_count() -> None:
     from pydantic import ValidationError
 
-    from app.guidance.model_ir_drafts import (IndexedLinearConstraintsDraft, IndexedLinearCoreDraft)
+    from app.guidance.model_ir_drafts import (IndexedLinearFormulationDraft, IndexedLinearCoreDraft)
 
     term = {
         "coefficient": {"kind": "constant", "value": 1.0},
         "variable": {"variable_id": "x", "selectors": []},
     }
     with pytest.raises(ValidationError, match="objective.terms"):
-        IndexedLinearCoreDraft.model_validate({
-            "index_sets": [{"id": "singleton", "values": [1]}],
-            "parameters": [],
-            "variables": [{
-                "id": "x",
-                "index_sets": [],
-                "domain": "continuous",
-            }],
+        IndexedLinearFormulationDraft.model_validate({
+            "variables": [{"id": "x", "domain": "continuous"}],
+            "constraints": [{"id": "capacity", "terms": [term], "relation": "less_equal", "rhs": {"kind": "constant", "value": 1}}],
             "objective": {
                 "sense": "minimize",
                 "terms": [term for _ in range(51)],
@@ -1190,8 +1127,10 @@ def test_indexed_generation_drafts_limit_model_family_count() -> None:
         "rhs": {"kind": "constant", "value": 1.0},
     }
     with pytest.raises(ValidationError, match="constraints"):
-        IndexedLinearConstraintsDraft.model_validate({
+        IndexedLinearFormulationDraft.model_validate({
             "additional_index_sets": [],
+            "variables": [{"id": "x", "domain": "continuous"}],
+            "objective": {"sense": "minimize", "terms": [term]},
             "constraints": [
                 {**constraint, "id": f"capacity_{index}"}
                 for index in range(51)
@@ -1223,10 +1162,10 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
             if item["id"] != "transition_period"
         ],
         "parameters": indexed["parameters"],
-        "variables": indexed["variables"],
-        "objective": indexed["objective"],
     }
     constraints = {
+        "variables": indexed["variables"],
+        "objective": indexed["objective"],
         "additional_index_sets": [
             item for item in indexed["index_sets"]
             if item["id"] == "transition_period"
@@ -1235,7 +1174,7 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
     }
     evidence_profile = _indexed_evidence(core)
     invalid_core = deepcopy(core)
-    invalid_core["objective"]["terms"][0]["variable"]["selectors"] = []
+    invalid_core["parameters"][0]["index_sets"] = ["unknown_period"]
     llm = StubLLM([draft, invalid_core, core, constraints])
 
     result = asyncio.run(LLMModeler(
@@ -1257,7 +1196,7 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
     )
     assert len(llm.calls) == 4
     assert "IndexedLinearCoreDraft" in llm.calls[2]["history"][0]["content"]
-    assert "indexed_dimension_mismatch" in llm.calls[2]["history"][1]["content"]
+    assert "unknown parameter index sets" in llm.calls[2]["history"][1]["content"]
 
 
 
@@ -1265,7 +1204,7 @@ def test_indexed_constraint_draft_normalizes_null_without_weakening_canonical() 
     from pydantic import ValidationError
 
     from app.guidance.model_ir import (IndexedLinearConstraint)
-    from app.guidance.model_ir_drafts import (IndexedLinearConstraintsDraft)
+    from app.guidance.model_ir_drafts import (IndexedLinearFormulationDraft)
 
     constraint_payload = {
         "id": "capacity",
@@ -1281,8 +1220,10 @@ def test_indexed_constraint_draft_normalizes_null_without_weakening_canonical() 
         "relation": "greater_equal",
         "rhs": {"kind": "constant", "value": 0.0},
     }
-    draft = IndexedLinearConstraintsDraft.model_validate({
+    draft = IndexedLinearFormulationDraft.model_validate({
         "additional_index_sets": [],
+        "variables": [{"id": "purchase", "index_sets": ["period"], "domain": "integer"}],
+        "objective": {"sense": "minimize", "terms": constraint_payload["terms"]},
         "constraints": [constraint_payload],
     })
     promoted = draft.promote_constraints()[0]
@@ -1290,7 +1231,7 @@ def test_indexed_constraint_draft_normalizes_null_without_weakening_canonical() 
     assert promoted.for_each == {}
     assert promoted.terms[0].for_each == {}
     assert promoted.terms[0].variable.selectors[0].value == 1
-    schema = IndexedLinearConstraintsDraft.model_json_schema()
+    schema = IndexedLinearFormulationDraft.model_json_schema()
     constraint_for_each = schema["$defs"]["IndexedLinearConstraintDraft"]["properties"]["for_each"]
     term_for_each = schema["$defs"]["IndexedLinearTermDraft"]["properties"]["for_each"]
     assert constraint_for_each["anyOf"][0]["maxProperties"] == 4

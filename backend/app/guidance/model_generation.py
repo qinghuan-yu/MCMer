@@ -17,8 +17,8 @@ from app.guidance.generation_validation import (
 )
 from app.guidance.model_ir import ModelIR
 from app.guidance.model_ir_drafts import (
-    ConstraintGenerationContext,
-    IndexedLinearConstraintsDraft,
+    FormulationContext,
+    IndexedLinearFormulationDraft,
     IndexedLinearCoreDraft,
     ModelIRGenerationDraft,
     SolvableModelIRDraft,
@@ -128,7 +128,8 @@ async def _request_single_subproblem_model(
             llm=llm,
             model_type=IndexedLinearCoreDraft,
             system_prompt=(
-                "你是有限索引线性模型核心构建器。只输出索引集、参数来源、索引变量和线性目标。"
+                "你是有限索引线性模型数据构建器。只输出索引集和参数来源。"
+                "此阶段禁止输出变量、目标函数或约束；三者将在下一阶段共同构造，保持数学定义一致。"
                 "每个参数必须用 source_kind 判别来源：静态数据使用 static 和 binding，"
                 "数值由程序读取，禁止输出 dense_values、dense_source_ref 或自行抄写数组。"
                 "binding.kind=fact 只选择 locked_facts 中的 fact_id，标量按索引广播，系统登记该事实；"
@@ -138,15 +139,14 @@ async def _request_single_subproblem_model(
                 "order 明确选择 row_major 或 column_major；只有一个单元格时起止仍相差1。"
                 "选择的单元格数量必须等于参数索引笛卡尔积大小，禁止用首个单元格代表整列。"
                 "有单位后缀的单元格须在 unit 精确声明后缀，如元/个；百分数转换为比例。"
+                "纯数值单元格的unit必须为null，不能用表头或题面单位代替单元格后缀。"
                 "source_ref 必须逐字选择 evidence_profile 已登记表根，不能自行拼接切片路径。"
                 "上游算子工件使用 runtime_artifact 和 runtime_source，"
                 "其中 artifact_ref 必须精确匹配 model_architecture 中的算子输出，field_path "
                 "必须定位有限数值数组。参数顺序严格按 index_sets 的笛卡尔积。"
                 "每个参数的 source_fact_ids 只能登记 locked_facts 中该参数实际使用的事实；"
                 "可重复引用架构已使用的事实；fact_coverage 仅记录覆盖，不限制引用。"
-                "目标数组表示目标项族而非展开后的标量项，"
-                "重复期必须用 for_each 与 binder，一律不得逐个枚举索引值；固定 value 只用于"
-                "最多四个首期、末期等边界值。不要输出约束、解释或代码。"
+                "不要输出解释或代码。"
             ),
             payload={
                 "target_subproblem": subproblem,
@@ -178,14 +178,38 @@ async def _request_single_subproblem_model(
             "indexed_core",
             ((parameter.id, parameter.source_fact_ids) for parameter in materialized_core.parameters),
         )
-        constraint_context = ConstraintGenerationContext.from_core(core)
+        constraint_context = FormulationContext.from_core(core)
+
+        def validate_formulation(formulation: IndexedLinearFormulationDraft) -> None:
+            _validate_indexed_constraint_stage(
+                core=materialized_core,
+                constraints=formulation,
+                context=constraint_context,
+                coverage=coverage,
+            )
+            # 完整语义检查仍由原owner执行，在请求内反馈才能触发合同重试。
+            _validate_model_ir_slice(
+                draft.promote(formulation.promote(materialized_core)),
+                expected_id=target_id,
+                problem_spec=problem_spec,
+                evidence_profile=evidence_profile,
+                available_operator_ids=available_operator_ids,
+            )
+
         constraints = await _request_model(
             llm=llm,
-            model_type=IndexedLinearConstraintsDraft,
+            model_type=IndexedLinearFormulationDraft,
             system_prompt=(
-                "你是有限索引线性模型约束构建器。只输出辅助索引集和约束数组。"
-                "constraint_context 是唯一允许引用的符号目录；parameter_id、variable_id 和"
-                "已有 index set id 必须逐字选自该目录，禁止另造或改写符号。"
+                "你是有限索引线性模型数学构建器。共同输出变量声明、线性目标、辅助索引集和约束数组。"
+                "变量目录由本阶段定义，必须包含表达全部资源占用、活动和计费关系所需的变量；"
+                "架构中的文字变量仅作设计参考，不是完备目录。"
+                "目标项必须与本阶段约束对每个变量的实际定义一致，逐项核对所有付费参与者、状态和成本，"
+                "不能用只含部分参与者的数量冒充总计费量。可用能力与实际发生量必须区分："
+                "实际发生量受已知需求或活动限制，不能靠虚构超需求活动或无对象活动降低闲置费用。"
+                "目标数组表示目标项族而非展开后的标量项，重复期必须用for_each与binder，"
+                "固定value只用于最多四个首期、末期等边界值。"
+                "constraint_context 是已验证的数据目录；parameter_id和已有index set id"
+                "必须逐字选自该目录，禁止另造或改写参数；variable_id必须引用本次variables中的声明。"
                 "constraints 数组表示约束族而非展开后的逐期约束，最多输出 50 个约束族；"
                 "使用 for_each 与 binder 表达所有重复约束，禁止逐个枚举周、时段或场景；"
                 "固定 value 只用于最多四个首期、末期等边界值；首期、过渡期等核心未声明的子集"
@@ -213,12 +237,7 @@ async def _request_single_subproblem_model(
             },
             agent_name=f"{request_name}_indexed_constraints",
             artifact_dir=artifact_dir,
-            semantic_validator=lambda constraint_draft: _validate_indexed_constraint_stage(
-                core=materialized_core,
-                constraints=constraint_draft,
-                context=constraint_context,
-                coverage=coverage,
-            ),
+            semantic_validator=validate_formulation,
             request_timeout=indexed_constraints_timeout,
         )
         indexed_linear_model = constraints.promote(materialized_core)

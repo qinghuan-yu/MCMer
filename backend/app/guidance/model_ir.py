@@ -219,21 +219,30 @@ class IndexedLinearConstraint(IRModel):
         return self
 
 
-class IndexedLinearCoreSpec(IRModel):
+class IndexedLinearDataSpec(IRModel):
     index_sets: list[IndexSetSpec] = Field(min_length=1, max_length=20)
     parameters: list[IndexedParameterSpec] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def require_unique_identifiers(self) -> IndexedLinearDataSpec:
+        for label, identifiers in (
+            ("index set", [item.id for item in self.index_sets]),
+            ("parameter", [item.id for item in self.parameters]),
+        ):
+            if len(identifiers) != len(set(identifiers)):
+                raise ValueError(f"{label} ids must be unique")
+        return self
+
+
+class IndexedLinearCoreSpec(IndexedLinearDataSpec):
     variables: list[IndexedVariableSpec] = Field(min_length=1, max_length=100)
     objective: IndexedLinearObjective
 
     @model_validator(mode="after")
-    def require_unique_identifiers(self) -> IndexedLinearCoreSpec:
-        for label, identifiers in (
-            ("index set", [item.id for item in self.index_sets]),
-            ("parameter", [item.id for item in self.parameters]),
-            ("indexed variable", [item.id for item in self.variables]),
-        ):
-            if len(identifiers) != len(set(identifiers)):
-                raise ValueError(f"{label} ids must be unique")
+    def require_unique_variables(self) -> IndexedLinearCoreSpec:
+        identifiers = [item.id for item in self.variables]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("indexed variable ids must be unique")
         return self
 
 

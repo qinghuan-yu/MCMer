@@ -15,11 +15,6 @@ def _core(binding, *, periods=(1, 2), source_fact_ids=()):
             "source_kind": "static", "id": "demand", "index_sets": ["period"],
             "source_fact_ids": list(source_fact_ids), "binding": binding,
         }],
-        "variables": [{"id": "quantity", "index_sets": ["period"], "domain": "integer"}],
-        "objective": {"sense": "minimize", "terms": [{
-            "for_each": {"t": "period"}, "coefficient": {"kind": "constant", "value": 1},
-            "variable": {"variable_id": "quantity", "selectors": [{"binder": "t"}]},
-        }]},
     })
 
 

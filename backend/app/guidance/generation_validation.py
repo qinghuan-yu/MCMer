@@ -9,19 +9,20 @@ from app.guidance.contracts import ProblemSpec
 from app.guidance.evidence_consistency import validate_model_evidence_consistency
 from app.guidance.fact_coverage import FactCoverage, FactScope
 from app.guidance.indexed_linear import (
-    validate_indexed_linear_core,
+    validate_indexed_linear_data,
     validate_indexed_linear_model_structure,
 )
 from app.guidance.model_ir import (
-    IndexedLinearCoreSpec,
+    IndexedLinearDataSpec,
+    IndexedLinearModelSpec,
     IndexedLinearExecutionComponent,
     ModelIR,
     OperatorGraphExecutionComponent,
     SolvableModelIR,
 )
 from app.guidance.model_ir_drafts import (
-    ConstraintGenerationContext,
-    IndexedLinearConstraintsDraft,
+    FormulationContext,
+    IndexedLinearFormulationDraft,
     IndexedLinearCoreDraft,
     ModelIRGenerationDraft,
     SolvableModelIRDraft,
@@ -37,7 +38,7 @@ def _validate_indexed_core_stage(
     coverage: FactCoverage,
     *,
     evidence_profile: Mapping[str, Any] | None = None,
-) -> IndexedLinearCoreSpec:
+) -> IndexedLinearDataSpec:
     coverage.with_stage(
         "indexed_core",
         ((parameter.id, parameter.source_fact_ids) for parameter in core.parameters),
@@ -55,9 +56,9 @@ def _validate_indexed_core_stage(
 
 def _validate_indexed_constraint_stage(
     *,
-    core: IndexedLinearCoreSpec,
-    constraints: IndexedLinearConstraintsDraft,
-    context: ConstraintGenerationContext,
+    core: IndexedLinearDataSpec,
+    constraints: IndexedLinearFormulationDraft,
+    context: FormulationContext,
     coverage: FactCoverage,
 ) -> FactCoverage:
     updated = coverage.with_stage(
@@ -110,17 +111,17 @@ def _validate_generation_draft_slice(
     return coverage
 
 def _validate_indexed_parts(
-    core: IndexedLinearCoreSpec,
-    constraints: IndexedLinearConstraintsDraft,
-    context: ConstraintGenerationContext,
+    core: IndexedLinearDataSpec,
+    constraints: IndexedLinearFormulationDraft,
+    context: FormulationContext,
 ) -> None:
-    _validate_indexed_constraints_compactness(core, constraints)
+    _validate_indexed_formulation_compactness(core, constraints)
     indexed_model = constraints.promote(core)
     issues = validate_indexed_linear_model_structure(indexed_model)
     if issues:
         details = "; ".join(f"{item.code}: {item.message}" for item in issues)
         parameter_ids = [item.id for item in context.parameters]
-        variable_ids = [item.id for item in context.variables]
+        variable_ids = [item.id for item in constraints.variables]
         index_set_ids = [item.id for item in context.index_sets]
         raise ValueError(
             f"indexed linear expansion failed: {details}; "
@@ -134,10 +135,9 @@ def _validate_indexed_core_draft(
     *,
     locked_facts: list[dict[str, Any]] | None = None,
     evidence_profile: Mapping[str, Any] | None = None,
-) -> IndexedLinearCoreSpec:
-    _validate_indexed_core_compactness(core)
+) -> IndexedLinearDataSpec:
     materialized = core.promote_core(locked_facts=locked_facts, evidence_profile=evidence_profile)
-    issues = validate_indexed_linear_core(
+    issues = validate_indexed_linear_data(
         materialized,
         locked_facts=locked_facts,
         evidence_profile=evidence_profile,
@@ -147,24 +147,21 @@ def _validate_indexed_core_draft(
         raise ValueError(f"indexed linear core validation failed: {details}")
     return materialized
 
-def _validate_indexed_core_compactness(core: IndexedLinearCoreDraft) -> None:
-    _validate_compact_literal_references(core, [core.objective.terms])
-
-def _validate_indexed_constraints_compactness(
-    core: IndexedLinearCoreSpec | IndexedLinearCoreDraft,
-    constraints: IndexedLinearConstraintsDraft,
+def _validate_indexed_formulation_compactness(
+    core: IndexedLinearDataSpec,
+    constraints: IndexedLinearFormulationDraft,
 ) -> None:
     _validate_compact_literal_references(
-        core,
-        [
+        constraints.promote(core),
+        [constraints.objective.terms, *[
             constraint.terms
             for constraint in constraints.constraints
             if not constraint.for_each
-        ],
+        ]],
     )
 
 def _validate_compact_literal_references(
-    core: IndexedLinearCoreSpec | IndexedLinearCoreDraft,
+    core: IndexedLinearModelSpec,
     term_groups: list[list[Any]],
 ) -> None:
     index_sets = {item.id: item for item in core.index_sets}

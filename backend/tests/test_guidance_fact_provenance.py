@@ -61,6 +61,18 @@ def _architecture_payload(*, execution_components, variables=None, operators=Non
     }
 
 
+def _quantity_variables():
+    return [{"id": "quantity", "index_sets": ["period"], "domain": "continuous", "lower_bound": 0.0}]
+
+
+def _quantity_objective():
+    return {"sense": "minimize", "terms": [{
+        "for_each": {"t": "period"},
+        "coefficient": {"kind": "constant", "value": 1.0},
+        "variable": {"variable_id": "quantity", "selectors": [{"binder": "t"}]},
+    }]}
+
+
 def _indexed_core_and_constraints():
     from app.guidance.model_ir_drafts import (IndexedLinearConstraintDraft, IndexedLinearCoreDraft)
 
@@ -73,23 +85,6 @@ def _indexed_core_and_constraints():
             "binding": {"kind": "fact", "fact_id": "fact.parameter"},
             "source_fact_ids": ["fact.parameter"],
         }],
-        "variables": [{
-            "id": "quantity",
-            "index_sets": ["period"],
-            "domain": "continuous",
-            "lower_bound": 0.0,
-        }],
-        "objective": {
-            "sense": "minimize",
-            "terms": [{
-                "for_each": {"t": "period"},
-                "coefficient": {"kind": "constant", "value": 1.0},
-                "variable": {
-                    "variable_id": "quantity",
-                    "selectors": [{"binder": "t"}],
-                },
-            }],
-        },
     })
     constraint = IndexedLinearConstraintDraft.model_validate({
         "id": "meet_demand",
@@ -151,10 +146,10 @@ def test_indexed_nodes_generate_parameter_and_constraint_fact_binding_paths():
     from app.guidance.model_ir_drafts import (ModelIRGenerationDraft)
 
     core, constraint = _indexed_core_and_constraints()
-    from app.guidance.model_ir_drafts import IndexedLinearConstraintsDraft
+    from app.guidance.model_ir_drafts import IndexedLinearFormulationDraft
 
     materialized = core.promote_core(locked_facts=[{"fact_id": "fact.parameter", "value": 3}])
-    indexed_model = IndexedLinearConstraintsDraft(constraints=[constraint]).promote(materialized)
+    indexed_model = IndexedLinearFormulationDraft(variables=_quantity_variables(), objective=_quantity_objective(), constraints=[constraint]).promote(materialized)
     draft = ModelIRGenerationDraft.model_validate(_architecture_payload(
         execution_components=["indexed_linear_model"],
     ))
@@ -384,7 +379,7 @@ def _shared_fact_generation():
     )
     core, constraint = _indexed_core_and_constraints()
     constraint.source_fact_ids = [fact_id]
-    constraints = {"additional_index_sets": [], "constraints": [constraint.model_dump()]}
+    constraints = {"variables": _quantity_variables(), "objective": _quantity_objective(), "additional_index_sets": [], "constraints": [constraint.model_dump()]}
     return spec, architecture, core.model_dump(mode="json"), constraints
 
 
@@ -511,7 +506,7 @@ def test_rejected_core_attempt_cannot_satisfy_final_coverage(tmp_path):
     spec = ProblemSpec.model_validate(payload)
     rejected_core = deepcopy(core)
     rejected_core["parameters"][0]["source_fact_ids"].append("fact.rule")
-    rejected_core["variables"][0]["index_sets"] = ["missing_period"]
+    rejected_core["parameters"][0]["index_sets"] = ["missing_period"]
     llm = _StageLLM(architecture, [rejected_core, core], constraints)
 
     result = asyncio.run(LLMModeler(

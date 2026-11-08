@@ -19,7 +19,7 @@ from app.guidance.model_ir import (
     IndexSetSpec,
     IndexValue,
     IndexedLinearConstraint,
-    IndexedLinearCoreSpec,
+    IndexedLinearDataSpec,
     IndexedLinearExecutionComponent,
     IndexedLinearModelSpec,
     IndexedLinearObjective,
@@ -352,19 +352,15 @@ class IndexedLinearConstraintDraft(IRModel):
 class IndexedLinearCoreDraft(IRModel):
     index_sets: list[IndexSetSpec] = Field(min_length=1, max_length=20)
     parameters: list[IndexedParameterDraft] = Field(default_factory=list, max_length=100)
-    variables: list[IndexedVariableSpec] = Field(min_length=1, max_length=100)
-    objective: IndexedLinearObjectiveDraft
 
-    def promote_core(self, *, locked_facts=None, evidence_profile=None) -> IndexedLinearCoreSpec:
-        return IndexedLinearCoreSpec(
+    def promote_core(self, *, locked_facts=None, evidence_profile=None) -> IndexedLinearDataSpec:
+        return IndexedLinearDataSpec(
             index_sets=self.index_sets,
             parameters=[
                 item.promote(index_sets=self.index_sets, locked_facts=locked_facts, evidence_profile=evidence_profile)
                 if isinstance(item, StaticIndexedParameterDraft) else item.promote()
                 for item in self.parameters
             ],
-            variables=self.variables,
-            objective=self.objective.promote(),
         )
 
 
@@ -383,14 +379,6 @@ class ConstraintParameterSymbol(IRModel):
     source_ref: str = Field(min_length=1, max_length=300)
 
 
-class ConstraintVariableSymbol(IRModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
-
-    id: str = Field(min_length=1, max_length=100)
-    index_sets: tuple[str, ...] = Field(default_factory=tuple, max_length=4)
-    domain: Literal["continuous", "integer", "binary"]
-
-
 def _runtime_parameter_source_ref(
     source: RuntimeIndexedParameterSource,
 ) -> str:
@@ -401,7 +389,7 @@ def _runtime_parameter_source_ref(
     return f"artifact:{source.artifact_ref}#/{pointer}"
 
 
-class ConstraintGenerationContext(IRModel):
+class FormulationContext(IRModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
     index_sets: tuple[ConstraintIndexSetSymbol, ...] = Field(min_length=1, max_length=20)
@@ -409,10 +397,9 @@ class ConstraintGenerationContext(IRModel):
         default_factory=tuple,
         max_length=100,
     )
-    variables: tuple[ConstraintVariableSymbol, ...] = Field(min_length=1, max_length=100)
 
     @classmethod
-    def from_core(cls, core: IndexedLinearCoreDraft) -> ConstraintGenerationContext:
+    def from_core(cls, core: IndexedLinearCoreDraft) -> FormulationContext:
         return cls(
             index_sets=tuple(
                 ConstraintIndexSetSymbol(id=item.id, values=tuple(item.values))
@@ -434,29 +421,23 @@ class ConstraintGenerationContext(IRModel):
                 )
                 for item in core.parameters
             ),
-            variables=tuple(
-                ConstraintVariableSymbol(
-                    id=item.id,
-                    index_sets=tuple(item.index_sets),
-                    domain=item.domain,
-                )
-                for item in core.variables
-            ),
         )
 
 
-class IndexedLinearConstraintsDraft(IRModel):
+class IndexedLinearFormulationDraft(IRModel):
     additional_index_sets: list[IndexSetSpec] = Field(default_factory=list, max_length=20)
+    variables: list[IndexedVariableSpec] = Field(min_length=1, max_length=100)
+    objective: IndexedLinearObjectiveDraft
     constraints: list[IndexedLinearConstraintDraft] = Field(min_length=1, max_length=50)
 
     def promote_constraints(self) -> list[IndexedLinearConstraint]:
         return [item.promote() for item in self.constraints]
 
-    def promote(self, core: IndexedLinearCoreSpec) -> IndexedLinearModelSpec:
+    def promote(self, core: IndexedLinearDataSpec) -> IndexedLinearModelSpec:
         return IndexedLinearModelSpec(
             index_sets=[*core.index_sets, *self.additional_index_sets],
             parameters=core.parameters,
-            variables=core.variables,
-            objective=core.objective,
+            variables=self.variables,
+            objective=self.objective.promote(),
             constraints=self.promote_constraints(),
         )

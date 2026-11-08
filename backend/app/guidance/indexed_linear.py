@@ -14,6 +14,7 @@ from app.guidance.model_ir import (
     ConstantLinearValue,
     IndexSelector,
     IndexedLinearCoreSpec,
+    IndexedLinearDataSpec,
     IndexedLinearModelSpec,
     IndexedLinearTerm,
     IndexedParameterSpec,
@@ -23,7 +24,7 @@ from app.guidance.model_ir import (
 )
 
 
-_IndexedCore = TypeVar("_IndexedCore", bound=IndexedLinearCoreSpec)
+_IndexedCore = TypeVar("_IndexedCore", bound=IndexedLinearDataSpec)
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,17 @@ class _ExpandedIndexedCore:
     upper_bounds: list[float | None]
     objective: list[float]
     provenance: list[dict[str, Any]]
+
+
+def validate_indexed_linear_data(
+    core: IndexedLinearDataSpec,
+    *,
+    locked_facts: Sequence[Any] | None = None,
+    evidence_profile: Mapping[str, Any] | Any | None = None,
+) -> list[IndexedLinearIssue]:
+    issues = _evidence_issues(core, locked_facts, evidence_profile)
+    _expand_indexed_data(_with_runtime_validation_values(core), issues)
+    return _unique_issues(issues)
 
 
 def validate_indexed_linear_core(
@@ -192,18 +204,21 @@ def _with_runtime_validation_values(
     return model.model_copy(update={"parameters": parameters})
 
 
-def _expand_indexed_linear_core(
+def _expand_indexed_data(
+    core: IndexedLinearDataSpec,
+    issues: list[IndexedLinearIssue],
+) -> tuple[dict, dict, dict]:
+    index_sets = {item.id: list(item.values) for item in core.index_sets}
+    parameters = {item.id: item for item in core.parameters}
+    return index_sets, parameters, _parameter_values(parameters, index_sets, issues)
+
+
+def _expand_indexed_symbols(
     core: IndexedLinearCoreSpec,
     issues: list[IndexedLinearIssue],
 ) -> _ExpandedIndexedCore:
-    index_sets = {item.id: list(item.values) for item in core.index_sets}
-    parameters = {item.id: item for item in core.parameters}
+    index_sets, parameters, parameter_values = _expand_indexed_data(core, issues)
     variables = {item.id: item for item in core.variables}
-    parameter_values = _parameter_values(
-        parameters,
-        index_sets,
-        issues,
-    )
 
     variable_keys: list[tuple[str, tuple]] = []
     variable_labels: list[str] = []
@@ -224,32 +239,6 @@ def _expand_indexed_linear_core(
                 upper_bounds.append(variable.upper_bound)
     variable_positions = {key: index for index, key in enumerate(variable_keys)}
 
-    objective = [0.0] * len(variable_keys)
-    provenance: list[dict[str, Any]] = []
-    for term_index, term in enumerate(core.objective.terms):
-        for binding in _bindings(
-            term.for_each,
-            index_sets,
-            issues,
-            f"objective term {term_index}",
-        ):
-            resolved = _resolve_term(
-                term,
-                binding=binding,
-                index_sets=index_sets,
-                variables=variables,
-                parameters=parameters,
-                parameter_values=parameter_values,
-                issues=issues,
-                context=f"objective term {term_index}",
-                provenance=provenance,
-            )
-            if resolved is not None:
-                key, coefficient = resolved
-                position = variable_positions.get(key)
-                if position is not None:
-                    objective[position] += coefficient
-
     return _ExpandedIndexedCore(
         index_sets=index_sets,
         parameters=parameters,
@@ -261,9 +250,35 @@ def _expand_indexed_linear_core(
         integrality=integrality,
         lower_bounds=lower_bounds,
         upper_bounds=upper_bounds,
-        objective=objective,
-        provenance=provenance,
+        objective=[0.0] * len(variable_keys),
+        provenance=[],
     )
+
+
+def _expand_indexed_linear_core(
+    core: IndexedLinearCoreSpec,
+    issues: list[IndexedLinearIssue],
+) -> _ExpandedIndexedCore:
+    expanded = _expand_indexed_symbols(core, issues)
+    for term_index, term in enumerate(core.objective.terms):
+        for binding in _bindings(term.for_each, expanded.index_sets, issues, f"objective term {term_index}"):
+            resolved = _resolve_term(
+                term,
+                binding=binding,
+                index_sets=expanded.index_sets,
+                variables=expanded.variables,
+                parameters=expanded.parameters,
+                parameter_values=expanded.parameter_values,
+                issues=issues,
+                context=f"objective term {term_index}",
+                provenance=expanded.provenance,
+            )
+            if resolved is not None:
+                key, coefficient = resolved
+                position = expanded.variable_positions.get(key)
+                if position is not None:
+                    expanded.objective[position] += coefficient
+    return expanded
 
 
 def _unique_issues(issues: list[IndexedLinearIssue]) -> list[IndexedLinearIssue]:
