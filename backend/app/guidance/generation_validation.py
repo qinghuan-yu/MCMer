@@ -7,6 +7,7 @@ from typing import Any
 
 from app.guidance.contracts import ProblemSpec
 from app.guidance.evidence_consistency import validate_model_evidence_consistency
+from app.guidance.fact_coverage import FactCoverage, FactScope
 from app.guidance.indexed_linear import (
     validate_indexed_linear_core,
     validate_indexed_linear_model_structure,
@@ -28,50 +29,39 @@ from app.guidance.model_ir_semantics import (
     ModelIRSemanticValidator,
     validate_model_fact_coverage,
 )
-from app.guidance.modeling_context import _remaining_locked_facts
 
 
 def _validate_indexed_core_stage(
     core: IndexedLinearCoreDraft,
-    locked_facts: list[dict[str, Any]],
+    coverage: FactCoverage,
     *,
     evidence_profile: Mapping[str, Any] | None = None,
-) -> None:
+) -> FactCoverage:
+    updated = coverage.with_stage(
+        "indexed_core",
+        ((parameter.id, parameter.source_fact_ids) for parameter in core.parameters),
+    )
     _validate_indexed_core_draft(
         core,
-        locked_facts=locked_facts,
+        locked_facts=coverage.scope.payload(),
         evidence_profile=evidence_profile,
     )
-    _remaining_locked_facts(
-        locked_facts,
-        [
-            fact_id
-            for parameter in core.parameters
-            for fact_id in parameter.source_fact_ids
-        ],
-    )
+    return updated
 
 def _validate_indexed_constraint_stage(
     *,
     core: IndexedLinearCoreDraft,
     constraints: IndexedLinearConstraintsDraft,
     context: ConstraintGenerationContext,
-    locked_facts: list[dict[str, Any]],
-) -> None:
-    _validate_indexed_parts(core, constraints, context)
-    remaining = _remaining_locked_facts(
-        locked_facts,
-        [
-            fact_id
-            for constraint in constraints.constraints
-            for fact_id in constraint.source_fact_ids
-        ],
+    coverage: FactCoverage,
+) -> FactCoverage:
+    updated = coverage.with_stage(
+        "indexed_constraints",
+        ((constraint.id, constraint.source_fact_ids) for constraint in constraints.constraints),
     )
-    if remaining:
-        raise ValueError(
-            "fact coverage mismatch in indexed constraints: "
-            f"uncovered={[fact['fact_id'] for fact in remaining]!r}"
-        )
+    _validate_indexed_parts(core, constraints, context)
+    updated.require_complete()
+    return updated
 
 def _validate_generation_draft_slice(
     draft: ModelIRGenerationDraft,
@@ -79,46 +69,22 @@ def _validate_generation_draft_slice(
     expected_id: str,
     available_operator_ids: list[str],
     problem_spec: ProblemSpec,
-) -> None:
+) -> FactCoverage:
     identifiers = [item.subproblem_id for item in draft.subproblems]
     if identifiers != [expected_id]:
         raise ValueError(
             f"subproblem slice mismatch: expected={[expected_id]!r}; modeled={identifiers!r}"
         )
     subproblem = draft.subproblems[0]
+    coverage = FactCoverage(FactScope.from_problem_spec(problem_spec, expected_id))
     if not isinstance(subproblem, SolvableModelIRDraft):
-        return
-    facts_by_id = {
-        fact.fact_id: fact.model_dump(mode="json")
-        for fact in problem_spec.locked_facts
-    }
-    target_spec = next(
-        (item for item in problem_spec.subproblems if item.id == expected_id),
-        None,
+        return coverage
+    coverage = coverage.with_stage(
+        "architecture",
+        ((operator.node_id, operator.source_fact_ids) for operator in subproblem.operators),
     )
-    expected_facts = [
-        facts_by_id[fact_id]
-        for fact_id in (
-            target_spec.required_fact_ids if target_spec is not None else []
-        )
-        if fact_id in facts_by_id
-    ]
-    remaining_facts = _remaining_locked_facts(
-        expected_facts,
-        [
-            fact_id
-            for operator in subproblem.operators
-            for fact_id in operator.source_fact_ids
-        ],
-    )
-    if (
-        "indexed_linear_model" not in subproblem.execution_components
-        and remaining_facts
-    ):
-        raise ValueError(
-            f"fact coverage mismatch for {expected_id!r}: "
-            f"uncovered={[fact['fact_id'] for fact in remaining_facts]!r}"
-        )
+    if "indexed_linear_model" not in subproblem.execution_components:
+        coverage.require_complete()
     components = set(subproblem.execution_components)
     if "indexed_linear_model" in components:
         if "optimization.milp" not in available_operator_ids:
@@ -136,6 +102,7 @@ def _validate_generation_draft_slice(
     })
     if unsupported:
         raise ValueError(f"operator_id is not available: {unsupported!r}")
+    return coverage
 
 def _validate_indexed_parts(
     core: IndexedLinearCoreDraft,

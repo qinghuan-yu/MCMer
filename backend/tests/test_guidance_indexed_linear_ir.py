@@ -657,6 +657,7 @@ def test_static_parameter_tampered_values_are_rejected_against_locked_facts_and_
         item.code for item in tampered_table_compilation.diagnostics
     }
 
+    from app.guidance.fact_coverage import FactCoverage, FactScope
     from app.guidance.generation_validation import _validate_indexed_core_stage
     from app.guidance.model_ir_drafts import (IndexedLinearCoreDraft)
 
@@ -695,6 +696,6 @@ def test_static_parameter_tampered_values_are_rejected_against_locked_facts_and_
     with pytest.raises(ValueError, match="indexed_parameter_evidence_mismatch"):
         _validate_indexed_core_stage(
             tampered_core_draft,
-            [fact.model_dump(mode="json") for fact in problem_spec.locked_facts],
+            FactCoverage(FactScope.from_problem_spec(problem_spec, problem_spec.subproblems[0].id)),
             evidence_profile=evidence_profile,
         )

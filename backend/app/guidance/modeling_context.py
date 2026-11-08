@@ -37,21 +37,6 @@ def _subproblem_review_payload(
     )
     return payload
 
-def _remaining_locked_facts(
-    locked_facts: list[dict[str, Any]],
-    source_fact_ids: list[str],
-) -> list[dict[str, Any]]:
-    known_ids = {str(fact["fact_id"]) for fact in locked_facts}
-    unknown_ids = sorted(set(source_fact_ids) - known_ids)
-    if unknown_ids:
-        raise ValueError(f"unknown locked fact ids: {unknown_ids!r}")
-    consumed_ids = set(source_fact_ids)
-    return [
-        fact
-        for fact in locked_facts
-        if str(fact["fact_id"]) not in consumed_ids
-    ]
-
 def _task_artifact_dir(task: dict) -> Path | None:
     work_dir = task.get("work_dir")
     return Path(work_dir) if work_dir else None

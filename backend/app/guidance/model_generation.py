@@ -8,6 +8,7 @@ from typing import Any
 from app.core.llm.llm import LLM
 from app.guidance.contract_request import StructuredContractRequester
 from app.guidance.contracts import ProblemSpec
+from app.guidance.fact_coverage import FactCoverage, FactScope
 from app.guidance.generation_validation import (
     _validate_generation_draft_slice,
     _validate_indexed_constraint_stage,
@@ -25,7 +26,6 @@ from app.guidance.model_ir_drafts import (
 from app.guidance.model_review_contracts import ModelIRReview
 from app.guidance.modeling_context import (
     _compact_previous_model_summary,
-    _remaining_locked_facts,
     _subproblem_review_payload,
 )
 
@@ -76,14 +76,14 @@ async def _request_single_subproblem_model(
         if review is not None
         else None
     )
-    required_fact_ids = [
-        str(fact["fact_id"])
-        for fact in slice_spec["locked_facts"]
-    ]
+    fact_scope = FactScope.from_problem_spec(problem_spec, target_id)
+    coverage = FactCoverage(fact_scope)
     payload: dict[str, Any] = {
         **slice_spec,
         "target_subproblem_id": target_id,
-        "required_fact_ids": required_fact_ids,
+        "locked_facts": fact_scope.payload(),
+        "required_fact_ids": list(fact_scope.fact_ids),
+        "fact_coverage": coverage.payload(),
         "evidence_profile": evidence_profile,
         "available_operator_ids": available_operator_ids,
     }
@@ -99,6 +99,7 @@ async def _request_single_subproblem_model(
             f"{system_prompt}\n本次只生成 target_subproblem_id={target_id} 的一个子问题；"
             "返回的 subproblems 必须恰好包含这一项，不得生成或省略其他 id。"
             "可解结果只能在实际算子节点的 source_fact_ids 登记本阶段使用的事实；"
+            "事实可被后续参数和约束重复引用，覆盖登记不会消耗事实。"
             "禁止输出 fact_bindings，最终路径由系统组装。"
         ),
         payload=payload,
@@ -114,18 +115,11 @@ async def _request_single_subproblem_model(
     )
     indexed_linear_model = None
     architecture = draft.subproblems[0]
-    remaining_after_architecture = (
-        _remaining_locked_facts(
-            slice_spec["locked_facts"],
-            [
-                fact_id
-                for operator in architecture.operators
-                for fact_id in operator.source_fact_ids
-            ],
+    if isinstance(architecture, SolvableModelIRDraft):
+        coverage = coverage.with_stage(
+            "architecture",
+            ((operator.node_id, operator.source_fact_ids) for operator in architecture.operators),
         )
-        if isinstance(architecture, SolvableModelIRDraft)
-        else []
-    )
     if (
         isinstance(architecture, SolvableModelIRDraft)
         and "indexed_linear_model" in architecture.execution_components
@@ -143,7 +137,7 @@ async def _request_single_subproblem_model(
                 "其中 artifact_ref 必须精确匹配 model_architecture 中的算子输出，field_path "
                 "必须定位有限数值数组。参数顺序严格按 index_sets 的笛卡尔积。"
                 "每个参数的 source_fact_ids 只能登记 locked_facts 中该参数实际使用的事实；"
-                "不得重复登记架构算子已覆盖的事实。"
+                "可重复引用架构已使用的事实；fact_coverage 仅记录覆盖，不限制引用。"
                 "目标数组表示目标项族而非展开后的标量项，"
                 "重复期必须用 for_each 与 binder，一律不得逐个枚举索引值；固定 value 只用于"
                 "最多四个首期、末期等边界值。不要输出约束、解释或代码。"
@@ -152,7 +146,8 @@ async def _request_single_subproblem_model(
                 "target_subproblem": subproblem,
                 "problem_context": compact_spec["task_summary"],
                 "model_architecture": draft.model_dump(mode="json"),
-                "locked_facts": remaining_after_architecture,
+                "locked_facts": fact_scope.payload(),
+                "fact_coverage": coverage.payload(),
                 "uncertainties": slice_spec["uncertainties"],
                 "evidence_profile": evidence_profile,
                 **(
@@ -165,18 +160,14 @@ async def _request_single_subproblem_model(
             artifact_dir=artifact_dir,
             semantic_validator=lambda core_draft: _validate_indexed_core_stage(
                 core_draft,
-                remaining_after_architecture,
+                coverage,
                 evidence_profile=evidence_profile,
             ),
             request_timeout=indexed_core_timeout,
         )
-        remaining_after_core = _remaining_locked_facts(
-            remaining_after_architecture,
-            [
-                fact_id
-                for parameter in core.parameters
-                for fact_id in parameter.source_fact_ids
-            ],
+        coverage = coverage.with_stage(
+            "indexed_core",
+            ((parameter.id, parameter.source_fact_ids) for parameter in core.parameters),
         )
         constraint_context = ConstraintGenerationContext.from_core(core)
         constraints = await _request_model(
@@ -193,14 +184,16 @@ async def _request_single_subproblem_model(
                 "非零 offset 必须绑定到排除越界端点的 auxiliary index set；"
                 "首期或末期边界条件必须使用独立约束族，禁止让全域 binder 携带非零 offset。"
                 "每个约束的 source_fact_ids 只能登记 locked_facts 中实际使用的事实，"
-                "并且全部约束合计必须覆盖本阶段收到的所有 locked_facts。"
+                "可重复引用架构和参数已使用的事实；全部阶段合计必须覆盖所有事实，"
+                "本阶段必须补齐 fact_coverage.uncovered_fact_ids，但不得只依据该列表建约束。"
                 "不得写条件表达式、不得把参数当变量、不得输出解释或代码。"
             ),
             payload={
                 "target_subproblem": subproblem,
                 "problem_context": compact_spec["task_summary"],
                 "model_architecture": draft.model_dump(mode="json"),
-                "locked_facts": remaining_after_core,
+                "locked_facts": fact_scope.payload(),
+                "fact_coverage": coverage.payload(),
                 "uncertainties": slice_spec["uncertainties"],
                 "constraint_context": constraint_context.model_dump(mode="json"),
                 **(
@@ -215,7 +208,7 @@ async def _request_single_subproblem_model(
                 core=core,
                 constraints=constraint_draft,
                 context=constraint_context,
-                locked_facts=remaining_after_core,
+                coverage=coverage,
             ),
             request_timeout=indexed_constraints_timeout,
         )

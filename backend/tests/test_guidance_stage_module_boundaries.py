@@ -64,6 +64,7 @@ def test_indexed_core_validator_keeps_resolvable_type_annotations() -> None:
 
 def test_indexed_core_request_requires_exact_static_parameter_source(monkeypatch) -> None:
     from app.guidance import model_generation
+    from app.guidance.contracts import ProblemSpec
     from app.guidance.model_ir_drafts import ModelIRGenerationDraft, SolvableModelIRDraft
 
     captured = {}
@@ -84,7 +85,13 @@ def test_indexed_core_request_requires_exact_static_parameter_source(monkeypatch
         asyncio.run(model_generation._request_single_subproblem_model(
             llm=None,
             system_prompt="Build the requested model.",
-            problem_spec=None,
+            problem_spec=ProblemSpec(
+                task_summary="A finite indexed optimization.",
+                subproblems=[{
+                    "id": "problem1", "required_fact_ids": [],
+                    "required_uncertainty_ids": [], "depends_on_subproblem_ids": [],
+                }],
+            ),
             compact_spec={"task_summary": "A finite indexed optimization."},
             subproblem={"id": "problem1"},
             slice_spec={"locked_facts": [], "uncertainties": []},
