@@ -249,6 +249,47 @@ Q4首发prompt81200＋completion32768＝113968，全部completion用于reasoning
 
 相关37 passed/7.16秒（`.local/d22c4-terminal-green.xml`）；完整后端**839 passed/29.66秒**（`.local/d22c4-terminal-full.xml`）。原始终态只读回放`.local/d22c4-terminal-replay-20261109/terminal-adjudication.json`确认只改变done.message/current_subtask，TaskResult全部字段与原事件及run_summary一致，115份原实验文件SHA不变；60组状态组合的原状态判定全部保留。原实验保留，不把之后的消息修复写回旧运行。D2.2c.4d实测/裁决和4e局部归因修复完成，父项D2.2c.4及D2.2/D2.3继续未验收；下一步仍是取得有效真实审核与执行证据。
 
+## D2.2c.4f：网络恢复后的有界续跑与来源前置证据
+
+用户要求网络恢复后继续。续跑只承接`.local/20261109-d22d-pipeline-live-01`的两个失败初审，不重置预算：旧两次请求/失败原字节继承、未知用量保留，两初审各只允许补发一次；新合同仍最多两次，整链上限12次。生产固定为`01b4c91`，相对前轮`93f4200`只有已验收的终态消息归因变化。manifest明确保存两套生产哈希及唯一差异，不声称两轮生产完全相同。
+
+### 续跑工具的RED、GREEN与预演
+
+- 新工具`.local/run_d22d_pipeline_resume_flash.py`继承已冻结的真实Pipeline工具，未修改旧工具或生产。最小RED 8 failed（`.local/d22d-resume-red.xml`）：实际继承计数0而非2，或改变初审history/schema/payload/传输参数后未拒绝；失败来自目标行为缺失。
+- GREEN 18 passed/14.07秒（`.local/d22d-resume-expanded.xml`），与base27项联合45 passed/15.65秒（`.local/d22d-resume-final.xml`）。另一次独立18 passed/13.64秒（`.local/d22d-resume-independent-checks.xml`），覆盖累计两次/总12、未知用量、损坏继承、合法修订后新合同、语义重试不能重置初审额度。重构复用原工具的预算、来源请求核验及阶段快照，只新增继承和原请求绑定；冻结后不再修改。
+- 工具SHA256 `05d85fc977e51afb07ad46a4679ce0d7fd646d1dc143bb5f5d8911ba75abd816`。正式无网probe `.local/20261109-d22d-pipeline-resume-probe-01`继承2次、新增0次、未知2次，总量null，首个完整history与原请求一致。独立审查`.local/d22d-pipeline-resume-audit-20261109/boundary-review.json`通过。
+
+### 真实自然终态与用量
+
+`.local/20261109-d22d-pipeline-resume-live-01`在隐藏进程自然结束，588.094秒、blocked。新增6次全部收到provider response，无新传输失败；继承2次后整链8/12。两初审的完整history（含系统/schema）及传输参数与原失败请求相同，初审合同累计各2次。新输出和原失败记录分别保留。
+
+| 调用编号 | 真实合同 | finish_reason | prompt + completion = total tokens | 结果 |
+| --- | --- | --- | ---: | --- |
+| 003 | sp1初审 | stop | 19271 + 21008 = 40279 | 有效revision_required，无来源纠正 |
+| 004 | sp2初审 | stop | 28131 + 22706 = 50837 | 有效revision_required，无来源纠正 |
+| 005 | sp1修订架构 | stop | 13797 + 8562 = 22359 | 进入情景模型生成 |
+| 006 | sp1索引/数据 | length | 13954 + 8192 = 22146 | 截断，拒绝接收 |
+| 007 | 同一索引/数据合同恢复 | stop | 13954 + 7258 = 21212 | 两组三元素情景轴，形成九情景范围 |
+| 008 | sp1数学声明 | length | 14915 + 32768 = 47683 | 全completion为reasoning，正文为空，无有效合同 |
+
+新增合计**204516 tokens、未知0**，reasoning已在completion内。继承的两个空响应仍未知，整链总量null；不因没有usage计零。D2累计只加这6次：**103次已启动、3821455已知tokens、5次历史未知，总量null**。数学声明initial已达32768 ceiling，产品不再增加额度重试；尚余整链额度不代表允许绕过单合同预算或自然终态继续请求。
+
+初审和最终审核的绑定/执行投影重算一致，revision_request除归档引用外精确保留初审；9份阶段snapshot manifest全部通过。sp1修订数学声明截断，sp2因上游失败阻断；最终两题not_assessed，executable为空，无execution_manifest、求解或verified_results。仅发生一次模型修订，没有独立来源请求、许可或应用。done消息准确为`model approval blocked execution`，guidance audit PASS不再被误报为阻断原因，也不能当数学通过。
+
+原件、前轮全树、初始生成检查点、实测期间生产与持久配置保持，凭据扫描通过。用量独立审计为`.local/d22d-pipeline-resume-audit-20261109/usage-and-integrity.json`；工程审计为`.local/d22d-pipeline-resume-flow-audit-20261109/audit.json`，审计前后实测全树字节一致。生产未变，本轮没有重复839项后端回归或前端构建；此前839 passed仍是当前生产检查点的验证结果。
+
+### 数学裁决与下一职责边界
+
+独立审计`.local/d22c4-chain-math-audit-20261109/resume-terminal-adjudication.json`直接解析本轮DOCX，逐段/表/SHA与已核对原件一致。paragraph-3明确“训练成本同时对新模块和指导者计收”“其他未服务也未指导的熟练模块同样保养”。两份有效初审仍把这两项当歧义，合计产生5条kind=model义务且source_corrections均为空；四条要求替代收费/保养情景，另一条要求实际求解证据。独立来源忠实性判failed，当前数学执行结论not_assessed。旧1388基准和1311漏费反例继续适用，但没有本轮新解，不重复计算或冒充实际结果。
+
+本轮观察到错误歧义→实际九情景数据合同→数学声明截断的顺序。没有消融实验，不能声称九情景是截断唯一原因，也不能声称前置来源判断必然消除所有截断。004的REV-003在数学审核阶段索取实际solution，另有执行顺序问题，先记录，不混入当前来源替换。
+
+调用链已重新阅读核对：`core/workflow.py:97`分流Guidance/Polish；`guidance/workflow.py:25`构造Pipeline；`reviewer.py:153`只从已返回source_corrections收集提议，`:185`才调用`source_adjudication.py:180`；`pipeline.py:109`进入一次修订，`:245`只应用已有提议；`modeling_context.py:36`把所有kind=model要求直接交给Modeler。`polish/workflow.py:87`保持独立写作路径，不消费这些内部合同。运行中的两份有效初审和005/007真实请求验证了这条路径，不以静态阅读单独推断。
+
+结论：当前模块把“是否需要来源判断”留给产生数学义务的同一个Reviewer，独立许可无法检查未提出的纠正。仅加强提示已经没有新增结构保证；仅加必填uncertainty_checks可以保证作答数量，仍未分离来源与数学义务。推荐把已登记歧义的解释及独立许可放到建模前，让纠正与保留歧义都经过复核，再由数学Reviewer消费已裁决题意；未评估来源阻断所属范围与后继，独立分支保留。代价是旧无来源许可模型/审核缓存失效、内部调用方直接迁移，语义误判仍需独立验收。具体影响文件、迁移边界及首批RED条件已写入唯一计划D2.2e，尚未批准或实施。
+
+现状摘要：核心链本轮抵达真实初审与一次模型修订，停于数学声明截断；最大风险是可选来源纠正使错误歧义直接成为数学义务。本次新增有界恢复工具和独立审计、更新记录，生产不变；完成D2.2c.4f，父项D2.2c.4/D2.2/D2.3不勾选。下一项D2.2e.1待明确批准后先RED，后续仍需实际模型、执行和独立费用核对。
+
 ## D2.3：独立数学核对与剩余出口
 
 `.local/d2_independent_math.py` 与 `.local/d2-independent-preparation-20261109/` 从原DOCX核对19段、5表和SHA，原件总需求4065。6个正反例通过，旧Q1真实解独立重算7625，与既有DP参考一致。
