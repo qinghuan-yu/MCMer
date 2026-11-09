@@ -86,7 +86,61 @@ canonical假设ID只在所属子题内唯一。`assumption_checks`从ModelIRRevi
 
 D2.2a工程出口完成。新恢复工具`.local/run_d2_scoped_review_flash.py`默认无网，显式live才启用Flash；原题/同族额外请求上限分别24/16。它检查新单题审核边界，只从历史目录选原始生成缓存，旧整题Reviewer/Reviser不复用；缓存内容和摘要不修改，现行schema/语义/祖先上下文决定能否复用。D2.2b真实运行及D2.3仍待验收。
 
-## D2.3：独立数学核对准备
+### 逐题实测的中断检查点与独立反例
+
+工程检查点`bee9e6a`已推送并核对远端SHA。两轮逐题实测目录为原题`.local/20261109-111218-005236-d2-scoped-review-flash`、同族`.local/20261109-111218-009237-d2-scoped-review-flash`，上限分别24/16次。会话中断后进程已不存在，原始目录保留，未补写响应或伪造run_summary。
+
+| 输入 | 已启动 | 已返回 | 已知total tokens | 未知请求 | 中断位置 |
+| --- | ---: | ---: | ---: | --- | --- |
+| 原题 | 12 | 11 | 513911 | 第12次Reviewer_problem2 | 初审 |
+| 同族 | 11 | 10 | 330096 | 第11次Reviewer_sp1_model | 修订后的终审 |
+
+合计已知844007 tokens，另2次无响应、用量未知；未知请求仍占总上限及对应合同最多两次尝试，不按零消耗处理。中断审计`.local/d22-interruption-audit-20261109/audit.json`核对21个返回响应的prompt/completion/total标量一致；完整usage对象仅有LiteLLM补入null字段差异。原进程起始config_hash仅在内存，缺失终态时不能补称已证明“配置自启动未变”；当前凭据未出现在工件字节中，来源/缓存的逐项哈希核验按实际证据记录。
+
+- 原题Q3/Q4因完整祖先上下文变化重新生成；Q5a补充有效缓存通过重新校验。Q5b架构length后在预设16384额度恢复，但indexed_core两次8192/12288均reasoning_exhausted，单题blocked；其余题继续审核。Q1初审取得approved/reviewed，22数学项passed、A_U001 accepted；此为at-most10条件模型，exactly10替代情景和敏感性仍无执行证据。
+- 新Q3变量口径改变，训练人数仅学员，成本分别收取学员及指导者10元；独立参考计划经Fraction代入1352条约束与1248个变量域全部通过，费用440320一致。证据`.local/d2-scoped-independent-audit-20261109/new_initial_problem3_witness.json`，仅为可行见证。
+- 新Q4有实质数学错误：库存转移扣除损毁操作手，但`operator_post_use_maintenance`仍要求保养不少于上一周4×部署数。周1部署11、损毁1，周2存活操作手应保养40，模型却强制44。独立403290计划代入2288条约束/2081个变量域时，仅51周该约束失败（最大差44），其余约束、域与费用一致。证据`new_initial_problem4_counterexample.json`，没有手修模型，等待审核是否捕获。
+- 同族初审两题均revision_required；第二题首次因`/candidate_models/0`不是允许的数学计算证据路径而semantic失败，第二次在相同32768额度恢复。首次架构修订length→16384 stop，分类/预算保持。初审正确认可原始双对象费用和回流，却未纠正拆题把原文明确规则列作歧义，推动后续错误推荐。
+- sp1修订实际删除指导者费用和G≤T，仅剩T≤4G；全部变量仍仅period，9候选并无9套执行模型。独立采购/服务计划将闲置模块标作指导者，G=[12,2,0,3,2,0]、T=[2,4,0,2,4,0]，原始数学声明108条约束与全部域通过，费用1311<正确口径1388，证明漏费及免费指导者避保养漏洞。证据`.local/d22-scoped-variant-audit-111218/sp1-revised-formulation-counterexample.json`，不是求解最优值。
+- sp2确实生成scenario×period的9套变量。独立构造计划在原始响应及canonical中均通过765约束/765域检查，正确`double_idle_each`分支为1388，推荐`inclusive_idle_each`分支为1311；`idle_post`与`idle_none`规则体完全相同，指导后保养没有对应状态。证据`.local/d22-final-math-independent-20261109/sp2-revised-formulation-adjudication.json`。不能将“9情景已建模”当成所有情景语义正确。
+
+续跑工具`.local/run_d2_resume_review_flash.py`从原题初审/同族终审阶段在新目录继续，保留原始模型、审核请求及本轮有效合同缓存。旧目录不动，已知错误模型仍作为待复审输入，不能直接批准。原题仅剩12次、同族5次；按agent+原始逻辑payload汇总跨中断的合同尝试，两个中断合同各只余一次真实发送。D2.2b/D2.3在续跑终态前保持未验收。
+
+### 审核续跑：同族终态与原题第二次中断
+
+续跑工具先补齐失败诊断的阶段快照，RED为1 failed/1 passed，GREEN为14 passed/5.954秒；两份无网probe分别复用Q1审核缓存、直接进入同族终审，API为0。独立验收见`.local/d22-interruption-audit-20261109/resume_harness_review.json`。
+
+- 同族续跑`.local/20261109-141726-666632-d2-resume-review-flash`已终态blocked，新增2次Flash调用、109403 tokens、328.266秒；与来源轮合计13次已启动、439499已知tokens、1次用量未知。sp1为reviewed/revision_required，指出漏指导者费用及仅单一可执行情景，但仍把明确原文当歧义。sp2为reviewed/approved，26数学项、2假设及3修订项均通过，漏判推荐分支1311反例及情景语义问题；其执行投影因依赖sp1未批准而blocked，executable为空、verified_count为0。guidance明确无执行，文档质量audit PASS不代表数学通过。独立裁决见`.local/d22-final-math-independent-20261109/variant-terminal-adjudication.json`；来源、配置、凭据扫描及预算核验见`resume_variant_audit.json`。
+- 原题续跑`.local/20261109-141700-871570-d2-resume-review-flash`新增5次已启动、4次返回，已知384490 tokens；第5次Reviewer_Q5a未返回，会话中断后进程已不存在，未伪造run_summary。连同111218来源累计17次已启动、898401已知tokens、2次用量未知，原题24次总上限剩余7次。Q2/Q3分别在32768额度返回length，记录未评估；Q4首发stop因`/data/3`数学证据路径不合规而semantic拒绝，第二次stop成功恢复，两个Q4请求合计214707 tokens。
+- Q4有效结论为reviewed/revision_required，31项数学检查中28 passed、3 failed，准确要求从保养人数扣除损毁操作手，与51周独立反例一致。当前模型约束仍未改变，后续必须核对实际修订为`4*(部署数−损毁数)`；不能因文字指出错误就称已修复。独立schema/语义复验、响应与缓存相等及原件SHA见`.local/d22-final-math-independent-20261109/original-q4-initial-review-adjudication.json`。
+- 第二次中断审计见`.local/d22-interruption-audit-20261109/second_interruption_audit.json`。后续只在新目录聚合111218→141700来源链；Q1/Q4有效缓存重验，已完成的Q2/Q3截断仅原始响应无网重放，Q5a未返回请求仍占一次合同尝试。旧目录和所有原始响应、模型不改写。
+
+同族实际请求还证明错误义务的传递：paragraph-3明确双对象收费，却未成为独立locked fact；UNC-001将其列为歧义，UNC-002与LF-014/LF-015冲突。初审要求强制三×三情景，修订按要求执行，终审要求所有旧修订项接受才可批准。现有提示虽要求原文优先，本轮并未落实；相关原文、请求与响应证据已收入`variant-terminal-adjudication.json`。后续边界修正必须处理来源裁决及错误修订义务的撤回，不能只追加收费公式。
+
+### 链式续跑终态：Q1实际执行，整体仍blocked
+
+`.local/run_d2_chain_resume_flash.py`仅处理上述两层来源，Q2/Q3完成的截断响应按精确history、模型、温度、额度及超时匹配后原样交给真实Requester重验；不合成审核结论、不重新计费。Q1/Q4有效缓存仍由产品重新校验。最小RED先复现旧工具不能接受第二层来源，相关GREEN为18 passed/8.14秒（`.local/d22-chain-integrated-tests.xml`）；最终无网probe停Q5a，旧17次/898401已知/2未知账本不变，独立验收为`chain_harness_review.json`。
+
+正式输出`.local/20261109-d2-chain-review-live-01`在隐藏独立进程执行，598.547秒后自然终态；新增6次Flash请求、390769 tokens，未使用剩余1次额度。原题三段累计23/24次已启动、1289170已知tokens、2次未知；同族13/16次、439499已知tokens、1次未知。连同此前D2的51次/1555969 tokens，**累计87次已启动、3284638已知tokens、3次未知**，总用量仍为null。原始Q2/Q3响应在初审/终审共重放4次，未重复累计；缓存重验3次。单合同两次、总额度、源链/快照原字节、配置和生产源码不变、凭据扫描全部通过，证据`.local/d22-interruption-audit-20261109/chain_terminal_audit.json`。未补写旧响应或修改任何原始模型。
+
+| 子题 | 最终审核 | 执行与独立裁决 |
+| --- | --- | --- |
+| Q1 | reviewed / approved | 唯一实际MILP解7625；8周独立逐期核算、63约束/72域、DP和求解器primal=dual一致 |
+| Q2 | not_assessed / blocked | 32768额度length，原始失败离线重放；无本轮解 |
+| Q3 | not_assessed / blocked | 32768额度length，且依赖Q2未批准；无本轮解 |
+| Q4 | reviewed / revision_required | 保养错误已修复，情景证据仍缺且依赖Q3未批准；无流水线解 |
+| Q5a | not_assessed / blocked | 补发stop响应引用`/data/0`等不允许的数学证据路径，语义失败；累计两次已用完，本地guard拒绝再发送，无预测结果 |
+| Q5b | not_assessed / blocked | Q4修订导致祖先变化，旧生成失败产物失效；无两方案结果 |
+
+Q1费用独立分解为购艇600＋购手4200＋艇保养550＋手保养1805＋学员训练420＋指导者训练50＝7625；库存、购买/训练可用延迟、保养排他及指导容量逐周通过。5个FA条目均引用同一个MILP解，不是5次独立实验；该结论仅适用于at-most10口径，exactly10替代情景与敏感性仍未执行。证据`.local/d22-final-math-independent-20261109/original-q1-pipeline-solution-audit.json`。
+
+Q4新模型显式定义`post_use_maintenance_survivors[t]=4*deployed[t-1]-4*damaged[t-1]`并要求保养不少于存活数。独立403290计划经Fraction代入2704约束/2289域全过，周2保养为40，旧51周反例消失。但损毁约束把`100*weekly_damage_rate`作为损毁数的系数，只有10%时碰巧正确；需求50、损毁率8%/10%/12%时模型给出6/5/4，正确应为4/5/6。终审31项数学检查全passed，未发现该敏感性反例；保养和表3修订项accepted，情景项仍revision_required。终审首发stop再次因`/data/4`路径semantic失败，第二次有效恢复。403290仍是独立可行见证，不能当本轮求解或已证最优值。证据`original-q4-revised-witness.json`及`original-terminal-adjudication.json`。
+
+原题编译/执行成功，`verification_report.json`为partial：execution_verified/evidence_supported/numerical_validation passed，model_adequate及mathematical_review not_assessed。最终产品状态仍blocked，指导文档audit BLOCK另报缺少建模路线/最终答案章节及未登记数值，不能把局部数值正确当完整交付完成。文档中未呈现7625和逐周答案，实际存在的Q1推荐MILP被写成“未登记推荐方法”；canonical有15个参数，parameter_registry为空，FA1–5均持有整个求解payload，未投影成应填答案。独立原样渲染/审核回放与原工件完全一致；11个被阻断数字全部可归于有精确source_ref的题面事实、来源定位符或审核计数，属于审核输入口径不匹配。裁决见`.local/d22-final-math-independent-20261109/guidance-terminal-adjudication.json`。后续须单独核对规范模型/结果到指导的投影及数字审核证据入口，不能只删审核要求或手修本次产物通过。
+
+**D2.2b复测与独立裁决任务完成，D2.2/D2.3整体未验收。** 生产代码仍为`bee9e6a`，未重复707项全量或前端构建。下一项来源裁决/错误修订义务撤回的具体范围与RED验收已写入唯一长期计划D2.2c，等待新边界批准；审核截断、证据路径、参数敏感性和指导出口限制均保留。
+
+## D2.3：独立数学核对与剩余出口
 
 `.local/d2_independent_math.py` 与 `.local/d2-independent-preparation-20261109/` 从原DOCX核对19段、5表和SHA，原件总需求4065。6个正反例通过，旧Q1真实解独立重算7625，与既有DP参考一致。
 
@@ -108,4 +162,4 @@ Q4采用真实二元段序约束，不能跳过前档。30秒上界404130/下界
 
 恢复后追加构造性见证：`.local/d2_cross_substitute_initial.py`使用独立Fraction精确算术，不调用app编译器/算子，把独立Q1–Q3最优计划与Q4可行计划映射至本轮原始模型。`.local/d2-recovery-independent-audit-20261109/cross_substitution_report.json`记录Q1–Q4分别63/1560/1144/2704条约束实例，最大违约均0，变量域全部通过，目标精确为7625/669480/440320/403290。Q3的available_operators不含保养队列，Q4 maintained_operators与maintenance_process_operators互斥，映射分别核对；训练总人数包括新手与指导者。该证据只证明这些参考计划在当前模型中可行且计费一致，不证明可行集完整等价或求解器已执行。
 
-这些是独立条件基准和可行见证，线上流程没有执行解，因此尚不能对照新产物完成D2.3。Q4独立最优性及M=1000上界充分性、Q5预测/两方案及整题充分性未评估；不能把Q4当前可行上界当成Q5所需的最优前缀。
+上述Q2–Q4仍是独立条件基准和可行见证。链式续跑已新增Q1实际解7625并完成逐期对照，其余子题没有本轮执行解，D2.3整体未完成。Q4独立最优性及采购上界充分性、参数敏感性错误、Q5预测/两方案及整题充分性仍未验收；不能把Q4当前可行上界当成Q5所需的最优前缀。
