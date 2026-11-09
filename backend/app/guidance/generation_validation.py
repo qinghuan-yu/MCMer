@@ -31,6 +31,7 @@ from app.guidance.model_ir_semantics import (
     ModelIRSemanticValidator,
     validate_model_fact_coverage,
 )
+from app.guidance.model_validators import build_default_model_validator_registry
 
 
 def _validate_indexed_core_stage(
@@ -108,6 +109,14 @@ def _validate_generation_draft_slice(
     })
     if unsupported:
         raise ValueError(f"operator_id is not available: {unsupported!r}")
+    operator_ids = {item.operator_id for item in subproblem.operators}
+    if "indexed_linear_model" in components:
+        operator_ids.add("optimization.milp")
+    issues = build_default_model_validator_registry().method_consistency_issues(
+        families=subproblem.validation.model_families, operator_ids=operator_ids,
+    )
+    if issues:
+        raise ValueError("validation_family_method_mismatch: " + "; ".join(issues))
     return coverage
 
 def _validate_indexed_parts(

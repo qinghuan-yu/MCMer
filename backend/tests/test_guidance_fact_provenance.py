@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 
-def _architecture_payload(*, execution_components, variables=None, operators=None):
+def _architecture_payload(*, execution_components, model_families, variables=None, operators=None):
     return {
         "schema_version": "1.0",
         "model_id": "fact_provenance_contract",
@@ -45,7 +45,7 @@ def _architecture_payload(*, execution_components, variables=None, operators=Non
                 },
             ],
             "validation": {
-                "model_families": ["optimization"],
+                "model_families": model_families,
                 "identifiability_checks": ["rank_check"],
                 "evidence_checks": ["source_replay"],
                 "robustness_checks": ["coefficient_perturbation"],
@@ -118,6 +118,7 @@ def test_operator_graph_nodes_generate_final_fact_binding_paths():
 
     draft = ModelIRGenerationDraft.model_validate(_architecture_payload(
         execution_components=["operator_graph"],
+        model_families=["regression"],
         variables=[{
             "id": "result",
             "role": "derived",
@@ -152,6 +153,7 @@ def test_indexed_nodes_generate_parameter_and_constraint_fact_binding_paths():
     indexed_model = IndexedLinearFormulationDraft(variables=_quantity_variables(), objective=_quantity_objective(), constraints=[constraint]).promote(materialized)
     draft = ModelIRGenerationDraft.model_validate(_architecture_payload(
         execution_components=["indexed_linear_model"],
+        model_families=["mixed_integer_linear_optimization"],
     ))
 
     promoted = draft.promote(indexed_linear_model=indexed_model)
@@ -181,6 +183,44 @@ def test_node_source_fact_ids_must_be_unique():
             "outputs": ["result"],
             "source_fact_ids": ["fact.input", "fact.input"],
         })
+
+
+def test_indexed_promotion_preserves_all_paths_for_a_reused_fact():
+    from app.guidance.model_ir_drafts import IndexedLinearFormulationDraft, ModelIRGenerationDraft
+
+    core, constraint = _indexed_core_and_constraints()
+    materialized = core.promote_core(locked_facts=[{"fact_id": "fact.parameter", "value": 3}])
+    formulation = IndexedLinearFormulationDraft(
+        variables=_quantity_variables(), objective=_quantity_objective(),
+        constraints=[constraint.model_copy(update={
+            "id": f"meet_demand_{index}", "source_fact_ids": ["fact.parameter"],
+        }) for index in range(20)],
+    )
+    draft = ModelIRGenerationDraft.model_validate(_architecture_payload(
+        execution_components=["indexed_linear_model"],
+        model_families=["mixed_integer_linear_optimization"],
+    ))
+
+    promoted = draft.promote(indexed_linear_model=formulation.promote(materialized))
+
+    expected_paths = [
+        "/execution_components/0/model/parameters/0",
+        *[f"/execution_components/0/model/constraints/{index}" for index in range(20)],
+    ]
+    assert len(expected_paths) == len(set(expected_paths)) == 21
+    assert [binding.model_dump() for binding in promoted.subproblems[0].fact_bindings] == [{
+        "fact_id": "fact.parameter", "model_paths": expected_paths,
+    }]
+
+
+def test_canonical_fact_binding_rejects_duplicate_paths():
+    from app.guidance.model_ir import FactBindingSpec
+
+    with pytest.raises(ValidationError, match="model_paths must be unique"):
+        FactBindingSpec(
+            fact_id="fact.parameter",
+            model_paths=["/execution_components/0/model/parameters/0"] * 2,
+        )
 
 
 def test_coverage_preserves_fact_snapshot_and_rejects_unknown_sources():
@@ -294,6 +334,7 @@ def test_hybrid_candidates_may_wait_for_the_system_managed_solver_node():
 
     payload = _architecture_payload(
         execution_components=["operator_graph", "indexed_linear_model"],
+        model_families=["future_forecast", "mixed_integer_linear_optimization"],
         variables=[{
             "id": "forecast",
             "role": "derived",
@@ -367,6 +408,7 @@ def _shared_fact_generation():
     )
     architecture = _architecture_payload(
         execution_components=["operator_graph", "indexed_linear_model"],
+        model_families=["mixed_integer_linear_optimization"],
         variables=[{
             "id": "result", "role": "derived", "symbol": "d",
             "unit": "unit", "shape": [],

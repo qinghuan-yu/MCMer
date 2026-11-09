@@ -143,6 +143,20 @@ def _prepare_indexed_draft(payload: dict) -> tuple[dict, dict, dict]:
     return subproblem, component["model"], component
 
 
+def _operator_graph_draft() -> dict:
+    fixture_path = Path(__file__).parent / "fixtures" / "model_ir" / "wuyi_anchor_bolt.json"
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    subproblem = payload["subproblems"][0]
+    payload["subproblems"] = [subproblem]
+    component = subproblem.pop("execution_components")[0]
+    for field in ("equations", "constraints", "fact_bindings"):
+        subproblem.pop(field)
+    subproblem["execution_components"] = ["operator_graph"]
+    subproblem["variables"] = component["variables"]
+    subproblem["operators"] = component["operators"]
+    return payload
+
+
 def test_problem_decomposer_owns_task_summary_when_llm_omits_it() -> None:
     from app.guidance.decomposer import LLMProblemDecomposer
 
@@ -268,6 +282,61 @@ def test_modeler_requests_typed_model_ir_and_retries_complete_contract(tmp_path:
         (tmp_path / "contract_diagnostics" / "GuidanceModeler.json").read_text(encoding="utf-8")
     )
     assert diagnostic["status"] == "recovered"
+
+
+@pytest.mark.parametrize("omit_variables", [False, True], ids=["empty", "omitted"])
+def test_modeler_retries_operator_graph_architecture_without_variables(
+    tmp_path: Path, omit_variables: bool,
+) -> None:
+    from copy import deepcopy
+
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.modeler import LLMModeler
+
+    valid = _operator_graph_draft()
+    subproblem = valid["subproblems"][0]
+    invalid = deepcopy(valid)
+    if omit_variables:
+        invalid["subproblems"][0].pop("variables")
+    else:
+        invalid["subproblems"][0]["variables"] = []
+    llm = StubLLM([invalid, valid])
+
+    result = asyncio.run(LLMModeler(
+        llm,
+        available_operator_ids=sorted({item["operator_id"] for item in subproblem["operators"]}),
+    ).model(
+        problem_spec=ProblemSpec(
+            task_summary="Estimate the grouped model.",
+            subproblems=[_subproblem(subproblem["subproblem_id"])],
+        ),
+        task={},
+        work_dir=tmp_path,
+    ))
+
+    assert len(llm.calls) == 2
+    assert "operator_graph architecture requires variables" in llm.calls[1]["history"][1]["content"]
+    assert result.subproblems[0].execution_status == "solvable"
+    component = result.subproblems[0].execution_components[0]
+    assert [item.model_dump() for item in component.variables] == subproblem["variables"]
+    diagnostic = json.loads(
+        (tmp_path / "contract_diagnostics" / "GuidanceModeler.json").read_text(encoding="utf-8")
+    )
+    assert diagnostic["status"] == "recovered"
+    assert diagnostic["attempts"][0]["error_type"] == "ValidationError"
+
+
+def test_hybrid_architecture_rejects_empty_operator_graph_variables() -> None:
+    from pydantic import ValidationError
+
+    from app.guidance.model_ir_drafts import ModelIRGenerationDraft
+
+    payload = _operator_graph_draft()
+    payload["subproblems"][0]["execution_components"].append("indexed_linear_model")
+    payload["subproblems"][0]["variables"] = []
+
+    with pytest.raises(ValidationError, match="operator_graph architecture requires variables"):
+        ModelIRGenerationDraft.model_validate(payload)
 
 
 def test_modeler_and_reviser_receive_the_same_architecture_contract(tmp_path: Path) -> None:
@@ -518,6 +587,9 @@ def test_modeler_rejects_milp_as_an_untyped_operator_graph() -> None:
     subproblem, _, component = _prepare_indexed_draft(payload)
     subproblem["subproblem_id"] = "problem1"
     subproblem["execution_components"] = ["operator_graph"]
+    subproblem["variables"] = [{
+        "id": "solution", "role": "derived", "symbol": "x", "unit": "unit", "shape": [],
+    }]
     subproblem["operators"] = [{
         "node_id": component["solver_node_id"],
         "operator_id": "optimization.milp",
@@ -553,6 +625,9 @@ def test_combination_draft_preserves_forecast_when_adding_indexed_solver() -> No
         "operator_graph",
         "indexed_linear_model",
     ]
+    subproblem["variables"] = [{
+        "id": "forecast_bundle", "role": "derived", "symbol": "f", "unit": "unit", "shape": [],
+    }]
     subproblem["operators"] = [{
         "node_id": "forecast",
         "operator_id": "forecast.future_basis_rolling_origin",
@@ -750,6 +825,7 @@ def test_indexed_draft_allows_system_managed_candidate_node_refs() -> None:
     draft = ModelIRGenerationDraft.model_validate(payload)
     normalized = draft.normalize_indexed_execution()
 
+    assert draft.subproblems[0].variables == []
     assert all(
         item.operator_node_ids == ["solve_indexed_model"]
         for item in normalized.subproblems[0].candidate_models
@@ -892,7 +968,10 @@ def test_modeler_isolates_subproblem_contract_failure_and_continues(
     assert second_payload["required_fact_ids"] == ["fact.shared_input"]
 
 
-def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_path: Path) -> None:
+@pytest.mark.parametrize("retry_wrong_family", [False, True])
+def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
+    tmp_path: Path, retry_wrong_family: bool,
+) -> None:
     from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
@@ -925,7 +1004,12 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
         "constraints": indexed["constraints"],
     }
     evidence_profile = _indexed_evidence(core)
-    llm = StubLLM([draft, core, constraints])
+    responses = [draft, core, constraints]
+    if retry_wrong_family:
+        invalid = json.loads(json.dumps(draft))
+        invalid["subproblems"][0]["validation"]["model_families"].insert(0, "optimization")
+        responses.insert(0, invalid)
+    llm = StubLLM(responses)
 
     result = asyncio.run(LLMModeler(
         llm,
@@ -950,7 +1034,13 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
     assert result_subproblem.equations == []
     assert result_subproblem.constraints == []
     assert '"EquationSpec"' not in llm.calls[0]["history"][0]["content"]
-    assert len(llm.calls) == 3
+    assert len(llm.calls) == 3 + int(retry_wrong_family)
+    assert result_subproblem.validation.model_families == ["mixed_integer_linear_optimization"]
+    if retry_wrong_family:
+        assert "optimization" in invalid["subproblems"][0]["validation"]["model_families"]
+        feedback = llm.calls[1]["history"][1]["content"]
+        assert "validation_family_method_mismatch" in feedback
+        assert "optimization.constrained_quadratic_multistart" in feedback
     assert indexed_component.solver_node_id == "solve_indexed_model"
     assert indexed_component.outputs == ["solution"]
     assert all(
@@ -961,12 +1051,12 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(tmp_pat
         answer.value_ref == "solution"
         for answer in result.subproblems[0].final_answers
     )
-    constraint_prompt = llm.calls[2]["history"][0]["content"]
+    constraint_prompt = llm.calls[-1]["history"][0]["content"]
     assert "非零 offset 必须绑定到排除越界端点的 auxiliary index set" in (
         constraint_prompt
     )
     assert "首期或末期边界条件必须使用独立约束族" in constraint_prompt
-    constraint_payload = json.loads(llm.calls[2]["history"][1]["content"])
+    constraint_payload = json.loads(llm.calls[-1]["history"][1]["content"])
     assert "indexed_core" not in constraint_payload
     constraint_context = constraint_payload["constraint_context"]
     assert "dense_values" not in json.dumps(constraint_context)

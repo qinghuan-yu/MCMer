@@ -29,12 +29,36 @@ from app.guidance.model_validation.contracts import (
 class ModelValidatorRegistry:
     def __init__(self) -> None:
         self._validators: dict[str, dict[str, Validator]] = {}
+        self._family_methods: dict[str, frozenset[str]] = {}
 
     def register(self, family: str, name: str, validator: Validator) -> None:
         family_validators = self._validators.setdefault(family, {})
         if name in family_validators:
             raise ValueError(f"validator already registered: {family}.{name}")
         family_validators[name] = validator
+
+    def register_family_methods(self, family: str, operator_ids: Iterable[str]) -> None:
+        self._family_methods[family] = frozenset(operator_ids)
+
+    def method_consistency_issues(
+        self, *, families: Iterable[str], operator_ids: Iterable[str],
+    ) -> list[str]:
+        declared = set(families)
+        actual_methods = set(operator_ids)
+        issues: list[str] = []
+        for family, supported_methods in self._family_methods.items():
+            selected_methods = actual_methods & supported_methods
+            if family in declared and not selected_methods:
+                issues.append(
+                    f"validation family {family!r} requires an executed method from "
+                    f"{sorted(supported_methods)!r}; actual methods={sorted(actual_methods)!r}"
+                )
+            if selected_methods and family not in declared:
+                issues.append(
+                    f"validation family {family!r} is required for executed methods "
+                    f"{sorted(selected_methods)!r}"
+                )
+        return issues
 
     def assess(
         self,
@@ -105,6 +129,9 @@ def build_default_model_validator_registry() -> ModelValidatorRegistry:
     registry.register("optimization", "multistart", optimization.multistart)
     registry.register("optimization", "feasibility_certificate", optimization.optimization_feasibility)
     registry.register("optimization", "bound_certificate", optimization.optimization_bounds)
+    registry.register_family_methods(
+        "optimization", ["optimization.constrained_quadratic_multistart"],
+    )
     registry.register("mixed_integer_linear_optimization", "objective_recompute", milp.milp_objective)
     registry.register(
         "mixed_integer_linear_optimization",
@@ -114,6 +141,7 @@ def build_default_model_validator_registry() -> ModelValidatorRegistry:
     registry.register("mixed_integer_linear_optimization", "integrality_recompute", milp.milp_integrality)
     registry.register("mixed_integer_linear_optimization", "bound_and_gap", milp.milp_bounds)
     registry.register("mixed_integer_linear_optimization", "baseline_comparison", milp.milp_baseline)
+    registry.register_family_methods("mixed_integer_linear_optimization", ["optimization.milp"])
     registry.register("evaluation", "normalization_recompute", evaluation.evaluation_normalization)
     registry.register("evaluation", "weight_recompute", evaluation.evaluation_weights)
     registry.register("evaluation", "ranking_recompute", evaluation.evaluation_ranking)

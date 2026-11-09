@@ -79,6 +79,8 @@ class SolvableModelIRDraft(IRModel):
         has_indexed_model = "indexed_linear_model" in self.execution_components
         if has_operator_graph and not self.operators:
             raise ValueError("operator_graph architecture requires operators")
+        if has_operator_graph and not self.variables:
+            raise ValueError("operator_graph architecture requires variables")
         if not has_operator_graph and self.operators:
             raise ValueError(
                 "operators require the operator_graph execution component"

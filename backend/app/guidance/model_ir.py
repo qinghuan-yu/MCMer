@@ -345,7 +345,15 @@ class ValidationPlan(IRModel):
             "graph",
             "differential_equation",
         ]
-    ] = Field(min_length=1, max_length=8)
+    ] = Field(
+        min_length=1, max_length=8,
+        description=(
+            "Declare the validation families of the actual execution methods. "
+            "optimization requires optimization.constrained_quadratic_multistart; "
+            "optimization.milp and indexed_linear_model require mixed_integer_linear_optimization. "
+            "Declare both only when both methods are present, and never omit the family of a present method."
+        ),
+    )
     identifiability_checks: list[str] = Field(min_length=1, max_length=12)
     evidence_checks: list[str] = Field(min_length=1, max_length=12)
     robustness_checks: list[str] = Field(min_length=1, max_length=12)
@@ -361,12 +369,18 @@ class FinalAnswerSpec(IRModel):
         "chosen_under_prior",
         "candidate_design",
     ]
-    evidence_ids: list[str] = Field(min_length=1, max_length=20)
+    evidence_ids: list[str] = Field(
+        min_length=1, max_length=20,
+        description=(
+            "Executed node IDs or registered EvidenceProfile evidence_id values whose source_ref "
+            "is declared in this subproblem's data. Preserve source IDs; never invent identifiers."
+        ),
+    )
 
 
 class FactBindingSpec(IRModel):
     fact_id: str = Field(min_length=1, max_length=120)
-    model_paths: list[str] = Field(min_length=1, max_length=20)
+    model_paths: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
     def require_json_pointers(self) -> FactBindingSpec:

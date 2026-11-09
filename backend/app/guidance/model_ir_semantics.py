@@ -17,6 +17,7 @@ from app.guidance.model_ir import (
     SolvableModelIR,
     SymbolExpression,
 )
+from app.guidance.model_validators import build_default_model_validator_registry
 
 
 def validate_model_fact_coverage(
@@ -149,6 +150,18 @@ class ModelIRSemanticValidator:
             component.solver_node_id: component
             for _, component in indexed_components
         })
+        operator_ids = {invocation.operator_id for _, _, invocation in operators}
+        if indexed_components:
+            operator_ids.add("optimization.milp")
+        for issue in build_default_model_validator_registry().method_consistency_issues(
+            families=subproblem.validation.model_families, operator_ids=operator_ids,
+        ):
+            diagnostics.append(SemanticDiagnostic(
+                code="validation_family_method_mismatch",
+                subproblem_id=subproblem.subproblem_id,
+                path=f"{base}.validation.model_families",
+                message=issue,
+            ))
 
         for data_index, data_ref in enumerate(subproblem.data):
             for field_id, override_unit in data_ref.unit_overrides.items():

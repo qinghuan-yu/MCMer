@@ -707,6 +707,7 @@ def test_modeler_slices_structured_facts_by_target_subproblem(tmp_path: Path) ->
     }]
     first_model = _architecture_payload(
         execution_components=["operator_graph"],
+        model_families=["regression"],
         variables=[{
             "id": "result", "role": "derived", "symbol": "r",
             "unit": "manipulator/unit", "shape": [],

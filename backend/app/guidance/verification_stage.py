@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 
 from app.guidance.contracts import ModelAdequacyLayer, ProblemSpec, VerificationLayer, VerificationReport
+from app.guidance.evidence_consistency import registered_result_source_ids
 from app.guidance.model_ir_compiler import ExecutionPlan
 from app.guidance.model_ir_semantics import validate_model_fact_coverage
 from app.guidance.model_review_contracts import ApprovedModelIR
@@ -102,13 +103,24 @@ class ResultVerificationStage:
         elif manifest.executed_node_ids != expected_node_ids:
             execution_issues.append("executed node IDs do not match execution plan order")
 
+        referenced_ids: dict[str, set[str]] = {}
+        for result in results.get("verified_results") or []:
+            if isinstance(result, dict) and isinstance(result.get("evidence_ids"), list):
+                referenced_ids.setdefault(str(result.get("subproblem_id") or ""), set()).update(
+                    map(str, result["evidence_ids"])
+                )
+        source_ids, source_issues = registered_result_source_ids(
+            root, approved.approved_model_ir, referenced_ids=referenced_ids,
+        )
         evidence_issues, figures = _operator_evidence_issues(
             root=root,
             executed_node_ids=set(manifest.executed_node_ids),
             parameter_registry=parameters,
             result_registry=results,
             figure_registry=figure_registry,
+            source_ids_by_subproblem=source_ids,
         )
+        evidence_issues = [*source_issues, *evidence_issues]
         coverage_issues = _blocked_result_issues(results)
         problem_path = root / "problem_spec.json"
         problem_spec = (
@@ -146,7 +158,7 @@ class ResultVerificationStage:
                 "status": (
                     "blocked" if execution_issues else "passed" if not evidence_issues else "failed"
                 ),
-                "reasons": evidence_issues or ["registered outputs trace to executed operator nodes"],
+                "reasons": evidence_issues or ["registered outputs trace to executed nodes and any cited sources are verified"],
                 "evidence_refs": [
                     "parameter_registry.json",
                     "result_registry.json",
@@ -397,6 +409,7 @@ def _operator_evidence_issues(
     parameter_registry: dict,
     result_registry: dict,
     figure_registry: dict,
+    source_ids_by_subproblem: dict[str, set[str]],
 ) -> tuple[list[str], list[dict]]:
     issues: list[str] = []
     parameters = parameter_registry.get("parameters")
@@ -432,12 +445,13 @@ def _operator_evidence_issues(
             issues.append(f"result {result_id} has an unexecuted source node")
         evidence_ids = result.get("evidence_ids")
         if not isinstance(evidence_ids, list) or not evidence_ids:
-            issues.append(f"result {result_id} has no evidence node IDs")
+            issues.append(f"result {result_id} has no evidence IDs")
         else:
-            unknown = sorted(set(map(str, evidence_ids)) - executed_node_ids)
+            allowed = executed_node_ids | source_ids_by_subproblem.get(str(result.get("subproblem_id") or ""), set())
+            unknown = sorted(set(map(str, evidence_ids)) - allowed)
             if unknown:
                 issues.append(
-                    f"result {result_id} references unexecuted evidence nodes: {', '.join(unknown)}"
+                    f"result {result_id} references unknown or unavailable evidence IDs: {', '.join(unknown)}"
                 )
 
     figures = figure_registry.get("figures")

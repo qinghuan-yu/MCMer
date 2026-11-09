@@ -36,10 +36,12 @@ def file_snapshots(root: Path, references: Iterable[str]) -> dict[str, str | Non
 
 
 def model_source_snapshots(root: Path, model) -> dict[str, str | None]:
-    return file_snapshots(root, (
+    references = [
         item.source_ref for subproblem in model.subproblems
         if subproblem.execution_status == "solvable" for item in subproblem.data
-    ))
+    ]
+    references.extend(name for name in ("input_catalog.json", "evidence_profile.json") if (root / name).is_file())
+    return file_snapshots(root, references)
 
 
 def generated_figure_paths(value) -> list[str]:

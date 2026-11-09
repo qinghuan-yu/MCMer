@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
+import hashlib
+from pathlib import Path
 
 from app.artifacts.evidence_profile import EvidenceProfile
 from app.artifacts.input_catalog import InputCatalog
@@ -11,8 +14,10 @@ from app.guidance.indexed_linear import validate_indexed_linear_core
 from app.guidance.model_ir import (
     IndexedLinearExecutionComponent,
     ModelIR,
+    OperatorGraphExecutionComponent,
     SolvableModelIR,
 )
+from app.guidance.recovery import canonical_digest, workspace_file
 
 
 MISSING_MARKERS = (
@@ -25,6 +30,63 @@ MISSING_MARKERS = (
     "not provided",
     "unavailable",
 )
+
+
+def registered_result_source_ids(
+    root: Path, model_ir: ModelIR, *, referenced_ids: dict[str, set[str]],
+) -> tuple[dict[str, set[str]], list[str]]:
+    """结果来源须同时属于正式登记、当前子题的数据声明和真实原件。"""
+    path = root / "evidence_profile.json"
+    if not path.is_file():
+        return {}, []
+    try:
+        profile = EvidenceProfile.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {}, [f"invalid result source registration: {exc}"]
+    counts = Counter(item.evidence_id for item in profile.evidence)
+    node_ids = {
+        node_id for subproblem in model_ir.subproblems if isinstance(subproblem, SolvableModelIR)
+        for component in subproblem.execution_components
+        for node_id in ([node.node_id for node in component.operators]
+                        if isinstance(component, OperatorGraphExecutionComponent) else [component.solver_node_id])
+    }
+    registered: dict[str, set[str]] = {}
+    issues: list[str] = []
+    for subproblem in model_ir.subproblems:
+        if not isinstance(subproblem, SolvableModelIR):
+            continue
+        allowed = registered.setdefault(subproblem.subproblem_id, set())
+        requested = {
+            identifier for answer in subproblem.final_answers for identifier in answer.evidence_ids
+        } & referenced_ids.get(subproblem.subproblem_id, set())
+        declared = {item.source_ref for item in subproblem.data}
+        for item in profile.evidence:
+            if item.evidence_id not in requested:
+                continue
+            if counts[item.evidence_id] != 1 or item.evidence_id in node_ids:
+                issues.append(f"ambiguous source/node evidence ID: {item.evidence_id}")
+                continue
+            if item.source_ref not in declared:
+                continue
+            try:
+                if item.source_ref.split("#", 1)[0] != item.source_file:
+                    raise ValueError("source_ref does not belong to source_file")
+                source_hash = hashlib.sha256(workspace_file(root, item.source_file).read_bytes()).hexdigest()
+                if item.kind == "embedded_table":
+                    catalog = InputCatalog.model_validate_json((root / "input_catalog.json").read_text(encoding="utf-8"))
+                    blocks = [block for block in catalog.blocks if block.source_ref == item.source_ref and block.kind == "table"]
+                    if (catalog.source_file != item.source_file or catalog.source_sha256 != source_hash
+                            or len(blocks) != 1 or blocks[0].rows != item.rows
+                            or blocks[0].sha256 != item.sha256
+                            or item.sha256 != canonical_digest({"kind": "table", "rows": item.rows})):
+                        raise ValueError("table registration does not match the source catalog")
+                elif item.sha256 != source_hash:
+                    raise ValueError("registered file hash does not match the source")
+            except (OSError, ValueError) as exc:
+                issues.append(f"source evidence {item.evidence_id} is unavailable or inconsistent: {exc}")
+                continue
+            allowed.add(item.evidence_id)
+    return registered, issues
 
 
 def validate_problem_evidence_consistency(
