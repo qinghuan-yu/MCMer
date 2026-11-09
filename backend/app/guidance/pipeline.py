@@ -278,12 +278,7 @@ def _final_result(task_id: str, root: Path):
     guidance_path = root / "guidance.md"
     audit = _read_json(root / "guidance_audit_report.json")
     verification = _read_json(root / "verification_report.json")
-    final_status = _resolve_final_status(root, audit)
-    final_message = (
-        "guidance audit blocked the generated plan"
-        if final_status == "blocked"
-        else "guidance plan generated"
-    )
+    final_status, final_message = _resolve_final_outcome(root, audit)
     yield _progress(task_id, "done", 1.0, final_message, status=final_status)
     yield {
         "type": "result",
@@ -311,20 +306,20 @@ def _final_result(task_id: str, root: Path):
     }
 
 
-def _resolve_final_status(root: Path, audit: dict) -> str:
+def _resolve_final_outcome(root: Path, audit: dict) -> tuple[str, str]:
     if str(audit.get("status") or "").upper() == "BLOCK":
-        return "blocked"
-    verification = _read_json(root / "verification_report.json")
-    verification_status = str(verification.get("status") or "").lower()
-    if verification_status == "blocked":
-        return "blocked"
+        return "blocked", "guidance audit blocked the generated plan"
     approved = _read_json(root / "approved_model_ir.json")
     review_status = str(approved.get("review_status") or "").lower()
     if review_status in {"blocked", "revision_required"}:
-        return "blocked"
+        return "blocked", "model approval blocked execution"
+    verification = _read_json(root / "verification_report.json")
+    verification_status = str(verification.get("status") or "").lower()
+    if verification_status == "blocked":
+        return "blocked", "result verification blocked the generated plan"
     if review_status == "partial" or verification_status == "partial":
-        return "partial"
-    return "completed"
+        return "partial", "guidance plan generated with incomplete verification or blocked subproblems"
+    return "completed", "guidance plan generated"
 
 
 def _progress(

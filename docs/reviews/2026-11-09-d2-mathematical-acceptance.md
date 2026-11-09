@@ -224,6 +224,31 @@ Q4首发prompt81200＋completion32768＝113968，全部completion用于reasoning
 
 本轮之后D2累计 **95次已启动、3616939已知tokens、3次历史未知，总用量仍为null**。本次完成D2.2d.1–4规定的工程和两项来源反例验收，压缩为计划不变量15。它证明本例错误纠正被拦截且正确提议可应用，不证明自然语言语义普遍可靠，也没有重新生成/执行整题。D2.2c.4及D2.2/D2.3仍未验收；下一步回到真实Reviewer→一次纠正/修订→执行链，继续核对同族题和既有Q4反例。
 
+## D2.2c.4d–e：接入门禁后的真实链与终态归因
+
+生产检查点`93f4200`已推送，新增隔离工具`.local/run_d22d_pipeline_flash.py`从原始有效初始题意/模型接续真实Pipeline。旧工具和历史目录字节保留。新版保存独立语义许可原字节，并核对来源请求恰含完整原件、目标源记录及此前合法审核返回的提议；不注入独立正确答案。仪器边界11 failed/1 passed→27 passed/6.23秒（`.local/d22d-pipeline-harness-{red,final}.xml`），含原15项预算/检查点/无网测试。正式probe `.local/20261109-d22d-pipeline-probe-01`为0调用，抵达当前sp1 Reviewer。
+
+### 真实终态：外部空响应，未进入数学裁决
+
+`.local/20261109-d22d-pipeline-live-01`保留12次总上限、每合同最多两次和标准额度；117.64秒自然结束为blocked。实际两次请求都使用deepseek-flash：sp1约110.703秒、sp2约6.188秒，均报`APIError: DeepseekException - Unable to get json response ... Original Response:`且响应为空。没有provider response、finish_reason或usage；这是传输/供应商响应失败，不能解释为模型识别了数学错误，也不能证明全局服务故障原因。
+
+- 两题均not_assessed，数学/假设/修订检查及纠正提议为空；执行投影为空。初始ModelIR仍原样solvable，模型生成未退化，但审核批准不可获得。
+- 未触发独立来源请求、来源应用、模型修订或求解；无source_adjudication/source_resolution/revision_request/execution_manifest。指导audit PASS仅证明阻断披露，不能当成数学或完整流程通过。
+- 本轮**2次已启动、2次用量未知**；已知token小计0表示没有已知用量，不表示零消耗。D2累计**97次已启动、3616939已知tokens、5次未知，总量null**。失败合同自然结案，未重置计数重跑。
+- 原件、88份历史源目录文件、实测期间179份生产源码/资源、配置和工具SHA一致；7份阶段快照清单、绑定和空执行投影重算通过，凭据扫描通过，审计不改实验。独立证据：`.local/d22d-pipeline-audit-20261109/api-and-integrity-audit.json`、`.local/d22d-pipeline-flow-audit-20261109/audit.json`及`.local/d22c4-chain-math-audit-20261109/terminal-adjudication.json`。
+
+### 原件和Q4无网复核
+
+`.local/d22c4-chain-math-audit-20261109/preparation.json`直接从原DOCX重算六期DP=1388，并复核旧1388解的逐期状态和六项费用。旧1311见证仍通过原始错误模型：sp1为108条约束/114个域、sp2九情景为765条约束/765个域；它继续证明漏费推荐风险，不能当正确最优基准。以上均为独立历史对照，不是本轮真实链的执行结果。
+
+`.local/d22c4-q4-current-boundary-20261109/q4-boundary-adjudication.json`用Fraction重新代入未改的Q4原始约束：部署50、rho=8%/10%/12%时仍允许损毁6/5/4，正确为4/5/6。当前生产无网捕获的数学payload、实际user content、三个祖先及32768/300秒预算与旧截断请求一致；完整请求并非逐字相同，引用规则和列表上限有提示/schema变化。新来源门禁须在有效纠正提议后触发，旧Q4正文为空、尚未到此边界；没有证据表明门禁解决了该截断或敏感性错误，因此本轮未为同一数学输入重发昂贵请求。此判断不意味着以后必然截断；Q4仍未验收，403290仅保持既有可行上界。
+
+### 真实失败推动的局部呈现修复
+
+原`pipeline_events.json`的done消息声称“guidance audit blocked the generated plan”，但`guidance_audit_report.json`实际PASS，阻断来自模型初审失败。最小正式RED为3 failed/2 passed（`.local/d22c4-terminal-red.xml`），同时复现验证阻断被误归因及partial消息未披露未完成。状态与消息现由单一`_resolve_final_outcome`直接派生：指导审核BLOCK、模型批准blocked、结果验证blocked及partial/completed各自准确表述；模型批准阻断优先于下游镜像验证报告。内部调用方直接迁移，状态、公共字段、许可门禁、重试和数学算法不改。
+
+相关37 passed/7.16秒（`.local/d22c4-terminal-green.xml`）；完整后端**839 passed/29.66秒**（`.local/d22c4-terminal-full.xml`）。原始终态只读回放`.local/d22c4-terminal-replay-20261109/terminal-adjudication.json`确认只改变done.message/current_subtask，TaskResult全部字段与原事件及run_summary一致，115份原实验文件SHA不变；60组状态组合的原状态判定全部保留。原实验保留，不把之后的消息修复写回旧运行。D2.2c.4d实测/裁决和4e局部归因修复完成，父项D2.2c.4及D2.2/D2.3继续未验收；下一步仍是取得有效真实审核与执行证据。
+
 ## D2.3：独立数学核对与剩余出口
 
 `.local/d2_independent_math.py` 与 `.local/d2-independent-preparation-20261109/` 从原DOCX核对19段、5表和SHA，原件总需求4065。6个正反例通过，旧Q1真实解独立重算7625，与既有DP参考一致。

@@ -2,6 +2,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _blocked_ir(model_id: str = "pipeline-model") -> dict:
     return {
@@ -208,7 +210,7 @@ def test_guidance_pipeline_executes_and_verifies_partial_approval(
 def test_partial_review_and_verification_resolve_to_partial_task_status(
     tmp_path: Path,
 ) -> None:
-    from app.guidance.pipeline import _resolve_final_status
+    from app.guidance.pipeline import _resolve_final_outcome
 
     (tmp_path / "verification_report.json").write_text(
         json.dumps({"status": "partial"}),
@@ -219,7 +221,35 @@ def test_partial_review_and_verification_resolve_to_partial_task_status(
         encoding="utf-8",
     )
 
-    assert _resolve_final_status(tmp_path, {"status": "PASS"}) == "partial"
+    assert _resolve_final_outcome(tmp_path, {"status": "PASS"})[0] == "partial"
+
+
+@pytest.mark.parametrize("review_status,verification_status,audit_status,status,message", [
+    ("blocked", "blocked", "PASS", "blocked", "model approval blocked execution"),
+    ("approved", "blocked", "PASS", "blocked", "result verification blocked the generated plan"),
+    ("approved", "passed", "BLOCK", "blocked", "guidance audit blocked the generated plan"),
+    ("partial", "partial", "PASS", "partial", "guidance plan generated with incomplete verification or blocked subproblems"),
+    ("approved", "passed", "PASS", "completed", "guidance plan generated"),
+])
+def test_final_progress_names_the_actual_blocking_layer_and_matches_result(
+    tmp_path, review_status, verification_status, audit_status, status, message,
+):
+    from app.guidance.pipeline import _final_result
+
+    approved = _partial_approved_payload() if review_status == "partial" else _approved_payload(review_status)
+    for name, payload in [
+        ("approved_model_ir.json", approved),
+        ("verification_report.json", {"status": verification_status}),
+        ("guidance_audit_report.json", {"status": audit_status}),
+    ]:
+        (tmp_path / name).write_text(json.dumps(payload), encoding="utf-8")
+
+    progress, result = list(_final_result("terminal-reason", tmp_path))
+
+    assert progress["data"]["status"] == result["data"]["status"] == status
+    assert progress["data"]["message"] == message
+    assert progress["data"]["current_subtask"] == message
+    assert result["data"]["audit_status"] == audit_status
 
 
 def test_guidance_pipeline_allows_exactly_one_model_ir_revision(tmp_path: Path) -> None:
