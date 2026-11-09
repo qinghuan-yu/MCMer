@@ -143,6 +143,8 @@ def test_local_revision_validation_accepts_only_complete_supported_checks():
 
 
 def test_unassessed_subproblem_is_not_hidden_by_independent_approved_review(tmp_path):
+    from source_preflight_fixtures import write_source_preflight
+
     first_model = _model()
     first = first_model.subproblems[0]
     second = first.model_copy(update={"subproblem_id": "unassessed_problem"})
@@ -169,12 +171,14 @@ def test_unassessed_subproblem_is_not_hidden_by_independent_approved_review(tmp_
     )
     projection = ModelIR(model_id=model.model_id, subproblems=[first, blocked])
     evidence = {"schema_version": "1.0", "evidence": []}
+    _, source_preflight = write_source_preflight(tmp_path, problem, profile=evidence)
     approved = ApprovedModelIR(
         review_status="partial", model_id=model.model_id,
         executable_subproblem_ids=[first.subproblem_id], approved_model_ir=projection,
         review_binding=bind_model_review(
             review=review, model_ir=model, approved_model_ir=projection, problem_spec=problem,
             evidence_profile=evidence, input_catalog=None, revision_request=None,
+            source_preflight=source_preflight,
         ),
     )
     for name, document in {

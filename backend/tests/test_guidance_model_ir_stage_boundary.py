@@ -108,6 +108,9 @@ def test_modeling_and_review_stages_exchange_only_model_ir_files(tmp_path: Path)
         }),
         encoding="utf-8",
     )
+    from app.guidance.contracts import ProblemSpec
+    from source_preflight_fixtures import write_source_preflight
+    write_source_preflight(tmp_path, ProblemSpec.model_validate_json(problem_path.read_text(encoding="utf-8")))
     model_ir_path = asyncio.run(ModelingStage(modeler=IRModeler()).run(
         task_id="model-ir-stage",
         task={"work_dir": str(tmp_path)},
@@ -159,6 +162,9 @@ def test_model_review_stage_passes_explicit_revision_request(tmp_path: Path) -> 
         }),
         encoding="utf-8",
     )
+    from app.guidance.contracts import ProblemSpec
+    from source_preflight_fixtures import write_source_preflight
+    write_source_preflight(tmp_path, ProblemSpec.model_validate_json(problem_path.read_text(encoding="utf-8")))
     model_ir_path = asyncio.run(ModelingStage(modeler=IRModeler()).run(
         task_id="model-ir-initial",
         task={"work_dir": str(tmp_path)},
@@ -220,6 +226,9 @@ def test_modeling_stage_revision_reads_model_ir_review_without_model_spec_aliase
         }),
         encoding="utf-8",
     )
+    from app.guidance.contracts import ProblemSpec
+    from source_preflight_fixtures import write_source_preflight
+    write_source_preflight(tmp_path, ProblemSpec.model_validate_json(problem_path.read_text(encoding="utf-8")))
     model_ir_path = asyncio.run(ModelingStage(modeler=IRModeler()).run(
         task_id="model-ir-initial",
         task={"work_dir": str(tmp_path)},

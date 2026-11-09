@@ -7,6 +7,7 @@ from app.guidance.contracts import ProblemSpec
 from app.guidance.model_ir import BlockedModelIR, ModelIR
 from app.guidance.model_review_contracts import ModelIRReview
 from app.guidance.modeler import LLMModeler
+from source_preflight_fixtures import write_source_preflight
 
 
 @pytest.mark.parametrize("upstream_result", ["changed", "unchanged", "failed"])
@@ -60,6 +61,7 @@ def test_revision_preserves_unaffected_models_and_invalidates_changed_dependenci
         return ModelIR(model_id=f"generated-{identifier}", subproblems=[subproblem])
 
     monkeypatch.setattr("app.guidance.modeler._request_single_subproblem_model", generate)
+    write_source_preflight(tmp_path, problem_spec)
     result = asyncio.run(LLMModeler(object()).revise(
         problem_spec=problem_spec, previous_model_ir=previous, review=review,
         evidence_profile={"evidence": []}, task={}, work_dir=tmp_path,

@@ -40,9 +40,9 @@ from app.guidance.model_review_validation import (
 )
 from app.guidance.operator_execution import OperatorGraphExecutor
 from app.guidance.recovery import (
+    canonical_digest,
     invalidate_stage_outputs,
-    load_source_adjudication,
-    load_source_resolution,
+    load_source_preflight,
 )
 from app.guidance.stage_contracts import (
     ModelReviewer,
@@ -92,6 +92,46 @@ class DecompositionStage:
         _write_model(output_path, problem_spec)
         return output_path
 
+
+class SourceStage:
+    """一次性解释并独立复核登记来源，保存原题意后提交许可和已裁决题意。"""
+
+    def __init__(self, *, source_adjudicator) -> None:
+        self.source_adjudicator = source_adjudicator
+
+    async def run(self, *, task_id: str, task: dict, input_path: Path | None, output_path: Path) -> Path:
+        from app.guidance.source_resolution import validate_source_preflight
+
+        source_path = _required_input(input_path)
+        root = output_path.parent
+        permission_path = root / "source_preflight.json"
+        if permission_path.exists():
+            raise ValueError("source preflight can only be applied once before modeling")
+        original_bytes = source_path.read_bytes()
+        problem_spec = ProblemSpec.model_validate_json(original_bytes)
+        evidence_profile = load_evidence_profile(root).model_dump(mode="json")
+        input_catalog = load_review_catalog(root)
+        resolved, record = await self.source_adjudicator.prepare_sources(
+            problem_spec=problem_spec, evidence_profile=evidence_profile,
+            input_catalog=input_catalog, work_dir=root,
+        )
+        validate_source_preflight(record, problem_spec=resolved, input_catalog=input_catalog,
+                                  evidence_profile=evidence_profile, work_dir=root)
+        if record.original_problem_spec != ProblemSpec.model_validate_json(original_bytes):
+            raise ValueError("source preflight replaced the original problem snapshot")
+        if source_path.read_bytes() != original_bytes:
+            raise ValueError("source preflight input changed while awaiting its assessment")
+        # 排他创建是应用的提交点；跨协程或进程也不能覆盖已落盘的许可。
+        try:
+            with permission_path.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(record.model_dump_json(indent=2))
+        except FileExistsError as exc:
+            raise ValueError("source preflight can only be applied once before modeling") from exc
+        (root / "problem_spec_original.json").write_bytes(original_bytes)
+        _write_model(output_path, resolved)
+        return output_path
+
+
 class ModelingStage:
     def __init__(self, *, modeler: Modeler) -> None:
         self.modeler = modeler
@@ -106,8 +146,11 @@ class ModelingStage:
     ) -> Path:
         source_path = _required_input(input_path)
         evidence_profile = load_evidence_profile(output_path.parent).model_dump(mode="json")
+        problem_spec = ProblemSpec.model_validate_json(
+            (output_path.parent / "problem_spec.json").read_text(encoding="utf-8")
+        )
+        source_preflight = load_source_preflight(output_path.parent, problem_spec)
         if source_path.name == "problem_spec.json":
-            problem_spec = ProblemSpec.model_validate_json(source_path.read_text(encoding="utf-8"))
             model_ir = await self.modeler.model(
                 problem_spec=problem_spec,
                 evidence_profile=evidence_profile,
@@ -116,10 +159,6 @@ class ModelingStage:
             )
         else:
             review = ModelIRReview.model_validate_json(source_path.read_text(encoding="utf-8"))
-            problem_spec = ProblemSpec.model_validate_json(
-                (output_path.parent / "problem_spec.json").read_text(encoding="utf-8")
-            )
-            load_source_resolution(output_path.parent, problem_spec)
             previous_model_ir = ModelIR.model_validate_json(
                 (output_path.parent / review.model_ir_ref).read_text(encoding="utf-8")
             )
@@ -131,6 +170,12 @@ class ModelingStage:
                 task=task,
                 work_dir=output_path.parent,
             )
+        current_preflight = load_source_preflight(output_path.parent, problem_spec)
+        if canonical_digest(current_preflight) != canonical_digest(source_preflight):
+            raise ValueError("source preflight permission changed while modeling")
+        blocked = set(source_preflight.blocked_subproblem_ids)
+        if any(item.subproblem_id in blocked and item.execution_status == "solvable" for item in model_ir.subproblems):
+            raise ValueError("model generation bypassed a blocked source preflight scope")
         _validate_model_ir_coverage(problem_spec, model_ir)
         validate_model_fact_coverage(problem_spec, model_ir)
         validate_model_evidence_consistency(problem_spec, model_ir, evidence_profile)
@@ -175,7 +220,7 @@ class ModelReviewStage:
         )
         evidence_profile = load_evidence_profile(output_path.parent).model_dump(mode="json")
         input_catalog = load_review_catalog(output_path.parent)
-        source_resolution = load_source_resolution(output_path.parent, problem_spec)
+        source_preflight = load_source_preflight(output_path.parent, problem_spec)
         review = await self.reviewer.review(
             problem_spec=problem_spec,
             model_ir=model_ir,
@@ -191,12 +236,12 @@ class ModelReviewStage:
                 "model_ir_ref": model_ir_path.name,
             }
         )
-        source_adjudication = load_source_adjudication(output_path.parent, problem_spec)
+        if canonical_digest(load_source_preflight(output_path.parent, problem_spec)) != canonical_digest(source_preflight):
+            raise ValueError("source preflight permission changed while reviewing")
         validate_model_review(
             review, model_ir, revision_request=revision_request, problem_spec=problem_spec,
-            source_resolution=source_resolution, input_catalog=input_catalog,
+            source_preflight=source_preflight, input_catalog=input_catalog,
             evidence_profile=evidence_profile, work_dir=output_path.parent,
-            source_adjudication=source_adjudication,
         )
         _write_model(output_path.parent / "model_review.json", review)
         approved_projection = _build_reviewed_model_projection(model_ir, review, problem_spec)
@@ -219,8 +264,7 @@ class ModelReviewStage:
                 review=review, model_ir=model_ir, approved_model_ir=approved_projection,
                 problem_spec=problem_spec, evidence_profile=evidence_profile,
                 input_catalog=input_catalog, revision_request=revision_request,
-                source_resolution=source_resolution,
-                source_adjudication=source_adjudication,
+                source_preflight=source_preflight,
             ),
         )
         _write_model(output_path, approved)
@@ -331,6 +375,15 @@ class CalculationStage:
             if problem_spec_path.is_file()
             else None
         )
+        if problem_spec is None:
+            raise ValueError("calculation requires the current problem and complete source preflight permission")
+        source_preflight = load_source_preflight(work_dir, problem_spec)
+        if (approved.review_binding is None
+                or approved.review_binding.source_preflight_sha256 != canonical_digest(source_preflight)):
+            raise ValueError("approved model source preflight permission binding is missing or stale")
+        if any(item.subproblem_id in source_preflight.blocked_subproblem_ids
+               and item.execution_status == "solvable" for item in approved.approved_model_ir.subproblems):
+            raise ValueError("approved model bypasses a blocked source preflight scope")
         evidence_profile = (
             load_evidence_profile(work_dir).model_dump(mode="json")
             if (

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from source_preflight_fixtures import write_source_preflight
+
 
 class StubLLM:
     def __init__(self, payload: dict | list[dict | str]) -> None:
@@ -109,14 +111,24 @@ def _revision_requirement(requirement_id: str, description: str) -> dict:
     }
 
 
-def _indexed_evidence(core: dict) -> dict:
+def _indexed_evidence(core: dict, root: Path) -> dict:
+    from docx import Document
+
+    from app.artifacts.input_catalog import build_input_catalog
+
     # 从固定模型的值构造证据表，再让生成草稿只声明列绑定。
+    document = Document()
     evidence = []
-    for number, parameter in enumerate(core["parameters"], start=1):
+    for parameter in core["parameters"]:
         if parameter.get("source_kind") == "runtime_artifact":
             continue
+        number = len(evidence) + 1
         reference = f"inputs/inventory.docx#table-{number}"
         values = [item["value"] for item in parameter.pop("values")]
+        rows = [["value"], *[[str(value)] for value in values]]
+        table = document.add_table(rows=len(rows), cols=1)
+        for row, contents in zip(table.rows, rows, strict=True):
+            row.cells[0].text = contents[0]
         parameter["source_kind"] = "static"
         parameter["binding"] = {
             "kind": "table_column", "source_ref": reference, "column": "value",
@@ -124,9 +136,14 @@ def _indexed_evidence(core: dict) -> dict:
         evidence.append({
             "evidence_id": f"question.table.{number}", "kind": "embedded_table",
             "source_ref": reference, "source_file": "inputs/inventory.docx",
-            "labels": [], "sha256": "a" * 64, "size_bytes": 64,
-            "rows": [["value"], *[[value] for value in values]], "profile": {},
+            "labels": [], "rows": rows, "profile": {},
         })
+    source = root / "inputs/inventory.docx"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    document.save(source)
+    catalog = build_input_catalog(source, work_dir=root)
+    for item, block in zip(evidence, catalog.blocks, strict=True):
+        item.update(sha256=block.sha256, size_bytes=source.stat().st_size)
     return {"evidence": evidence}
 
 
@@ -266,11 +283,13 @@ def test_modeler_requests_typed_model_ir_and_retries_complete_contract(tmp_path:
     from app.guidance.model_ir import ModelIR
 
     llm = StubLLM([{"model_id": "incomplete"}, _blocked_ir()])
+    problem_spec = ProblemSpec(
+        task_summary="Estimate the model.",
+        subproblems=[_subproblem()],
+    )
+    write_source_preflight(tmp_path, problem_spec)
     result = asyncio.run(LLMModeler(llm).model(
-        problem_spec=ProblemSpec(
-            task_summary="Estimate the model.",
-            subproblems=[_subproblem()],
-        ),
+        problem_spec=problem_spec,
         task={},
         work_dir=tmp_path,
     ))
@@ -304,14 +323,16 @@ def test_modeler_retries_operator_graph_architecture_without_variables(
         invalid["subproblems"][0]["variables"] = []
     llm = StubLLM([invalid, valid])
 
+    problem_spec = ProblemSpec(
+        task_summary="Estimate the grouped model.",
+        subproblems=[_subproblem(subproblem["subproblem_id"])],
+    )
+    write_source_preflight(tmp_path, problem_spec)
     result = asyncio.run(LLMModeler(
         llm,
         available_operator_ids=sorted({item["operator_id"] for item in subproblem["operators"]}),
     ).model(
-        problem_spec=ProblemSpec(
-            task_summary="Estimate the grouped model.",
-            subproblems=[_subproblem(subproblem["subproblem_id"])],
-        ),
+        problem_spec=problem_spec,
         task={},
         work_dir=tmp_path,
     ))
@@ -351,6 +372,7 @@ def test_modeler_and_reviser_receive_the_same_architecture_contract(tmp_path: Pa
         task_summary="Build an evidence-bound model.",
         subproblems=[_subproblem(objective="Estimate the result.")],
     )
+    write_source_preflight(tmp_path, problem_spec)
     initial_llm = StubLLM(_blocked_ir())
     asyncio.run(LLMModeler(initial_llm).model(
         problem_spec=problem_spec,
@@ -405,25 +427,29 @@ def test_modeler_and_reviser_receive_the_same_architecture_contract(tmp_path: Pa
 
 
 def test_modeler_preserves_long_problem_context_and_evidence_profile(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    from app.artifacts.evidence_profile import build_evidence_profile
     from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
     task_summary = "common physical premise: four operators per robot. " + "A" * 2000
+    source = tmp_path / "data/input.xlsx"
+    source.parent.mkdir(parents=True)
+    workbook = Workbook()
+    workbook.active.append(["value"])
+    workbook.active.append([1])
+    workbook.save(source)
+    evidence_profile = build_evidence_profile(tmp_path).model_dump(mode="json")
     llm = StubLLM(_blocked_ir())
+    problem_spec = ProblemSpec(
+        task_summary=task_summary,
+        subproblems=[_subproblem(objective="Estimate output.")],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
     asyncio.run(LLMModeler(llm).model(
-        problem_spec=ProblemSpec(
-            task_summary=task_summary,
-            subproblems=[_subproblem(objective="Estimate output.")],
-        ),
-        evidence_profile={"evidence": [{
-            "evidence_id": "upload.file.1",
-            "kind": "uploaded_file",
-            "source_ref": "data/input.xlsx",
-            "source_file": "data/input.xlsx",
-            "labels": [],
-            "sha256": "a" * 64,
-            "size_bytes": 1,
-        }]},
+        problem_spec=problem_spec,
+        evidence_profile=evidence_profile,
         task={},
         work_dir=tmp_path,
     ))
@@ -486,17 +512,19 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
             )],
         }],
     )
-    evidence_profile = _indexed_evidence(core)
+    evidence_profile = _indexed_evidence(core, tmp_path)
     llm = StubLLM([draft, core, constraints])
 
+    problem_spec = ProblemSpec(
+        task_summary="A shared physical multiplier applies to every subproblem.",
+        subproblems=[_subproblem(objective="Revise the plan.")],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
     asyncio.run(LLMModeler(
         llm,
         available_operator_ids=["optimization.milp"],
     ).revise(
-        problem_spec=ProblemSpec(
-            task_summary="A shared physical multiplier applies to every subproblem.",
-            subproblems=[_subproblem(objective="Revise the plan.")],
-        ),
+        problem_spec=problem_spec,
         previous_model_ir=previous_model,
         review=review,
         evidence_profile=evidence_profile,
@@ -573,7 +601,7 @@ def test_modeler_scopes_review_payload_to_target_subproblem() -> None:
             )],
             "revision_checks": [],
             "mathematical_checks": [],
-            "source_corrections": [],
+            "source_conflicts": [],
         }
     ]
 
@@ -740,18 +768,20 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
         "constraints": indexed["constraints"],
     }
 
-    evidence_profile = _indexed_evidence(core)
+    evidence_profile = _indexed_evidence(core, tmp_path)
+    problem_spec = ProblemSpec(
+        task_summary="Forecast demand before optimizing inventory.",
+        subproblems=[_subproblem(
+            "finite_inventory_policy",
+            objective="Produce a forecast-bound policy.",
+        )],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
     model_ir = asyncio.run(LLMModeler(
         StubLLM([architecture, core, constraints]),
         available_operator_ids=["forecast.test", "optimization.milp"],
     ).model(
-        problem_spec=ProblemSpec(
-            task_summary="Forecast demand before optimizing inventory.",
-            subproblems=[_subproblem(
-                "finite_inventory_policy",
-                objective="Produce a forecast-bound policy.",
-            )],
-        ),
+        problem_spec=problem_spec,
         evidence_profile=evidence_profile,
         task={},
         work_dir=tmp_path,
@@ -861,6 +891,11 @@ def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
     from app.guidance.contracts import ProblemSpec
 
     llm = StubLLM(_blocked_ir())
+    problem_spec = ProblemSpec(
+        task_summary="Build an executable model.",
+        subproblems=[_subproblem(objective="Optimize the plan.")],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile={"evidence": []})
     asyncio.run(LLMModeler(
         llm,
         available_operator_ids=[
@@ -868,10 +903,7 @@ def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
             "optimization.milp",
         ],
     ).model(
-        problem_spec=ProblemSpec(
-            task_summary="Build an executable model.",
-            subproblems=[_subproblem(objective="Optimize the plan.")],
-        ),
+        problem_spec=problem_spec,
         evidence_profile={"evidence": []},
         task={},
         work_dir=tmp_path,
@@ -892,14 +924,16 @@ def test_modeler_generates_each_subproblem_separately_and_merges_contracts(tmp_p
         _blocked_ir("slice-one", "problem1"),
         _blocked_ir("slice-two", "problem2"),
     ])
+    problem_spec = ProblemSpec(
+        task_summary="Build two independent models.",
+        subproblems=[
+            _subproblem("problem1", objective="Estimate output one."),
+            _subproblem("problem2", objective="Estimate output two."),
+        ],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile={"evidence": []})
     result = asyncio.run(LLMModeler(llm).model(
-        problem_spec=ProblemSpec(
-            task_summary="Build two independent models.",
-            subproblems=[
-                _subproblem("problem1", objective="Estimate output one."),
-                _subproblem("problem2", objective="Estimate output two."),
-            ],
-        ),
+        problem_spec=problem_spec,
         evidence_profile={"evidence": []},
         task={},
         work_dir=tmp_path,
@@ -926,31 +960,33 @@ def test_modeler_isolates_subproblem_contract_failure_and_continues(
         "{invalid problem1 attempt two",
         _blocked_ir("slice-two", "problem2"),
     ])
+    problem_spec = ProblemSpec(
+        task_summary="Build two independent models.",
+        subproblems=[
+            _subproblem(
+                "problem1",
+                objective="Estimate output one.",
+                required_fact_ids=["fact.shared_input"],
+            ),
+            _subproblem(
+                "problem2",
+                objective="Estimate output two.",
+                required_fact_ids=["fact.shared_input"],
+            ),
+        ],
+        locked_facts=[{
+            "fact_id": "fact.shared_input",
+            "statement": "The shared input equals one.",
+            "source_refs": ["inputs/problem.txt#paragraph-1"],
+            "subproblem_ids": ["problem1", "problem2"],
+            "semantic_key": "shared.input",
+            "value": 1,
+            "unit": "unit",
+        }],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile={"evidence": []})
     result = asyncio.run(LLMModeler(llm).model(
-        problem_spec=ProblemSpec(
-            task_summary="Build two independent models.",
-            subproblems=[
-                _subproblem(
-                    "problem1",
-                    objective="Estimate output one.",
-                    required_fact_ids=["fact.shared_input"],
-                ),
-                _subproblem(
-                    "problem2",
-                    objective="Estimate output two.",
-                    required_fact_ids=["fact.shared_input"],
-                ),
-            ],
-            locked_facts=[{
-                "fact_id": "fact.shared_input",
-                "statement": "The shared input equals one.",
-                "source_refs": ["inputs/problem.txt#paragraph-1"],
-                "subproblem_ids": ["problem1", "problem2"],
-                "semantic_key": "shared.input",
-                "value": 1,
-                "unit": "unit",
-            }],
-        ),
+        problem_spec=problem_spec,
         evidence_profile={"evidence": []},
         task={},
         work_dir=tmp_path,
@@ -1009,7 +1045,7 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
         ],
         "constraints": indexed["constraints"],
     }
-    evidence_profile = _indexed_evidence(core)
+    evidence_profile = _indexed_evidence(core, tmp_path)
     responses = [draft, core, constraints]
     if retry_wrong_family:
         invalid = json.loads(json.dumps(draft))
@@ -1017,14 +1053,16 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
         responses.insert(0, invalid)
     llm = StubLLM(responses)
 
+    problem_spec = ProblemSpec(
+        task_summary="Optimize a generic finite inventory system.",
+        subproblems=[_subproblem(objective="Minimize total cost.")],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
     result = asyncio.run(LLMModeler(
         llm,
         available_operator_ids=["optimization.milp"],
     ).model(
-        problem_spec=ProblemSpec(
-            task_summary="Optimize a generic finite inventory system.",
-            subproblems=[_subproblem(objective="Minimize total cost.")],
-        ),
+        problem_spec=problem_spec,
         evidence_profile=evidence_profile,
         task={},
         work_dir=tmp_path,
@@ -1269,19 +1307,21 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
         ],
         "constraints": indexed["constraints"],
     }
-    evidence_profile = _indexed_evidence(core)
+    evidence_profile = _indexed_evidence(core, tmp_path)
     invalid_core = deepcopy(core)
     invalid_core["parameters"][0]["index_sets"] = ["unknown_period"]
     llm = StubLLM([draft, invalid_core, core, constraints])
 
+    problem_spec = ProblemSpec(
+        task_summary="Optimize a generic finite inventory system.",
+        subproblems=[_subproblem(objective="Minimize total cost.")],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
     result = asyncio.run(LLMModeler(
         llm,
         available_operator_ids=["optimization.milp"],
     ).model(
-        problem_spec=ProblemSpec(
-            task_summary="Optimize a generic finite inventory system.",
-            subproblems=[_subproblem(objective="Minimize total cost.")],
-        ),
+        problem_spec=problem_spec,
         evidence_profile=evidence_profile,
         task={},
         work_dir=tmp_path,
@@ -1354,11 +1394,13 @@ def test_model_reviewer_keeps_blocked_model_unassessed_without_provider_call(tmp
     from app.guidance.model_ir import ModelIR
 
     llm = StubLLM({})
+    problem_spec = ProblemSpec(
+        task_summary="Estimate the model.",
+        subproblems=[_subproblem()],
+    )
+    write_source_preflight(tmp_path, problem_spec, profile={"evidence": []})
     review = asyncio.run(LLMModelReviewer(llm).review(
-        problem_spec=ProblemSpec(
-            task_summary="Estimate the model.",
-            subproblems=[_subproblem()],
-        ),
+        problem_spec=problem_spec,
         model_ir=ModelIR.model_validate(_blocked_ir()),
         evidence_profile={"evidence": []},
         task={},

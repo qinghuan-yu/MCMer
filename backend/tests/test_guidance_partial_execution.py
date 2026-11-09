@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from source_preflight_fixtures import bind_approved_source, write_source_preflight
+
 
 @pytest.mark.parametrize(
     ("coverage_status", "expected_status"),
@@ -67,6 +69,48 @@ def _mixed_model_ir() -> dict:
     return payload
 
 
+def _bind_execution_source(root, approved):
+    """为库存夹具登记实际标量来源；只补证据映射，保留原数值和约束。"""
+    from app.artifacts.input_catalog import build_input_catalog
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.model_ir import ModelIR
+
+    payload = approved.approved_model_ir.model_dump(mode="json")
+    inventory = next(item for item in payload["subproblems"] if item["subproblem_id"] == "finite_inventory_policy")
+    parameters = inventory["execution_components"][0]["model"]["parameters"]
+    text = "Inventory inputs: " + "; ".join(
+        f"{parameter['id']} {value['coordinates']} = {value['value']}"
+        for parameter in parameters for value in parameter["values"]
+    )
+    source = root / "inventory_inputs.txt"
+    source.write_text(text, encoding="utf-8")
+    catalog = build_input_catalog(source, work_dir=root, extracted_text=text)
+    source_ref = catalog.blocks[0].source_ref
+    facts, bindings = [], []
+    for index, parameter in enumerate(parameters):
+        parameter["source_fact_ids"] = []
+        for value_index, value in enumerate(parameter["values"]):
+            fact_id = f"inventory.{parameter['id']}.{value_index}"
+            facts.append({"fact_id": fact_id, "statement": f"{parameter['id']} {value['coordinates']} equals {value['value']}.",
+                          "semantic_key": fact_id, "value": value["value"], "unit": "",
+                          "source_refs": [source_ref], "subproblem_ids": ["finite_inventory_policy"]})
+            parameter["source_fact_ids"].append(fact_id)
+            value["source_ref"] = f"problem_spec.json#locked_facts/{fact_id}"
+            bindings.append({"fact_id": fact_id, "model_paths": [f"/execution_components/0/model/parameters/{index}"]})
+    inventory["fact_bindings"] = bindings
+    for data in inventory["data"]:
+        data["source_ref"] = source_ref
+    spec = ProblemSpec(task_summary="Run the finite inventory fixture with registered parameter values.",
+                       subproblems=[{"id": item["subproblem_id"],
+                                     "required_fact_ids": [fact["fact_id"] for fact in facts]
+                                     if item["subproblem_id"] == "finite_inventory_policy" else [],
+                                     "required_uncertainty_ids": [], "depends_on_subproblem_ids": []}
+                                    for item in payload["subproblems"]], locked_facts=facts)
+    model = ModelIR.model_validate(payload)
+    return bind_approved_source(root, approved.model_copy(update={"approved_model_ir": model}),
+                                problem_spec=spec, model_ir=model)
+
+
 def test_model_review_derives_partial_status_from_per_subproblem_decisions():
     from app.guidance.model_review_contracts import (ModelIRReview)
 
@@ -108,6 +152,7 @@ def test_calculation_executes_approved_subset_and_preserves_blocked_results(
         "executable_subproblem_ids": ["finite_inventory_policy"],
         "approved_model_ir": _mixed_model_ir(),
     })
+    approved = _bind_execution_source(tmp_path, approved)
     approved_path = tmp_path / "approved_model_ir.json"
     approved_path.write_text(approved.model_dump_json(indent=2), encoding="utf-8")
     registry = build_default_operator_registry()
@@ -154,6 +199,7 @@ def test_verification_reports_partial_coverage_without_failing_execution(
         "executable_subproblem_ids": ["finite_inventory_policy"],
         "approved_model_ir": _mixed_model_ir(),
     })
+    approved = _bind_execution_source(tmp_path, approved)
     approved_path = tmp_path / "approved_model_ir.json"
     approved_path.write_text(approved.model_dump_json(indent=2), encoding="utf-8")
     registry = build_default_operator_registry()
@@ -245,6 +291,8 @@ def test_model_review_stage_projects_per_subproblem_decisions(
             },
         ],
     }), encoding="utf-8")
+    from app.guidance.contracts import ProblemSpec
+    write_source_preflight(tmp_path, ProblemSpec.model_validate_json((tmp_path / "problem_spec.json").read_text(encoding="utf-8")))
     submission_path = tmp_path / "model_review_submission.json"
     submission_path.write_text(
         ModelReviewSubmission(model_ir_ref=model_path.name).model_dump_json(),
@@ -365,6 +413,7 @@ def test_runtime_failure_in_one_subproblem_isolates_and_preserves_independent_ve
         ],
         approved_model_ir=model_ir,
     )
+    approved = _bind_execution_source(tmp_path, approved)
     approved_path = tmp_path / "approved_model_ir.json"
     approved_path.write_text(approved.model_dump_json(indent=2), encoding="utf-8")
 

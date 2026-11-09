@@ -11,6 +11,7 @@ from app.guidance.modeler import LLMModeler
 from app.guidance.model_ir_compiler import ModelIRCompiler
 from app.guidance.operator_catalog import build_default_operator_registry
 from app.guidance.operator_runtimes.milp import solve_milp
+from source_preflight_fixtures import write_source_preflight
 
 
 def _term(variable, coefficient):
@@ -21,7 +22,12 @@ def _constant(value):
     return {"kind": "constant", "value": value}
 
 
-def _case():
+def _case(root):
+    from docx import Document
+
+    from app.artifacts.evidence_profile import build_evidence_profile
+    from app.artifacts.input_catalog import build_input_catalog
+
     fixture = Path(__file__).parent / "fixtures/model_ir/generic_multiperiod_inventory.json"
     architecture = json.loads(fixture.read_text(encoding="utf-8"))
     sub = architecture["subproblems"][0]
@@ -33,7 +39,7 @@ def _case():
     core = {
         "index_sets": [{"id": "period", "values": ["now"]}],
         "parameters": [{"id": name, "source_kind": "static", "binding": {
-            "kind": "table_range", "source_ref": "input_catalog.json#table-1",
+            "kind": "table_range", "source_ref": "inputs/training.docx#table-1",
             "row_start": row, "row_stop": row + 1, "column_start": 0, "column_stop": 1,
             "order": "row_major",
         }} for row, name in enumerate(("training_cost", "idle_cost"))],
@@ -50,17 +56,21 @@ def _case():
             {"id": "staff_balance", "terms": [_term("trainers", _constant(1)), _term("idle", _constant(1))], "relation": "equal", "rhs": _constant(20)},
         ],
     }
-    evidence = {"evidence": [{
-        "evidence_id": "tariffs", "source_ref": "input_catalog.json#table-1",
-        "source_file": "inputs/training.docx", "sha256": "a" * 64, "size_bytes": 10,
-        "kind": "embedded_table", "rows": [[10], [5]],
-    }]}
+    source = root / "inputs/training.docx"
+    source.parent.mkdir(parents=True)
+    document = Document()
+    table = document.add_table(rows=2, cols=1)
+    table.cell(0, 0).text = "10"
+    table.cell(1, 0).text = "5"
+    document.save(source)
+    build_input_catalog(source, work_dir=root)
+    evidence = build_evidence_profile(root).model_dump(mode="json")
     return architecture, core, formulation, evidence
 
 
 @pytest.mark.parametrize("omit_on_first_attempt", [False, True])
 def test_joint_formulation_charges_each_defined_training_participant(tmp_path, omit_on_first_attempt):
-    architecture, core, formulation, evidence = _case()
+    architecture, core, formulation, evidence = _case(tmp_path)
 
     class StageLLM:
         attempts = 0
@@ -79,6 +89,7 @@ def test_joint_formulation_charges_each_defined_training_participant(tmp_path, o
     spec = ProblemSpec(task_summary="Train exactly 20 learners; charge 10 per learner and trainer, 5 per idle staff; 20 existing staff; capacity 10 learners per trainer.", subproblems=[{
         "id": "training", "required_fact_ids": [], "required_uncertainty_ids": [], "depends_on_subproblem_ids": [],
     }])
+    write_source_preflight(tmp_path, spec, profile=evidence)
     llm = StageLLM()
     model = asyncio.run(LLMModeler(llm, available_operator_ids=["optimization.milp"]).model(
         problem_spec=spec, evidence_profile=evidence, task={}, work_dir=tmp_path,

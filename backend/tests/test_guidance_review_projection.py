@@ -6,6 +6,7 @@ import pytest
 
 from app.guidance.contracts import ProblemSpec
 from app.guidance.model_ir import ModelIR
+from source_preflight_fixtures import write_source_preflight
 from app.guidance.model_review_contracts import (
     ApprovedModelIR,
     ModelIRReview,
@@ -65,6 +66,7 @@ def test_review_projection_retains_independent_approval_and_blocks_dependency_cl
 
     model_ir, problem_spec = _case()
     review = _review(model_ir, repair_status)
+    _, preflight = write_source_preflight(tmp_path, problem_spec)
 
     class Reviewer:
         async def review(self, **kwargs):
@@ -98,7 +100,7 @@ def test_review_projection_retains_independent_approval_and_blocks_dependency_cl
         review=review, model_ir=model_ir, approved_model_ir=approved.approved_model_ir,
         problem_spec=problem_spec,
         evidence_profile=load_evidence_profile(tmp_path).model_dump(mode="json"),
-        input_catalog=None, revision_request=None,
+        input_catalog=None, revision_request=None, source_preflight=preflight,
     )
     assert ModelIR.model_validate_json(
         (tmp_path / "model_ir.json").read_text(encoding="utf-8")
@@ -120,6 +122,9 @@ def test_execution_projection_rejects_revision_workflow_status():
 
 def test_pipeline_revises_from_review_then_executes_independent_final_projection(tmp_path):
     from app.guidance.pipeline import GuidancePipeline
+    from app.guidance.model_review_validation import bind_model_review
+    from app.guidance.recovery import load_source_preflight
+    from app.artifacts.evidence_profile import load_evidence_profile
 
     model_ir, problem_spec = _case()
     review = _review(model_ir)
@@ -144,16 +149,27 @@ def test_pipeline_revises_from_review_then_executes_independent_final_projection
 
         async def run(self, *, input_path, output_path, **kwargs):
             calls.append((self.name, input_path.name if input_path else None))
+            payload = self.payload
+            if self.name == "source":
+                write_source_preflight(tmp_path, problem_spec)
             if self.name == "model_review":
                 (tmp_path / "model_review.json").write_text(review.model_dump_json(), encoding="utf-8")
+                bound = approved.model_copy(update={"review_binding": bind_model_review(
+                    review=review, model_ir=model_ir, approved_model_ir=projection,
+                    problem_spec=problem_spec, input_catalog=None,
+                    evidence_profile=load_evidence_profile(tmp_path).model_dump(mode="json"),
+                    revision_request=None, source_preflight=load_source_preflight(tmp_path, problem_spec),
+                )})
+                payload = bound.model_dump_json()
             if self.name == "calculation":
                 persisted = ApprovedModelIR.model_validate_json(input_path.read_text(encoding="utf-8"))
                 assert persisted.executable_subproblem_ids == ["independent"]
-            output_path.write_text(self.payload, encoding="utf-8")
+            output_path.write_text(payload, encoding="utf-8")
             return output_path
 
     pipeline = GuidancePipeline(
         decomposition_stage=Stage("decomposition", problem_spec.model_dump_json()),
+        source_stage=Stage("source", problem_spec.model_dump_json()),
         modeling_stage=Stage("modeling", model_ir.model_dump_json()),
         model_review_stage=Stage("model_review", approved.model_dump_json()),
         calculation_stage=Stage("calculation", "{}"),
@@ -166,7 +182,7 @@ def test_pipeline_revises_from_review_then_executes_independent_final_projection
 
     asyncio.run(run())
     assert calls == [
-        ("decomposition", None), ("modeling", "problem_spec.json"),
+        ("decomposition", None), ("source", "problem_spec.json"), ("modeling", "problem_spec.json"),
         ("model_review", "model_review_submission.json"),
         ("modeling", "revision_request.json"),
         ("model_review", "model_review_submission.json"),

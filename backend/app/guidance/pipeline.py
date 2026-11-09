@@ -1,4 +1,4 @@
-"""Six-stage orchestration for high-trust modeling guidance."""
+"""来源解释先于建模的文件合同流水线。"""
 
 from __future__ import annotations
 
@@ -15,8 +15,7 @@ from app.guidance.failure_contracts import (
 from app.guidance.model_review_contracts import (ApprovedModelIR, ModelIRReview, ModelReviewSubmission)
 from app.guidance.model_review_validation import bind_model_review, load_review_catalog
 from app.guidance.model_ir import (BlockedModelIR, ModelIR)
-from app.guidance.recovery import invalidate_stage_outputs, load_source_adjudication
-from app.guidance.source_resolution import resolve_problem_sources
+from app.guidance.recovery import invalidate_stage_outputs, load_source_preflight
 from app.schemas.response import (
     TaskProgress,
     TaskResult,
@@ -37,12 +36,13 @@ class GuidanceStage(Protocol):
 
 
 class GuidancePipeline:
-    """Run six file-contract stages without owning their business logic."""
+    """按来源、数学和执行职责调度文件合同阶段。"""
 
     def __init__(
         self,
         *,
         decomposition_stage: GuidanceStage,
+        source_stage: GuidanceStage,
         modeling_stage: GuidanceStage,
         model_review_stage: GuidanceStage,
         calculation_stage: GuidanceStage,
@@ -51,6 +51,7 @@ class GuidancePipeline:
     ) -> None:
         self._stages = {
             "decomposition": decomposition_stage,
+            "source": source_stage,
             "modeling": modeling_stage,
             "model_review": model_review_stage,
             "calculation": calculation_stage,
@@ -65,6 +66,11 @@ class GuidancePipeline:
         yield _progress(task_id, "decomposition", 0.10, "正在拆解题目与数据")
         problem_path = await self._run_stage(
             "decomposition", task_id, task, None, root / "problem_spec.json"
+        )
+
+        yield _progress(task_id, "source", 0.18, "正在独立核对来源解释与题意")
+        problem_path = await self._run_stage(
+            "source", task_id, task, problem_path, root / "problem_spec.json"
         )
 
         yield _progress(task_id, "modeling", 0.25, "正在生成建模方案")
@@ -213,50 +219,28 @@ def _preserve_revision_request(root: Path, model_path: Path) -> Path:
     review = ModelIRReview.model_validate_json(
         (root / "model_review.json").read_text(encoding="utf-8")
     )
-    proposals = [
-        (decision.subproblem_id, correction)
-        for decision in review.subproblem_reviews for correction in decision.source_corrections
-    ]
-    if (root / "source_resolution.json").exists():
-        raise ValueError("source correction is limited to one revision pass")
-    adjudication = load_source_adjudication(root, problem_spec)
+    if (root / "revision_request.json").exists():
+        raise ValueError("mathematical revision is limited to one revision pass")
+    source_preflight = load_source_preflight(root, problem_spec)
     initial_model = ModelIR.model_validate_json(model_path.read_text(encoding="utf-8"))
     approved_path = root / "approved_model_ir.json"
     approved = _load_approved_model(approved_path) if approved_path.is_file() else None
-    bound_adjudication = (
-        approved.review_binding.source_adjudication_sha256
-        if approved is not None and approved.review_binding is not None else None
-    )
-    input_catalog = _read_json(root / "input_catalog.json") or None
     evidence_profile = _read_json(root / "evidence_profile.json")
-    if adjudication is not None or bound_adjudication is not None:
-        if adjudication is None or approved is None or approved.review_binding is None:
-            raise ValueError("source permission requires its unchanged initial review binding")
-        current_binding = bind_model_review(
-            review=review, model_ir=initial_model, approved_model_ir=approved.approved_model_ir,
-            problem_spec=problem_spec,
-            evidence_profile=EvidenceProfile.model_validate(evidence_profile).model_dump(mode="json"),
-            input_catalog=load_review_catalog(root),
-            revision_request=None, source_adjudication=adjudication,
-        )
-        if current_binding != approved.review_binding:
-            raise ValueError("initial source permission review binding is stale")
-    resolution = None
-    if proposals:
-        if adjudication is None:
-            raise ValueError("source correction requires independent source adjudication permission")
-        problem_spec, resolution = resolve_problem_sources(
-            problem_spec, proposals,
-            input_catalog=input_catalog,
-            evidence_profile=evidence_profile,
-            work_dir=root,
-            adjudication=adjudication,
-        )
-    # 所有纠正先验证，再保存旧字节；原审核始终指向它实际审核过的题意。
+    if approved is None or approved.review_binding is None:
+        raise ValueError("mathematical revision requires its unchanged initial review binding")
+    current_binding = bind_model_review(
+        review=review, model_ir=initial_model, approved_model_ir=approved.approved_model_ir,
+        problem_spec=problem_spec,
+        evidence_profile=EvidenceProfile.model_validate(evidence_profile).model_dump(mode="json"),
+        input_catalog=load_review_catalog(root), revision_request=None, source_preflight=source_preflight,
+    )
+    if current_binding != approved.review_binding:
+        raise ValueError("initial review binding or source preflight permission is stale")
+    # 数学修订只保留它审核过的已裁决题意，不能重开来源应用。
     initial_problem_path = root / "problem_spec_initial.json"
     initial_problem_path.write_bytes(original_problem_bytes)
     initial_model_path = root / "model_ir_initial.json"
-    initial_model_path.write_text(initial_model.model_dump_json(indent=2), encoding="utf-8")
+    initial_model_path.write_bytes(model_path.read_bytes())
     if approved_path.is_file():
         (root / "approved_model_ir_initial.json").write_bytes(approved_path.read_bytes())
 
@@ -266,11 +250,6 @@ def _preserve_revision_request(root: Path, model_path: Path) -> Path:
     })
     path = root / "revision_request.json"
     path.write_text(review.model_dump_json(indent=2), encoding="utf-8")
-    if resolution is not None:
-        (root / "source_resolution.json").write_text(
-            resolution.model_dump_json(indent=2), encoding="utf-8", newline="\n",
-        )
-        problem_path.write_text(problem_spec.model_dump_json(indent=2), encoding="utf-8", newline="\n")
     return path
 
 

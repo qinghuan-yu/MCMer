@@ -9,6 +9,8 @@ from app.guidance.contracts import ProblemSpec
 from app.guidance.model_ir import ModelIR
 from app.guidance.model_review_contracts import ModelIRReview
 from app.guidance.reviewer import LLMModelReviewer
+from app.artifacts.input_catalog import build_input_catalog
+from source_preflight_fixtures import write_source_preflight
 
 
 def _case():
@@ -87,6 +89,7 @@ def _targets(llm):
 
 def test_one_truncated_review_preserves_independent_review_and_local_diagnostic(tmp_path):
     problem, model = _case()
+    write_source_preflight(tmp_path, problem)
     llm = ReviewLLM(failures={"source"})
     review = _review(tmp_path, llm, problem, model)
 
@@ -106,6 +109,7 @@ def test_one_truncated_review_preserves_independent_review_and_local_diagnostic(
 
 def test_review_cache_tracks_target_and_transitive_dependencies_not_other_models(tmp_path):
     problem, model = _case()
+    write_source_preflight(tmp_path, problem)
     llm = ReviewLLM()
     assert _review(tmp_path, llm, problem, model).status == "approved"
     assert len(llm.calls) == 3
@@ -125,7 +129,8 @@ def test_review_cache_changes_when_original_source_file_changes(tmp_path):
     problem, model = _case()
     source = tmp_path / "question.txt"
     source.write_text("Original problem.", encoding="utf-8")
-    catalog = {"source_file": "question.txt", "source_sha256": "0" * 64, "blocks": []}
+    catalog = build_input_catalog(source, work_dir=tmp_path, extracted_text="Original problem.").model_dump(mode="json")
+    write_source_preflight(tmp_path, problem, catalog=catalog)
     llm = ReviewLLM()
     _review(tmp_path, llm, problem, model, input_catalog=catalog)
     assert len(llm.calls) == 3
@@ -133,12 +138,19 @@ def test_review_cache_changes_when_original_source_file_changes(tmp_path):
     _review(tmp_path, llm, problem, model, input_catalog=catalog)
     assert llm.calls == []
     source.write_text("Changed original problem.", encoding="utf-8")
+    stale = _review(tmp_path, llm, problem, model, input_catalog=catalog)
+    assert stale.status == "blocked"
+    assert all(item.assessment_status == "not_assessed" for item in stale.subproblem_reviews)
+    assert llm.calls == []
+    catalog = build_input_catalog(source, work_dir=tmp_path, extracted_text="Changed original problem.").model_dump(mode="json")
+    write_source_preflight(tmp_path, problem, catalog=catalog)
     _review(tmp_path, llm, problem, model, input_catalog=catalog)
     assert _targets(llm) == ["source", "dependent", "independent"]
 
 
 def test_missing_mathematical_requirement_is_retried_then_left_unassessed(tmp_path):
     problem, model = _case()
+    write_source_preflight(tmp_path, problem)
     llm = ReviewLLM(omitted_math={("source", "$formulation")})
     review = _review(tmp_path, llm, problem, model)
     assert review.subproblem_reviews[0].assessment_status == "not_assessed"
@@ -148,6 +160,7 @@ def test_missing_mathematical_requirement_is_retried_then_left_unassessed(tmp_pa
 
 def test_revision_reuses_unchanged_approved_reviews_and_supplies_exact_local_requirements(tmp_path):
     problem, model = _case()
+    write_source_preflight(tmp_path, problem)
     llm = ReviewLLM()
     previous = _review(tmp_path, llm, problem, model).model_dump(mode="json")
     previous.pop("status")

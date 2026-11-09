@@ -40,7 +40,8 @@ def model_source_snapshots(root: Path, model) -> dict[str, str | None]:
         item.source_ref for subproblem in model.subproblems
         if subproblem.execution_status == "solvable" for item in subproblem.data
     ]
-    references.extend(name for name in ("input_catalog.json", "evidence_profile.json") if (root / name).is_file())
+    references.extend(name for name in ("input_catalog.json", "evidence_profile.json", "source_preflight.json")
+                      if (root / name).is_file())
     return file_snapshots(root, references)
 
 
@@ -53,61 +54,29 @@ def generated_figure_paths(value) -> list[str]:
     return []
 
 
-def load_source_adjudication(root: Path, problem_spec):
-    """重载独立语义许可，始终对照提议产生时的题意和当前原件。"""
+def load_source_preflight(root: Path, problem_spec):
+    """建模和审核都必须重载完整的前置来源许可，旧可选纠正记录不能替代。"""
     from app.guidance.contracts import ProblemSpec
-    from app.guidance.source_adjudication import (
-        SourceAdjudicationRecord,
-        validate_source_adjudication,
-    )
+    from app.guidance.source_resolution import SourcePreflightRecord, validate_source_preflight
 
-    path = root / "source_adjudication.json"
+    path = root / "source_preflight.json"
     if not path.is_file():
-        return None
-    previous_path = root / "problem_spec_initial.json"
-    prior_problem = (
-        ProblemSpec.model_validate_json(previous_path.read_text(encoding="utf-8"))
-        if previous_path.is_file() else problem_spec
-    )
+        raise ValueError("complete source preflight permission is missing")
+    record = SourcePreflightRecord.model_validate_json(path.read_text(encoding="utf-8"))
+    previous_path = root / "problem_spec_original.json"
+    if previous_path.is_file():
+        original = ProblemSpec.model_validate_json(previous_path.read_text(encoding="utf-8"))
+        if original != record.original_problem_spec:
+            raise ValueError("source preflight original problem snapshot changed")
     profile_path = root / "evidence_profile.json"
     if not profile_path.is_file():
-        raise ValueError("source adjudication is missing its evidence snapshot")
+        raise ValueError("source preflight is missing its evidence snapshot")
     catalog_path = root / "input_catalog.json"
-    record = SourceAdjudicationRecord.model_validate_json(path.read_text(encoding="utf-8"))
-    validate_source_adjudication(
-        record, problem_spec=prior_problem,
+    validate_source_preflight(
+        record, problem_spec=problem_spec,
         input_catalog=json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.is_file() else None,
         evidence_profile=json.loads(profile_path.read_text(encoding="utf-8")),
         work_dir=root,
-    )
-    return record
-
-
-def load_source_resolution(root: Path, problem_spec):
-    """读取已提交的来源裁决，并从保留快照和原件重新核验。"""
-    from app.guidance.contracts import ProblemSpec
-    from app.guidance.source_resolution import SourceResolutionRecord, validate_source_resolution
-
-    path = root / "source_resolution.json"
-    if not path.is_file():
-        return None
-    previous_path = root / "problem_spec_initial.json"
-    profile_path = root / "evidence_profile.json"
-    if not previous_path.is_file() or not profile_path.is_file():
-        raise ValueError("source resolution is missing its preserved problem or evidence snapshot")
-    adjudication = load_source_adjudication(root, problem_spec)
-    if adjudication is None:
-        raise ValueError("source resolution requires independent source adjudication permission")
-    record = SourceResolutionRecord.model_validate_json(path.read_text(encoding="utf-8"))
-    catalog_path = root / "input_catalog.json"
-    validate_source_resolution(
-        record,
-        previous_problem_spec=ProblemSpec.model_validate_json(previous_path.read_text(encoding="utf-8")),
-        problem_spec=problem_spec,
-        input_catalog=json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.is_file() else None,
-        evidence_profile=json.loads(profile_path.read_text(encoding="utf-8")),
-        work_dir=root,
-        adjudication=adjudication,
     )
     return record
 
@@ -153,8 +122,8 @@ class RecoveryCheckpoint:
 
 
 STAGE_OUTPUTS = {
-    "decomposition": ("problem_spec.json", "problem_spec_initial.json", "source_resolution.json",
-                      "source_adjudication.json",
+    "decomposition": ("problem_spec.json", "source_resolution.json", "source_adjudication.json"),
+    "source": ("source_preflight.json", "problem_spec_original.json", "problem_spec_initial.json",
                       "model_ir_initial.json", "approved_model_ir_initial.json", "revision_request.json"),
     "modeling": ("model_ir.json",),
     "model_review": ("model_review.json", "approved_model_ir.json"),

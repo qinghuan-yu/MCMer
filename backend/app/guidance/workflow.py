@@ -13,7 +13,8 @@ from app.guidance.model_ir_compiler import ModelIRCompiler
 from app.guidance.operator_catalog import DEFAULT_OPERATOR_IDS, build_default_operator_registry
 from app.guidance.operator_execution import OperatorGraphExecutor
 from app.guidance.pipeline import GuidancePipeline
-from app.guidance.stages import CalculationStage, DecompositionStage, ModelingStage, ModelReviewStage
+from app.guidance.stages import CalculationStage, DecompositionStage, ModelingStage, ModelReviewStage, SourceStage
+from app.guidance.source_adjudication import LLMSourceAdjudicator
 from app.guidance.guidance_stage import GuidanceStage
 from app.guidance.verification_stage import ResultVerificationStage
 from app.schemas.enums import TaskStatus
@@ -54,6 +55,11 @@ def build_default_guidance_pipeline(workflow_mode: str = "standard") -> Guidance
             request_timeout=guidance_budget.decomposition,
             structure_token_budget=guidance_budget.structure_tokens,
             facts_token_budget=guidance_budget.facts_tokens,
+        )),
+        source_stage=SourceStage(source_adjudicator=LLMSourceAdjudicator(
+            review_llm,
+            request_timeout=guidance_budget.review,
+            token_budget=guidance_budget.review_tokens,
         )),
         modeling_stage=ModelingStage(modeler=LLMModeler(
             modeling_llm,

@@ -427,10 +427,12 @@ def _shared_fact_generation():
 
 def test_modeler_reuses_a_fact_in_architecture_parameters_and_constraints(tmp_path):
     from app.guidance.modeler import LLMModeler
+    from source_preflight_fixtures import write_source_preflight
 
     spec, architecture, core, constraints = _shared_fact_generation()
     original_spec = deepcopy(spec.model_dump(mode="json"))
     llm = _StageLLM(architecture, core, constraints)
+    write_source_preflight(tmp_path, spec)
 
     model = asyncio.run(LLMModeler(
         llm, available_operator_ids=["data.scalar_constant", "optimization.milp"],
@@ -463,6 +465,7 @@ def test_modeler_reuses_a_fact_in_architecture_parameters_and_constraints(tmp_pa
 def test_modeler_rejects_unknown_and_cross_scope_facts_at_every_stage(tmp_path, stage, invalid_fact):
     from app.guidance.contracts import ProblemSpec
     from app.guidance.modeler import LLMModeler
+    from source_preflight_fixtures import write_source_preflight
 
     spec, architecture, core, constraints = _shared_fact_generation()
     payload = spec.model_dump(mode="json")
@@ -483,6 +486,7 @@ def test_modeler_rejects_unknown_and_cross_scope_facts_at_every_stage(tmp_path, 
     }[stage]
     node["source_fact_ids"].append(invalid_fact)
     llm = _StageLLM(architecture, core, constraints)
+    write_source_preflight(tmp_path, spec)
 
     result = asyncio.run(LLMModeler(
         llm, available_operator_ids=["data.scalar_constant", "optimization.milp"],
@@ -502,6 +506,9 @@ def test_modeler_rejects_unknown_and_cross_scope_facts_at_every_stage(tmp_path, 
 @pytest.mark.parametrize("cover_at", ["architecture", "indexed_core", "indexed_constraints", None])
 def test_final_coverage_uses_union_of_all_stages(tmp_path, cover_at):
     from app.guidance.modeler import LLMModeler
+    from app.artifacts.input_catalog import build_input_catalog
+    from docx import Document
+    from source_preflight_fixtures import write_source_preflight
 
     spec, architecture, core, constraints = _shared_fact_generation()
     nodes = {
@@ -513,12 +520,22 @@ def test_final_coverage_uses_union_of_all_stages(tmp_path, cover_at):
     core["parameters"][0]["binding"] = {
         "kind": "table_column", "source_ref": "inputs/problem.docx#table-1", "column": "value",
     }
+    source = tmp_path / "inputs/problem.docx"
+    source.parent.mkdir(parents=True)
+    doc = Document()
+    doc.add_paragraph("Demand is 3 units.")
+    table = doc.add_table(rows=2, cols=1)
+    table.cell(0, 0).text, table.cell(1, 0).text = "value", "3"
+    doc.save(source)
+    catalog = build_input_catalog(source, work_dir=tmp_path, extracted_text="Demand is 3 units.")
+    block = next(item for item in catalog.blocks if item.kind == "table")
     evidence = {"evidence": [{
         "evidence_id": "table1", "kind": "embedded_table",
         "source_ref": "inputs/problem.docx#table-1", "source_file": "inputs/problem.docx",
-        "labels": [], "sha256": "a" * 64, "size_bytes": 10,
-        "rows": [["value"], [3]], "profile": {},
+        "labels": [], "sha256": block.sha256, "size_bytes": source.stat().st_size,
+        "rows": block.rows, "profile": {},
     }]}
+    write_source_preflight(tmp_path, spec, profile=evidence)
     for stage, node in nodes.items():
         node["source_fact_ids"] = ["fact.parameter"] if stage == cover_at else []
 
@@ -538,6 +555,7 @@ def test_final_coverage_uses_union_of_all_stages(tmp_path, cover_at):
 def test_rejected_core_attempt_cannot_satisfy_final_coverage(tmp_path):
     from app.guidance.contracts import ProblemSpec
     from app.guidance.modeler import LLMModeler
+    from source_preflight_fixtures import write_source_preflight
 
     spec, architecture, core, constraints = _shared_fact_generation()
     payload = spec.model_dump(mode="json")
@@ -550,6 +568,7 @@ def test_rejected_core_attempt_cannot_satisfy_final_coverage(tmp_path):
     rejected_core["parameters"][0]["source_fact_ids"].append("fact.rule")
     rejected_core["parameters"][0]["index_sets"] = ["missing_period"]
     llm = _StageLLM(architecture, [rejected_core, core], constraints)
+    write_source_preflight(tmp_path, spec)
 
     result = asyncio.run(LLMModeler(
         llm, available_operator_ids=["data.scalar_constant", "optimization.milp"],

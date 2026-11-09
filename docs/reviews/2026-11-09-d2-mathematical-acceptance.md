@@ -290,6 +290,22 @@ Q4首发prompt81200＋completion32768＝113968，全部completion用于reasoning
 
 现状摘要：核心链本轮抵达真实初审与一次模型修订，停于数学声明截断；最大风险是可选来源纠正使错误歧义直接成为数学义务。本次新增有界恢复工具和独立审计、更新记录，生产不变；完成D2.2c.4f，父项D2.2c.4/D2.2/D2.3不勾选。下一项D2.2e.1待明确批准后先RED，后续仍需实际模型、执行和独立费用核对。
 
+## D2.2e：获批来源前置与调用方直接迁移
+
+用户明确批准“按D2.2e实施来源前置”。当前核心链为拆题→完整来源解释→独立语义复核→一次来源应用→全新建模→数学审核及一次数学修订→执行/验证/指导。新增统一`SourcePreflightRecord`绑定原始题意、已裁决题意、catalog/profile、原件、完整解释和复核；所有UNC必须有序覆盖，纠正与保留歧义均需许可。拒绝/未评估隔离所有owner及后继，独立分支保留。
+
+### RED、GREEN与迁移证据
+
+- **来源RED**：`test_guidance_source_preflight.py::test_uncertainties_cannot_receive_permission_from_empty_optional_proposals`在旧实现中以两个UNC、空proposals/checks获得许可，出现`DID NOT RAISE ValueError`（1 failed/0.48秒）。`test_guidance_source_adjudication.py::test_interpretation_receives_existing_fact_ids_to_avoid_accidental_overwrite`实际请求缺少保留事实ID，`None != ['F_COST']`（1 failed/3.30秒）。这两次RED没有JUnit文件，失败输出保存在会话；`.local/d22e-source-red/`与`.local/d22e-source-reserved-red/`仅为运行夹具及合同诊断，不冒充测试日志。
+- **审核RED**：`.local/d22e-review-red.xml`与`.local/d22e-review-contract-red.xml`复现无许可仍可数学批准、旧来源撤回/纠正合同可接受及旧绑定未失效。新数学审核只处理模型缺陷，晚发现来源冲突必须blocked；没有第二次来源应用或有据撤回双轨。6项GREEN见`.local/d22e-review-final.xml`。
+- **流程RED**：`.local/d22e-flow-red.xml`及`.local/d22e-flow-stage-red.xml`约束来源必须在建模之前、旧许可缺失拒绝、共享后继阻断和独立分支保留。`.local/d22e-flow-concurrent-red.xml`进一步复现两个SourceStage并发提交同一未变题意，预期一次拒绝而实际零次；许可提交改为排他创建，不能覆盖既有记录。
+- **独立完整性审查**：新增9项反例，含3项实际内存来源与许可不一致、5项await期间调用方修改输入、1项并发重复提交。建模/审核入口深拷贝并重新验证实际输入，来源与审核摘要进入缓存和执行绑定。最终9项全部通过，`.local/d22e-independent-integrity-green.xml`（3.55秒）。前8项RED输出同样保存在会话，没有另造XML证据。
+- **GREEN**：来源三文件66 passed/3.83秒；新flow、完整链和9项完整性共32 passed/4.79秒，`.local/d22e-flow-integrity-green.xml`。旧阶段/恢复51项、部分执行/编译24项通过。集成用例真实运行SourceStage→模型→两次数学审核→仅独立分支计算，验证晚发现来源冲突不触发来源重解释。
+- **REFACTOR**：统一来源边界直接替换旧可选纠正责任；`pipeline/stages/workflow/recovery`、Modeler、Reviewer及数学合同直接迁移，无兼容双轨。旧无前置来源摘要的模型/审核缓存失效，原始拆题字节与全部历史实验保留。原数学数值、独立分支、50/51条数学义务及来源原件夹具保持真实约束，没有自动补许可绕过测试。
+- **完整验证命令**：在`backend`运行根`.venv`的`python -B -m pytest tests -q --tb=short -p no:cacheprovider --basetemp=.local/d22e-full-suite --junitxml=.local/d22e-full-suite.xml`，**862 passed/27.84秒**，含Guidance/Polish/core。公共API、前端和求解器未改，不重复无关前端构建。
+
+现状摘要：核心流已迁移到来源前置；最大剩余风险是两次语言判断与数学审核的实际语义可靠性。D2.2e.1–2完成，下一项D2.2e.3为全新来源→建模→审核/执行的有界Flash实测和独立数学裁决。当前本轮新增API为0，D2累计仍为103次已启动、3821455已知tokens、5次未知、总量null；D2.2c.4及D2.2/D2.3保持未验收。
+
 ## D2.3：独立数学核对与剩余出口
 
 `.local/d2_independent_math.py` 与 `.local/d2-independent-preparation-20261109/` 从原DOCX核对19段、5表和SHA，原件总需求4065。6个正反例通过，旧Q1真实解独立重算7625，与既有DP参考一致。

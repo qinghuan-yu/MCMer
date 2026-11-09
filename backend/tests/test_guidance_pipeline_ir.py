@@ -84,6 +84,8 @@ class RecordingStage:
 
     async def run(self, *, task_id: str, task: dict, input_path: Path | None, output_path: Path) -> Path:
         self.calls.append((self.name, input_path.name if input_path else None))
+        if self.name == "source":
+            return input_path
         if self.name == "model_review":
             review = {
                 "model_id": self.payload["model_id"],
@@ -135,7 +137,24 @@ class SequentialReviewStage:
             }],
         }
         (output_path.parent / "model_review.json").write_text(json.dumps(review), encoding="utf-8")
-        output_path.write_text(json.dumps(_approved_payload(status)), encoding="utf-8")
+        approved = _approved_payload(status)
+        if status == "revision_required":
+            from app.guidance.contracts import ProblemSpec
+            from app.guidance.model_ir import ModelIR
+            from app.guidance.model_review_contracts import ModelIRReview
+            from app.guidance.model_review_validation import bind_model_review
+            from source_preflight_fixtures import write_source_preflight
+
+            root = output_path.parent
+            spec = ProblemSpec.model_validate_json((root / "problem_spec.json").read_text(encoding="utf-8"))
+            spec, permission = write_source_preflight(root, spec)
+            approved["review_binding"] = bind_model_review(
+                review=ModelIRReview.model_validate(review), model_ir=ModelIR.model_validate(_blocked_ir()),
+                approved_model_ir=ModelIR.model_validate(approved["approved_model_ir"]), problem_spec=spec,
+                evidence_profile={"schema_version": "1.0", "evidence": []}, input_catalog=None,
+                revision_request=None, source_preflight=permission,
+            ).model_dump(mode="json")
+        output_path.write_text(json.dumps(approved), encoding="utf-8")
         return output_path
 
 
@@ -151,12 +170,13 @@ def _run_pipeline(pipeline, task_id: str, work_dir: Path) -> list[dict]:
     return asyncio.run(collect())
 
 
-def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path: Path) -> None:
+def test_guidance_pipeline_runs_the_seven_business_stages_in_strict_order(tmp_path: Path) -> None:
     from app.guidance.pipeline import GuidancePipeline
 
     calls: list[tuple[str, str | None]] = []
     pipeline = GuidancePipeline(
         decomposition_stage=RecordingStage("decomposition", calls),
+        source_stage=RecordingStage("source", calls),
         modeling_stage=RecordingStage("modeling", calls, _blocked_ir()),
         model_review_stage=RecordingStage("model_review", calls, _approved_payload()),
         calculation_stage=RecordingStage("calculation", calls),
@@ -168,6 +188,7 @@ def test_guidance_pipeline_runs_the_six_business_stages_in_strict_order(tmp_path
 
     assert calls == [
         ("decomposition", None),
+        ("source", "problem_spec.json"),
         ("modeling", "problem_spec.json"),
         ("model_review", "model_review_submission.json"),
         ("calculation", "approved_model_ir.json"),
@@ -184,6 +205,7 @@ def test_guidance_pipeline_executes_and_verifies_partial_approval(
     calls: list[tuple[str, str | None]] = []
     pipeline = GuidancePipeline(
         decomposition_stage=RecordingStage("decomposition", calls),
+        source_stage=RecordingStage("source", calls),
         modeling_stage=RecordingStage("modeling", calls, _blocked_ir()),
         model_review_stage=RecordingStage(
             "model_review",
@@ -199,6 +221,7 @@ def test_guidance_pipeline_executes_and_verifies_partial_approval(
 
     assert calls == [
         ("decomposition", None),
+        ("source", "problem_spec.json"),
         ("modeling", "problem_spec.json"),
         ("model_review", "model_review_submission.json"),
         ("calculation", "approved_model_ir.json"),
@@ -260,6 +283,7 @@ def test_guidance_pipeline_allows_exactly_one_model_ir_revision(tmp_path: Path) 
         decomposition_stage=RecordingStage(
             "decomposition", calls, {"task_summary": "Analyze the problem."},
         ),
+        source_stage=RecordingStage("source", calls),
         modeling_stage=SequentialModelingStage(calls),
         model_review_stage=SequentialReviewStage(calls),
         calculation_stage=RecordingStage("calculation", calls),
@@ -271,6 +295,7 @@ def test_guidance_pipeline_allows_exactly_one_model_ir_revision(tmp_path: Path) 
 
     assert calls == [
         ("decomposition", None),
+        ("source", "problem_spec.json"),
         ("modeling", "problem_spec.json"),
         ("model_review", "model_review_submission.json"),
         ("modeling", "revision_request.json"),
@@ -304,6 +329,7 @@ def test_blocked_review_emits_three_layer_guidance_without_running_calculation(
     calls: list[tuple[str, str | None]] = []
     pipeline = GuidancePipeline(
         decomposition_stage=RecordingStage("decomposition", calls),
+        source_stage=RecordingStage("source", calls),
         modeling_stage=RecordingStage("modeling", calls, _blocked_ir()),
         model_review_stage=RecordingStage(
             "model_review",
@@ -319,6 +345,7 @@ def test_blocked_review_emits_three_layer_guidance_without_running_calculation(
 
     assert calls == [
         ("decomposition", None),
+        ("source", "problem_spec.json"),
         ("modeling", "problem_spec.json"),
         ("model_review", "model_review_submission.json"),
     ]
@@ -443,6 +470,7 @@ def test_modeling_failure_contracts_bound_objectives_for_brief_problem_specs(
     calls: list[tuple[str, str | None]] = []
     pipeline = GuidancePipeline(
         decomposition_stage=RecordingStage("decomposition", calls, problem_spec),
+        source_stage=RecordingStage("source", calls),
         modeling_stage=FailingModelingStage(),
         model_review_stage=RecordingStage("model_review", calls),
         calculation_stage=RecordingStage("calculation", calls),
@@ -471,7 +499,7 @@ def test_modeling_failure_contracts_bound_objectives_for_brief_problem_specs(
     assert result["data"]["status"] == "blocked"
 
 
-def test_default_pipeline_uses_six_stages_timeout_budget_and_default_operators() -> None:
+def test_default_pipeline_uses_seven_stages_timeout_budget_and_default_operators() -> None:
     from app.core.workflow_budget import resolve_workflow_budget
     from app.guidance.operator_catalog import DEFAULT_OPERATOR_IDS
     from app.guidance.workflow import build_default_guidance_pipeline
@@ -480,6 +508,7 @@ def test_default_pipeline_uses_six_stages_timeout_budget_and_default_operators()
 
     assert list(pipeline._stages) == [
         "decomposition",
+        "source",
         "modeling",
         "model_review",
         "calculation",

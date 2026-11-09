@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,8 @@ from app.guidance.modeling_context import (
     MODEL_IR_ARCHITECTURE_CONTRACT,
     _compact_problem_spec_for_modeling,
 )
-from app.guidance.recovery import load_source_resolution
+from app.guidance.recovery import canonical_digest, load_source_preflight
+from app.guidance.source_resolution import validate_source_preflight
 
 
 class LLMModeler:
@@ -130,6 +132,10 @@ async def _request_subproblem_models(
     indexed_core_token_budget: ContractTokenBudget | None = None,
     indexed_constraints_token_budget: ContractTokenBudget | None = None,
 ) -> ModelIR:
+    problem_spec = problem_spec.model_copy(deep=True)
+    previous_model_ir = previous_model_ir.model_copy(deep=True) if previous_model_ir is not None else None
+    review = review.model_copy(deep=True) if review is not None else None
+    evidence_profile = deepcopy(evidence_profile)
     system_prompt = f"{stage_duty}\n{MODEL_IR_ARCHITECTURE_CONTRACT}"
     compact_spec = _compact_problem_spec_for_modeling(problem_spec)
     compact_subproblems = compact_spec["subproblems"]
@@ -155,15 +161,24 @@ async def _request_subproblem_models(
     )
     revision_targets = {
         identifier for identifier, decision in decisions.items()
-        if decision.status == "revision_required" and (decision.required_revisions or decision.source_corrections)
+        if decision.status == "revision_required" and decision.required_revisions
     }
-    source_resolution = load_source_resolution(artifact_dir, problem_spec) if previous_model_ir is not None else None
-    source_affected = set(source_resolution.affected_subproblem_ids) if source_resolution is not None else set()
-    revision_targets.update(source_affected)
-    pending_source_ids = (
-        unresolved_source_subproblem_ids(review, problem_spec, source_resolution)
-        if review is not None else set()
-    )
+    try:
+        source_preflight = load_source_preflight(artifact_dir, problem_spec)
+        catalog_path = artifact_dir / "input_catalog.json"
+        validate_source_preflight(
+            source_preflight, problem_spec=problem_spec,
+            input_catalog=json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.is_file() else None,
+            evidence_profile=evidence_profile, work_dir=artifact_dir,
+        )
+        pending_source_ids = set(source_preflight.blocked_subproblem_ids)
+        source_failure = "source interpretation did not receive independent permission"
+    except (OSError, ValueError) as exc:
+        source_preflight = None
+        pending_source_ids = {item.id for item in problem_spec.subproblems}
+        source_failure = f"source preflight unavailable: {exc}"
+    if review is not None:
+        pending_source_ids.update(unresolved_source_subproblem_ids(review, problem_spec))
     revision_targets.update(pending_source_ids)
     changed_models: set[str] = set()
     dependency_closures: dict[str, set[str]] = {}
@@ -213,7 +228,7 @@ async def _request_subproblem_models(
                 identifier: generated_by_id[identifier].subproblems[0].model_dump(mode="json")
                 for identifier in sorted(dependency_ids)
             },
-            **({"source_resolution": source_resolution.model_dump(mode="json")} if source_resolution is not None else {}),
+            "source_preflight_sha256": canonical_digest(source_preflight) if source_preflight else None,
         }
         request_name = (
             agent_name
@@ -222,7 +237,7 @@ async def _request_subproblem_models(
         )
         try:
             if target_id in pending_source_ids:
-                raise ValueError("source interpretation obligations must be resolved before model generation")
+                raise ValueError(source_failure)
             blocked_dependencies = [
                 identifier for identifier in sorted(dependency_ids)
                 if isinstance(generated_by_id[identifier].subproblems[0], BlockedModelIR)
@@ -268,8 +283,7 @@ async def _request_subproblem_models(
             )
         # 中间模型即使内容相同，其上游发生变化也须继续使后继模型失效。
         if previous_model_ir is not None and (
-            target_id in source_affected
-            or changed_dependencies
+            changed_dependencies
             or generated_by_id[target_id].subproblems[0] != previous_by_id[target_id]
         ):
             changed_models.add(target_id)

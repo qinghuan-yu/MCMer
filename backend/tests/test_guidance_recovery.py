@@ -179,14 +179,30 @@ def test_new_merged_model_identity_does_not_discard_unchanged_operator_results(t
 
 
 def test_blocked_recompilation_does_not_keep_previous_execution_plan(tmp_path):
-    from app.guidance.model_review_contracts import ApprovedModelIR
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.model_review_contracts import ApprovedModelIR, ModelIRReview
+    from app.guidance.model_review_validation import bind_model_review
     from app.guidance.stages import CalculationStage
+    from source_preflight_fixtures import write_source_preflight
 
     model = _scalar_model()
     _execute(tmp_path, model, _registry([], set()))
+    spec = ProblemSpec(task_summary="Recompile the same approved model.", subproblems=[{
+        "id": item.subproblem_id, "required_fact_ids": [], "required_uncertainty_ids": [],
+        "depends_on_subproblem_ids": [],
+    } for item in model.subproblems])
+    spec, permission = write_source_preflight(tmp_path, spec)
+    review = ModelIRReview(model_id=model.model_id, subproblem_reviews=[{
+        "subproblem_id": item.subproblem_id, "status": "approved",
+    } for item in model.subproblems])
     (tmp_path / "approved_model_ir.json").write_text(ApprovedModelIR(
         review_status="approved", model_id=model.model_id,
         executable_subproblem_ids=[item.subproblem_id for item in model.subproblems], approved_model_ir=model,
+        review_binding=bind_model_review(
+            review=review, model_ir=model, approved_model_ir=model, problem_spec=spec,
+            evidence_profile={"schema_version": "1.0", "evidence": []}, input_catalog=None,
+            revision_request=None, source_preflight=permission,
+        ),
     ).model_dump_json(), encoding="utf-8")
     registry = OperatorRegistry()
     asyncio.run(CalculationStage(compiler=ModelIRCompiler(registry=registry),
@@ -268,6 +284,8 @@ def test_model_generation_follows_dependency_order_and_propagates_failure(tmp_pa
         _subproblem("child", depends_on_subproblem_ids=["parent"]),
         _subproblem("parent"), _subproblem("independent"),
     ])
+    from source_preflight_fixtures import write_source_preflight
+    write_source_preflight(tmp_path, spec)
     result = asyncio.run(LLMModeler(CountingLLM()).model(
         problem_spec=spec, evidence_profile={"evidence": []}, task={}, work_dir=tmp_path,
     ))
@@ -313,6 +331,7 @@ def test_failed_pipeline_retry_removes_old_publishable_artifacts(tmp_path):
     calls = []
     pipeline = GuidancePipeline(
         decomposition_stage=RecordingStage("decomposition", calls),
+        source_stage=RecordingStage("source", calls),
         modeling_stage=RecordingStage("modeling", calls, _blocked_ir()),
         model_review_stage=FailingReview(), calculation_stage=RecordingStage("calculation", calls),
         result_verification_stage=RecordingStage("verification", calls),

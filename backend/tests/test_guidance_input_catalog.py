@@ -155,7 +155,11 @@ def test_docx_embedded_tables_become_ordered_available_evidence(tmp_path: Path) 
 
 
 def test_modeling_rejects_missing_claim_for_available_evidence(tmp_path: Path) -> None:
+    from app.artifacts.evidence_profile import build_evidence_profile
+    from app.artifacts.input_catalog import build_input_catalog
+    from app.guidance.contracts import ProblemSpec
     from app.guidance.stages import ModelingStage
+    from source_preflight_fixtures import write_source_preflight
 
     (tmp_path / "problem_spec.json").write_text(json.dumps({
         "task_summary": "附件1已提供成本表。",
@@ -187,19 +191,13 @@ def test_modeling_rejects_missing_claim_for_available_evidence(tmp_path: Path) -
             "note": "Matched embedded table evidence.",
         }],
     }, ensure_ascii=False), encoding="utf-8")
-    (tmp_path / "evidence_profile.json").write_text(json.dumps({
-        "schema_version": "1.0",
-        "evidence": [{
-            "evidence_id": "question.table.1",
-            "kind": "embedded_table",
-            "source_ref": "inputs/question/problem.docx#table-1",
-            "source_file": "inputs/question/problem.docx",
-            "labels": ["附件1"],
-            "sha256": "a" * 64,
-            "size_bytes": 1,
-            "rows": [["类别", "价格"], ["容器艇", "200"]],
-        }],
-    }, ensure_ascii=False), encoding="utf-8")
+    source = tmp_path / "inputs/question/problem.docx"
+    source.parent.mkdir(parents=True)
+    _embedded_attachment_problem(source)
+    build_input_catalog(source, work_dir=tmp_path)
+    profile = build_evidence_profile(tmp_path).model_dump(mode="json")
+    spec = ProblemSpec.model_validate_json((tmp_path / "problem_spec.json").read_text(encoding="utf-8"))
+    write_source_preflight(tmp_path, spec, profile=profile)
 
     with pytest.raises(ValueError, match="available evidence.*附件1"):
         asyncio.run(ModelingStage(modeler=MissingAvailableEvidenceModeler()).run(

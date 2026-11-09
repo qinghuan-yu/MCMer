@@ -636,16 +636,17 @@ def test_calculation_stage_blocks_missing_operator_without_program_generation(tm
     from app.guidance.operator_execution import OperatorGraphExecutor
     from app.guidance.operators import OperatorRegistry
     from app.guidance.stages import CalculationStage
+    from source_preflight_fixtures import bind_approved_source
 
     model_ir = _model_ir()
     approved_path = tmp_path / "approved_model_ir.json"
     approved_path.write_text(
-        ApprovedModelIR(
+        bind_approved_source(tmp_path, ApprovedModelIR(
             review_status="approved",
             model_id=model_ir.model_id,
             executable_subproblem_ids=["problem1"],
             approved_model_ir=model_ir,
-        ).model_dump_json(indent=2),
+        )).model_dump_json(indent=2),
         encoding="utf-8",
     )
     registry = OperatorRegistry()

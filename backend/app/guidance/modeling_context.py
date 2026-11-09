@@ -31,10 +31,7 @@ def _subproblem_review_payload(
     decision = decisions[0]
     payload = review.model_dump(mode="json")
     decision_payload = decision.model_dump(mode="json")
-    # 题意义务由来源裁决拥有；Modeler只接收仍需实现的数学模型修复。
-    decision_payload["required_revisions"] = [
-        item.model_dump(mode="json") for item in decision.required_revisions if item.kind == "model"
-    ]
+    # 题意已在建模前裁决；审核合同只包含真实数学修复义务。
     payload["subproblem_reviews"] = [decision_payload]
     payload["status"] = decision.status
     payload["executable_subproblem_ids"] = (

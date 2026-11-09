@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.guidance.contracts import VerificationReport
+from app.guidance.contracts import ProblemSpec, VerificationReport
+from source_preflight_fixtures import write_source_preflight
 from app.guidance.model_review_contracts import ModelIRReview, ModelReviewSubmission
 from app.guidance.stages import ModelReviewStage
 from app.guidance.verification_stage import ResultVerificationStage
@@ -61,6 +62,7 @@ def _review_case(root: Path, alter=None) -> VerificationReport:
     text = "Conserve stock from five initial items. Purchases arrive one period later and require a paid setup activity."
     source.write_text(text, encoding="utf-8")
     build_input_catalog(source, work_dir=root, extracted_text=text)
+    write_source_preflight(root, ProblemSpec.model_validate_json((root / "problem_spec.json").read_text(encoding="utf-8")))
     submission = root / "model_review_submission.json"
     submission.write_text(
         ModelReviewSubmission(model_ir_ref="model_ir.json").model_dump_json(), encoding="utf-8",

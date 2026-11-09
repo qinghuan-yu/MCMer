@@ -1,121 +1,76 @@
-import asyncio
+"""来源冲突与大量真实数学义务并存时，既不漏许可也不丢缺陷。"""
+
 import json
 
+from app.guidance.contracts import ProblemSpec
 from app.guidance.model_review_validation import unresolved_source_subproblem_ids
-from app.guidance.reviewer import LLMModelReviewer
-from test_guidance_source_adjudication_reviewer import AdjudicatedReviewLLM, _inputs
-from test_guidance_source_resolution import _correction
-from test_guidance_source_reviewer import SourceReviewLLM, _fixture, _review
+from app.guidance.source_resolution import resolve_problem_sources
+from app.guidance.stages import _build_reviewed_model_projection
+from test_guidance_source_preflight import _checks, _decisions
+from test_guidance_source_resolution import SOURCE, _case
+from test_guidance_source_reviewer import SourceReviewLLM, _models, _prepare, _review, _save_preflight
 
 
-def _cost_correction(spec):
-    return _correction(
-        correction_id="confirm_cost", target_kind="locked_fact", target_id="F_COST",
-        replacement_fact=spec.locked_facts[0].model_dump(mode="json"),
-        evidence=[{"source_ref": "cost.csv", "quote": "training\t8"}],
-    )
-
-
-class FullRevisionReviewLLM(AdjudicatedReviewLLM):
-    async def chat(self, **kwargs):
-        response = await super().chat(**kwargs)
-        decision = json.loads(response.choices[0].message.content)
-        if decision.get("subproblem_id") == "sp1":
-            decision["required_revisions"] = [{
-                "requirement_id": f"model_requirement_{index}", "kind": "model", "basis_refs": [],
-                "description": f"Retain independently identified model requirement {index}.",
-                "acceptance_criteria": f"Verify the corresponding mathematical change {index}.",
-            } for index in range(50)]
-            self.original_requirements = decision["required_revisions"]
-            response.choices[0].message.content = json.dumps(decision)
-        return response
-
-
-def test_semantic_rejection_at_revision_capacity_preserves_independent_results(tmp_path):
-    spec, model, catalog, profile = _inputs(tmp_path)
-    llm = FullRevisionReviewLLM("contradicted")
-
-    review = asyncio.run(LLMModelReviewer(llm).review(
-        problem_spec=spec, model_ir=model, input_catalog=catalog, evidence_profile=profile,
-        task={}, work_dir=tmp_path,
-    ))
-
-    assert review.subproblem_reviews[-1].status == "approved"
+def test_late_source_conflict_preserves_fifty_independent_math_requirements(tmp_path):
+    spec, model, _, catalog, profile = _prepare(tmp_path)
+    llm = SourceReviewLLM(revisions=50, conflict={
+        "basis_refs": ["problem_spec.json#locked_facts/F_COST"],
+        "rationale": "A newly discovered source conflict needs a separate future source decision.",
+    })
+    review = _review(tmp_path, llm, spec, model, catalog, profile)
+    first = review.subproblem_reviews[0]
+    assert first.status == "blocked" and first.assessment_status == "reviewed"
+    assert len(first.required_revisions) == 50
+    assert [item.requirement_id for item in first.required_revisions] == [
+        f"model_requirement_{index}" for index in range(50)
+    ]
+    assert all(item.kind == "model" for item in first.required_revisions)
+    assert first.source_conflicts and first.mathematical_checks
     assert unresolved_source_subproblem_ids(review, spec) == {"sp1", "sp2", "downstream"}
-    assert review.subproblem_reviews[0].status != "approved"
-    assert review.subproblem_reviews[0].source_corrections == []
-    requirements = review.subproblem_reviews[0].required_revisions
-    assert [item.model_dump(mode="json") for item in requirements if item.kind == "model"] == llm.original_requirements
-    source_requirements = [item for item in requirements if item.kind == "source"]
-    assert len(source_requirements) == 1
-    assert source_requirements[0].basis_refs == ["problem_spec.json#uncertainties/UNC001"]
-    assert review.subproblem_reviews[0].assessment_status == "reviewed"
-    assert review.subproblem_reviews[0].mathematical_checks
-    assert not (tmp_path / "source_resolution.json").exists()
-
-
-class MixedSourceReviewLLM(AdjudicatedReviewLLM):
-    def __init__(self, supported):
-        super().__init__("contradicted")
-        self.supported = supported
-
-    async def chat(self, **kwargs):
-        response = await super().chat(**kwargs)
-        decision = json.loads(response.choices[0].message.content)
-        if decision.get("subproblem_id") == "sp1":
-            decision["source_corrections"].append(self.supported.model_dump(mode="json"))
-        elif "checks" in decision:
-            decision["checks"].append({
-                "correction_id": self.supported.correction_id, "status": "supported",
-                "evidence": [item.model_dump(mode="json") for item in self.supported.evidence],
-                "rationale": "The original table gives the proposed training unit cost.",
-            })
-        response.choices[0].message.content = json.dumps(decision)
-        return response
+    assert review.subproblem_reviews[-1].status == "approved"
 
 
 def test_supported_correction_cannot_clear_another_rejected_source_of_the_same_owner(tmp_path):
-    from app.guidance.source_adjudication import SourceAdjudicationRecord, supported_source_proposals
-    from app.guidance.source_resolution import resolve_problem_sources
-
-    spec, model, catalog, profile = _inputs(tmp_path)
-    supported = _cost_correction(spec)
-    review = _review(tmp_path, MixedSourceReviewLLM(supported), spec, model, catalog, profile)
-    record = SourceAdjudicationRecord.model_validate_json(
-        (tmp_path / "source_adjudication.json").read_text(encoding="utf-8")
-    )
-    assert review.subproblem_reviews[0].source_corrections == [supported]
-    assert supported_source_proposals(record) == [("sp1", supported)]
-    resolved, resolution = resolve_problem_sources(
-        spec, supported_source_proposals(record), adjudication=record,
+    original, catalog, profile = _case(tmp_path)
+    payload = original.model_dump(mode="json")
+    payload["uncertainties"].append({
+        "uncertainty_id": "UNC_IDLE", "statement": "Claimed ambiguity about idle maintenance.",
+        "source_refs": [SOURCE], "subproblem_ids": ["sp1"], "semantic_key": "idle_maintenance",
+        "candidate_values": ["every_idle_period", "never"], "unit": "",
+    })
+    payload["subproblems"][0]["required_uncertainty_ids"].append("UNC_IDLE")
+    original = ProblemSpec.model_validate(payload)
+    interpretation = _decisions(original)
+    interpretation.decisions[-1].rationale = "An unsupported claim of ambiguity in idle maintenance."
+    checks = _checks(interpretation)
+    checks.checks[-1].status = "contradicted"
+    checks.checks[-1].rationale = "The original source explicitly requires idle skilled modules to be maintained."
+    spec, record = resolve_problem_sources(
+        original, interpretation=interpretation, adjudication=checks,
         input_catalog=catalog, evidence_profile=profile, work_dir=tmp_path,
     )
-    assert unresolved_source_subproblem_ids(review, resolved, resolution) == {"sp1", "sp2", "downstream"}
-    assert review.subproblem_reviews[-1].status == "approved"
+    _save_preflight(tmp_path, spec, record, catalog, profile)
+    model = _models(spec)
+    llm = SourceReviewLLM()
+    review = _review(tmp_path, llm, spec, model, catalog, profile)
+    assert "F_CHARGE_BASIS" in [item.fact_id for item in spec.locked_facts]
+    assert "UNC_IDLE" in [item.uncertainty_id for item in spec.uncertainties]
+    assert record.blocked_subproblem_ids == ["sp1", "sp2", "downstream"]
+    assert [item["target_subproblem_id"] for item in llm.payloads] == ["independent"]
+    assert review.executable_subproblem_ids == ["independent"]
+    assert all(item.assessment_status == "not_assessed" for item in review.subproblem_reviews[:-1])
 
 
-class FinalProposalReviewLLM(SourceReviewLLM):
-    def __init__(self, proposal):
-        super().__init__()
-        self.proposal = proposal
-
-    async def chat(self, **kwargs):
-        response = await super().chat(**kwargs)
-        decision = json.loads(response.choices[0].message.content)
-        if decision.get("subproblem_id") == "sp1":
-            decision.update(status="revision_required", source_corrections=[self.proposal.model_dump(mode="json")])
-            response.choices[0].message.content = json.dumps(decision)
-        return response
-
-
-def test_final_review_new_proposal_preserves_initial_semantic_permission_bytes(tmp_path):
-    spec, model, revision, catalog, profile = _fixture(tmp_path, resolved=True)
-    original = (tmp_path / "source_adjudication.json").read_bytes()
-    llm = FinalProposalReviewLLM(_cost_correction(spec))
-
-    review = _review(tmp_path, llm, spec, model, catalog, profile, revision)
-
-    assert review.subproblem_reviews[0].source_corrections == [llm.proposal]
-    assert review.subproblem_reviews[0].status == "revision_required"
-    assert llm.adjudication_payloads == []
-    assert (tmp_path / "source_adjudication.json").read_bytes() == original
+def test_final_review_preserves_all_model_obligations_beyond_fifty(tmp_path):
+    spec, model, _, catalog, profile = _prepare(tmp_path)
+    initial = _review(tmp_path, SourceReviewLLM(revisions=51), spec, model, catalog, profile)
+    permission = (tmp_path / "source_preflight.json").read_bytes()
+    llm = SourceReviewLLM()
+    final = _review(tmp_path, llm, spec, model, catalog, profile, initial)
+    assert final.subproblem_reviews[0].status == "approved"
+    checks = final.subproblem_reviews[0].revision_checks
+    assert [item.requirement_id for item in checks] == [
+        item.requirement_id for item in initial.subproblem_reviews[0].required_revisions
+    ]
+    assert len(checks) == 51 and all(item.status == "accepted" for item in checks)
+    assert (tmp_path / "source_preflight.json").read_bytes() == permission

@@ -688,6 +688,10 @@ def test_modeler_slices_structured_facts_by_target_subproblem(tmp_path: Path) ->
     from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
     from test_guidance_fact_provenance import _architecture_payload
+    from app.artifacts.input_catalog import build_input_catalog
+    from app.guidance.source_resolution import SourceInterpretationResult, SourceAdjudicationResult
+    from source_preflight_fixtures import write_source_preflight
+    from docx import Document
 
     payload = _structured_problem_spec_payload()
     payload["locked_facts"].append({
@@ -722,9 +726,28 @@ def test_modeler_slices_structured_facts_by_target_subproblem(tmp_path: Path) ->
     first_model["subproblems"][0]["data"][0]["source_ref"] = "inputs/problem.docx#paragraph-2"
     first_model["subproblems"][0]["final_answers"][0]["evidence_ids"] = ["estimate"]
     llm = _StubLLM([first_model, _blocked_model("Q2")])
+    source = tmp_path / "inputs/problem.docx"
+    source.parent.mkdir(parents=True)
+    doc = Document()
+    for text in ("Modeling task.", "Each assembled unit requires four manipulators.", "Model one.", "Model two.", "Future demand must be forecast."):
+        doc.add_paragraph(text)
+    doc.save(source)
+    build_input_catalog(source, work_dir=tmp_path, extracted_text="Future demand must be forecast.")
+    spec = ProblemSpec.model_validate(payload)
+    evidence = [{"source_ref": "inputs/problem.docx#paragraph-5", "quote": "Future demand must be forecast."}]
+    interpretation = SourceInterpretationResult(decisions=[{
+        "uncertainty_id": "uncertainty.future_demand", "subproblem_ids": ["Q2"],
+        "status": "ambiguous", "replacement_fact": None, "evidence": evidence,
+        "rationale": "Future demand requires forecasting and is not specified as a fixed value.",
+    }])
+    adjudication = SourceAdjudicationResult(checks=[{
+        "uncertainty_id": "uncertainty.future_demand", "status": "supported", "evidence": evidence,
+        "rationale": "The original explicitly requires a forecast rather than giving future observations.",
+    }])
+    write_source_preflight(tmp_path, spec, interpretation=interpretation, adjudication=adjudication)
 
     result = asyncio.run(LLMModeler(llm, available_operator_ids=["data.scalar_constant"]).model(
-        problem_spec=ProblemSpec.model_validate(payload),
+        problem_spec=spec,
         evidence_profile={"evidence": []},
         task={},
         work_dir=tmp_path,
@@ -768,6 +791,7 @@ def test_modeling_stage_rejects_missing_fact_coverage(tmp_path: Path) -> None:
 
     from app.guidance.contracts import ProblemSpec
     from app.guidance.stages import ModelingStage
+    from source_preflight_fixtures import write_source_preflight
 
     problem_spec = ProblemSpec.model_validate(_fact_coverage_problem_spec_payload())
     (tmp_path / "problem_spec.json").write_text(
@@ -778,6 +802,7 @@ def test_modeling_stage_rejects_missing_fact_coverage(tmp_path: Path) -> None:
         json.dumps({"schema_version": "1.0", "evidence": []}),
         encoding="utf-8",
     )
+    write_source_preflight(tmp_path, problem_spec)
 
     with pytest.raises(ValueError, match="fact coverage mismatch"):
         asyncio.run(ModelingStage(modeler=_MissingFactBindingModeler()).run(

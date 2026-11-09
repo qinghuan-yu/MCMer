@@ -102,6 +102,7 @@ async def _request_single_subproblem_model(
     dependencies = {
         "upstream_models": slice_spec.get("dependency_models", {}),
         "previous_model": previous_model.model_dump(mode="json") if previous_model is not None else None,
+        "source_preflight_sha256": slice_spec.get("source_preflight_sha256"),
     }
 
     draft = await _request_model(
