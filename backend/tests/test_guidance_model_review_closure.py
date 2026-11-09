@@ -44,7 +44,7 @@ def test_approved_rereview_requires_complete_accepted_revision_evidence() -> Non
     accepted_check = RevisionCheckSpec(
         requirement_id="constraint-coverage",
         status="accepted",
-        model_paths=["/subproblems/0/objective"],
+        model_paths=["/objective"],
         rationale="The revised model exposes the requested objective.",
     )
     approved = ModelIRReview(
@@ -77,7 +77,7 @@ def test_approved_rereview_requires_complete_accepted_revision_evidence() -> Non
     nonexistent_payload = approved.model_dump(mode="json")
     nonexistent_payload["subproblem_reviews"][0]["revision_checks"][0][
         "model_paths"
-    ] = ["/subproblems/0/execution_components/0/model/constraints/99"]
+    ] = ["/execution_components/0/model/constraints/99"]
     nonexistent = ModelIRReview.model_validate(nonexistent_payload)
     with pytest.raises(ValueError, match="does not exist"):
         validate_model_review(nonexistent, model_ir, revision_request=revision_request)

@@ -562,6 +562,7 @@ def test_modeler_scopes_review_payload_to_target_subproblem() -> None:
         {
             "subproblem_id": "target_problem",
             "status": "revision_required",
+            "assessment_status": "reviewed",
             "assumption_checks": [],
             "blocking_issues": [],
             "required_revisions": [_revision_requirement(
@@ -1344,26 +1345,12 @@ def test_indexed_constraint_draft_normalizes_null_without_weakening_canonical() 
         IndexedLinearConstraint.model_validate(constraint_payload)
 
 
-def test_model_reviewer_receives_problem_and_model_ir_contracts(tmp_path: Path) -> None:
+def test_model_reviewer_keeps_blocked_model_unassessed_without_provider_call(tmp_path: Path) -> None:
     from app.guidance.reviewer import LLMModelReviewer
     from app.guidance.contracts import ProblemSpec
     from app.guidance.model_ir import ModelIR
 
-    llm = StubLLM({
-        "model_id": "operator-gap",
-        "identifiability": "blocked item is explicit",
-        "dimensional_consistency": "not applicable",
-        "data_sufficiency": "missing operator disclosed",
-        "computational_feasibility": "blocked honestly",
-        "subproblem_reviews": [{
-            "subproblem_id": "problem1",
-            "status": "blocked",
-            "assumption_checks": [],
-            "blocking_issues": [
-                "The compiler operator is not registered yet."
-            ],
-        }],
-    })
+    llm = StubLLM({})
     review = asyncio.run(LLMModelReviewer(llm).review(
         problem_spec=ProblemSpec(
             task_summary="Estimate the model.",
@@ -1375,11 +1362,10 @@ def test_model_reviewer_receives_problem_and_model_ir_contracts(tmp_path: Path) 
         work_dir=tmp_path,
     ))
 
-    payload = json.loads(llm.calls[0]["history"][1]["content"])
     assert review.status == "blocked"
-    assert payload["problem_spec"]["task_summary"] == "Estimate the model."
-    assert payload["model_ir"]["model_id"] == "operator-gap"
-    assert "model_spec" not in payload
+    assert review.subproblem_reviews[0].assessment_status == "not_assessed"
+    assert review.subproblem_reviews[0].blocking_issues == [_blocked_ir()["subproblems"][0]["blocking_reason"]]
+    assert llm.calls == []
 
 
 def test_model_reviewer_rejects_runtime_parameter_without_producing_operator(
@@ -1408,19 +1394,7 @@ def test_model_reviewer_rejects_runtime_parameter_without_producing_operator(
         "field_path": ["future_predictions"],
     }
     model_ir = ModelIR.model_validate(payload)
-    llm = StubLLM({
-        "model_id": model_ir.model_id,
-        "status": "approved",
-        "identifiability": "reviewed",
-        "dimensional_consistency": "reviewed",
-        "data_sufficiency": "reviewed",
-        "computational_feasibility": "reviewed",
-        "subproblem_reviews": [{
-            "subproblem_id": model_ir.subproblems[0].subproblem_id,
-            "status": "approved",
-            "assumption_checks": [],
-        }],
-    })
+    llm = StubLLM({})
 
     with pytest.raises(ValueError, match="indexed_runtime_source_unknown_artifact"):
         asyncio.run(LLMModelReviewer(llm).review(

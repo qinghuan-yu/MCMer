@@ -89,6 +89,7 @@ class LLMModeler:
             stage_duty=(
                 "你是数学建模 ModelIR 修订架构构建器。逐条处理 "
                 "model_review.subproblem_reviews[0].required_revisions，"
+                "若因上游模型变化重新构建本题，须依据最新 dependency_models 重新核对依赖关系；"
                 "并使用 previous_model_summary 理解旧路线和显式 assumptions。无法在现有数据和"
                 "算子能力下诚实修复的子问题才改为 blocked；不得通过虚构数据、参数或约束绕过审核。"
             ),
@@ -144,6 +145,16 @@ async def _request_subproblem_models(
                 f"previous Model IR missing subproblems {missing_previous!r}"
             )
     generated_by_id: dict[str, ModelIR] = {}
+    decisions = (
+        {item.subproblem_id: item for item in review.subproblem_reviews}
+        if review is not None else {}
+    )
+    revision_targets = {
+        identifier for identifier, decision in decisions.items()
+        if decision.status == "revision_required" and decision.required_revisions
+    }
+    changed_models: set[str] = set()
+    dependency_closures: dict[str, set[str]] = {}
     total = len(compact_subproblems)
 
     for subproblem in _dependency_order(compact_subproblems):
@@ -153,6 +164,20 @@ async def _request_subproblem_models(
             subproblem["required_uncertainty_ids"]
         )
         dependency_ids = set(subproblem["depends_on_subproblem_ids"])
+        for identifier in tuple(dependency_ids):
+            dependency_ids.update(dependency_closures[identifier])
+        dependency_closures[target_id] = dependency_ids
+        changed_dependencies = dependency_ids & changed_models
+        if (
+            previous_model_ir is not None
+            and target_id not in revision_targets
+            and not changed_dependencies
+        ):
+            generated_by_id[target_id] = ModelIR(
+                model_id=previous_model_ir.model_id,
+                subproblems=[previous_by_id[target_id]],
+            )
+            continue
         slice_spec = {
             **compact_spec,
             "subproblems": [subproblem],
@@ -189,6 +214,15 @@ async def _request_subproblem_models(
             ]
             if blocked_dependencies:
                 raise ValueError(f"upstream subproblems are blocked: {', '.join(blocked_dependencies)}")
+            if (
+                changed_dependencies
+                and target_id not in revision_targets
+                and decisions[target_id].status != "approved"
+            ):
+                raise ValueError(
+                    "upstream models changed without an accepted review or explicit revision "
+                    f"for this subproblem: {', '.join(sorted(changed_dependencies))}"
+                )
             generated_by_id[target_id] = await _request_single_subproblem_model(
                 llm=llm,
                 system_prompt=system_prompt,
@@ -217,6 +251,12 @@ async def _request_subproblem_models(
                 request_name=request_name,
                 exc=exc,
             )
+        # 中间模型即使内容相同，其上游发生变化也须继续使后继模型失效。
+        if previous_model_ir is not None and (
+            changed_dependencies
+            or generated_by_id[target_id].subproblems[0] != previous_by_id[target_id]
+        ):
+            changed_models.add(target_id)
 
     generated = [generated_by_id[str(item["id"])] for item in compact_subproblems]
     model_ir = ModelIR(

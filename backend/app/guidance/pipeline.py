@@ -99,8 +99,11 @@ class GuidancePipeline:
             root / "approved_model_ir.json",
         )
         approved = _load_approved_model(approved_path)
+        review = ModelIRReview.model_validate_json(
+            (root / approved.review_ref).read_text(encoding="utf-8")
+        )
 
-        if approved.review_status == "revision_required":
+        if review.status == "revision_required":
             yield _progress(task_id, "modeling", 0.46, "正在根据审核意见修订模型")
             review_path = _preserve_revision_request(root, model_path)
             try:

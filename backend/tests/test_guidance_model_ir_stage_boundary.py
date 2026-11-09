@@ -58,7 +58,7 @@ class IRReviewer:
             {
                 "requirement_id": item.requirement_id,
                 "status": "accepted",
-                "model_paths": ["/subproblems/0/recovery_action"],
+                "model_paths": ["/recovery_action"],
                 "rationale": "The revised ModelIR exposes the requested recovery action.",
             }
             for item in requested_revisions

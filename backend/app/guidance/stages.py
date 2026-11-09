@@ -182,17 +182,21 @@ class ModelReviewStage:
         )
         validate_model_review(review, model_ir, revision_request=revision_request, problem_spec=problem_spec)
         _write_model(output_path.parent / "model_review.json", review)
-        approved_projection = _build_reviewed_model_projection(model_ir, review)
+        approved_projection = _build_reviewed_model_projection(model_ir, review, problem_spec)
+        executable_ids = [
+            subproblem.subproblem_id
+            for subproblem in approved_projection.subproblems
+            if isinstance(subproblem, SolvableModelIR)
+        ]
         approved = ApprovedModelIR(
-            review_status=review.status,
+            review_status=(
+                "approved" if len(executable_ids) == len(approved_projection.subproblems)
+                else "partial" if executable_ids else "blocked"
+            ),
             model_id=model_ir.model_id,
             model_ir_ref=model_ir_path.name,
             revision_request_ref=submission.revision_request_ref,
-            executable_subproblem_ids=[
-                subproblem.subproblem_id
-                for subproblem in approved_projection.subproblems
-                if isinstance(subproblem, SolvableModelIR)
-            ],
+            executable_subproblem_ids=executable_ids,
             approved_model_ir=approved_projection,
             review_binding=bind_model_review(
                 review=review, model_ir=model_ir, approved_model_ir=approved_projection,
@@ -206,20 +210,34 @@ class ModelReviewStage:
 def _build_reviewed_model_projection(
     model_ir: ModelIR,
     review: ModelIRReview,
+    problem_spec: ProblemSpec,
 ) -> ModelIR:
+    _validate_model_ir_coverage(problem_spec, model_ir)
     decisions = {
         item.subproblem_id: item
         for item in review.subproblem_reviews
     }
-    allow_execution = review.status in {"approved", "partial"}
+    dependencies = {
+        item.id: item.depends_on_subproblem_ids for item in problem_spec.subproblems
+    }
+    executable = {
+        item.subproblem_id for item in model_ir.subproblems
+        if isinstance(item, SolvableModelIR)
+        and decisions[item.subproblem_id].status == "approved"
+    }
+    # 依赖闭包与题目排列无关；下游不能沿用未获批准的上游模型。
+    while True:
+        retained = {
+            identifier for identifier in executable
+            if all(dependency in executable for dependency in dependencies[identifier])
+        }
+        if retained == executable:
+            break
+        executable = retained
     projected = []
     for subproblem in model_ir.subproblems:
         decision = decisions[subproblem.subproblem_id]
-        if (
-            allow_execution
-            and decision.status == "approved"
-            and isinstance(subproblem, SolvableModelIR)
-        ):
+        if subproblem.subproblem_id in executable:
             projected.append(subproblem)
             continue
         if isinstance(subproblem, BlockedModelIR):
@@ -228,6 +246,12 @@ def _build_reviewed_model_projection(
         reasons = decision.blocking_issues or [
             item.description for item in decision.required_revisions
         ]
+        unavailable_dependencies = [
+            identifier for identifier in dependencies[subproblem.subproblem_id]
+            if identifier not in executable
+        ]
+        if unavailable_dependencies:
+            reasons = [*reasons, "Unapproved model dependencies: " + ", ".join(unavailable_dependencies)]
         if not reasons:
             reasons = ["Execution is pending completion of the model review."]
         projected.append(BlockedModelIR(

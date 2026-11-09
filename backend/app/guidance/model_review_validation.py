@@ -12,7 +12,9 @@ from app.artifacts.evidence_profile import EvidenceProfile
 from app.artifacts.input_catalog import InputCatalog
 from app.guidance.contracts import ProblemSpec, VerificationLayer
 from app.guidance.model_ir import (BlockedModelIR, ModelIR, SolvableModelIR)
-from app.guidance.model_review_contracts import ApprovedModelIR, ModelIRReview, ModelReviewBinding
+from app.guidance.model_review_contracts import (
+    ApprovedModelIR, ModelIRReview, ModelReviewBinding, SubproblemReviewSpec,
+)
 
 
 def validate_model_review(
@@ -35,81 +37,88 @@ def validate_model_review(
             "subproblem review coverage mismatch: "
             f"expected={expected_subproblems!r}; reviewed={reviewed_subproblems!r}"
         )
-    subproblems_by_id = {
-        subproblem.subproblem_id: subproblem
-        for subproblem in model_ir.subproblems
-    }
-    for decision in review.subproblem_reviews:
-        subproblem = subproblems_by_id[decision.subproblem_id]
-        _validate_mathematical_checks(decision, subproblem, problem_spec)
-        if isinstance(subproblem, BlockedModelIR) and decision.status != "blocked":
+    requested_by_id = {}
+    if revision_request is not None:
+        if revision_request.model_id != model_ir.model_id:
+            raise ValueError("revision request model_id does not match Model IR")
+        if revision_request.status != "revision_required":
+            raise ValueError("revision request must have revision_required status")
+        requested_subproblems = [item.subproblem_id for item in revision_request.subproblem_reviews]
+        if requested_subproblems != expected_subproblems:
             raise ValueError(
-                f"blocked Model IR subproblem {decision.subproblem_id!r} "
-                "must receive a blocked review"
+                "revision request subproblem coverage mismatch: "
+                f"expected={expected_subproblems!r}; requested={requested_subproblems!r}"
             )
-        expected = (
-            [assumption.id for assumption in subproblem.assumptions]
-            if isinstance(subproblem, SolvableModelIR) else []
+        requested_by_id = {item.subproblem_id: item for item in revision_request.subproblem_reviews}
+    for decision, subproblem in zip(review.subproblem_reviews, model_ir.subproblems):
+        validate_subproblem_review(
+            decision, subproblem,
+            revision_request=requested_by_id.get(decision.subproblem_id),
+            problem_spec=problem_spec,
         )
-        reviewed = [item.assumption_id for item in decision.assumption_checks]
-        if reviewed != expected:
-            raise ValueError(
-                f"assumption review coverage mismatch for {decision.subproblem_id!r}: "
-                f"expected={expected!r}; reviewed={reviewed!r}"
-            )
-        for check in decision.assumption_checks:
-            if check.status != "accepted" and decision.status == "approved":
-                raise ValueError(
-                    "approved subproblem review contains an unaccepted assumption: "
-                    f"{decision.subproblem_id!r}/{check.assumption_id!r}"
-                )
 
+
+def validate_subproblem_review(
+    decision: SubproblemReviewSpec,
+    subproblem: BlockedModelIR | SolvableModelIR,
+    *,
+    revision_request: SubproblemReviewSpec | None = None,
+    problem_spec: ProblemSpec | None = None,
+) -> None:
+    if decision.subproblem_id != subproblem.subproblem_id:
+        raise ValueError("subproblem review identity mismatch")
+    if revision_request is not None and revision_request.subproblem_id != subproblem.subproblem_id:
+        raise ValueError("revision request subproblem identity mismatch")
+    if decision.assessment_status == "not_assessed":
+        return
+    _validate_mathematical_checks(decision, subproblem, problem_spec)
+    if isinstance(subproblem, BlockedModelIR) and decision.status != "blocked":
+        raise ValueError(
+            f"blocked Model IR subproblem {decision.subproblem_id!r} "
+            "must receive a blocked review"
+        )
+    expected = (
+        [assumption.id for assumption in subproblem.assumptions]
+        if isinstance(subproblem, SolvableModelIR) else []
+    )
+    reviewed = [item.assumption_id for item in decision.assumption_checks]
+    if reviewed != expected:
+        raise ValueError(
+            f"assumption review coverage mismatch for {decision.subproblem_id!r}: "
+            f"expected={expected!r}; reviewed={reviewed!r}"
+        )
+    for check in decision.assumption_checks:
+        if check.status != "accepted" and decision.status == "approved":
+            raise ValueError(
+                "approved subproblem review contains an unaccepted assumption: "
+                f"{decision.subproblem_id!r}/{check.assumption_id!r}"
+            )
     if revision_request is None:
-        if any(item.revision_checks for item in review.subproblem_reviews):
+        if decision.revision_checks:
             raise ValueError("initial review cannot contain revision_checks")
         return
-    if revision_request.model_id != model_ir.model_id:
-        raise ValueError("revision request model_id does not match Model IR")
-    if revision_request.status != "revision_required":
-        raise ValueError("revision request must have revision_required status")
-
-    requested_by_id = {
-        item.subproblem_id: item for item in revision_request.subproblem_reviews
-    }
-    for decision in review.subproblem_reviews:
-        requested = requested_by_id[decision.subproblem_id]
-        expected_revisions = [
-            item.requirement_id for item in requested.required_revisions
-        ]
-        reviewed_revisions = [
-            item.requirement_id for item in decision.revision_checks
-        ]
-        if reviewed_revisions != expected_revisions:
-            raise ValueError(
-                "revision review coverage mismatch for "
-                f"{decision.subproblem_id!r}: expected={expected_revisions!r}; "
-                f"reviewed={reviewed_revisions!r}"
-            )
-
-    model_document = model_ir.model_dump(mode="json")
-    for decision in review.subproblem_reviews:
-        for check in decision.revision_checks:
-            for path in check.model_paths:
-                if not _json_pointer_exists(model_document, path):
-                    raise ValueError(
-                        f"revision evidence path {path!r} does not exist in Model IR"
-                    )
-        if decision.status == "approved":
-            unaccepted_revisions = [
-                item.requirement_id
-                for item in decision.revision_checks
-                if item.status != "accepted"
-            ]
-            if unaccepted_revisions:
+    expected_revisions = [item.requirement_id for item in revision_request.required_revisions]
+    reviewed_revisions = [item.requirement_id for item in decision.revision_checks]
+    if reviewed_revisions != expected_revisions:
+        raise ValueError(
+            "revision review coverage mismatch for "
+            f"{decision.subproblem_id!r}: expected={expected_revisions!r}; "
+            f"reviewed={reviewed_revisions!r}"
+        )
+    document = subproblem.model_dump(mode="json")
+    for check in decision.revision_checks:
+        for path in check.model_paths:
+            if not _json_pointer_exists(document, path):
                 raise ValueError(
-                    "approved subproblem review contains unaccepted revision "
-                    f"requirements: {unaccepted_revisions!r}"
+                    f"revision evidence path {path!r} does not exist in subproblem {subproblem.subproblem_id!r}"
                 )
+    if decision.status == "approved":
+        unaccepted_revisions = [item.requirement_id for item in decision.revision_checks if item.status != "accepted"]
+        if unaccepted_revisions:
+            raise ValueError(
+                "approved subproblem review contains unaccepted revision "
+                f"requirements: {unaccepted_revisions!r}"
+            )
 
 
 def mathematical_requirement_ids(problem_spec: ProblemSpec, subproblem_id: str) -> list[str]:
@@ -199,6 +208,11 @@ def assess_mathematical_review(
     refs: list[str] = []
     statuses: list[str] = []
     for index, decision in enumerate(review.subproblem_reviews):
+        if decision.assessment_status == "not_assessed":
+            statuses.append("not_assessed")
+            reasons.append(f"{decision.subproblem_id}: mathematical review was not assessed because no valid review contract was available")
+            refs.append(f"{approved.review_ref}#/subproblem_reviews/{index}")
+            continue
         if decision.subproblem_id not in approved.executable_subproblem_ids:
             continue
         expected = set(mathematical_requirement_ids(problem_spec, decision.subproblem_id))

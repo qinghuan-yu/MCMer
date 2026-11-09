@@ -35,7 +35,7 @@ class ModelReviewBinding(IRModel):
 
 class ApprovedModelIR(IRModel):
     schema_version: Literal["1.0"] = "1.0"
-    review_status: Literal["approved", "partial", "revision_required", "blocked"]
+    review_status: Literal["approved", "partial", "blocked"]
     model_id: str = Field(min_length=1, max_length=120)
     model_ir_ref: str = Field(default="model_ir.json", min_length=1, max_length=300)
     review_ref: str = Field(default="model_review.json", min_length=1, max_length=300)
@@ -74,12 +74,7 @@ class ApprovedModelIR(IRModel):
             if solvable
             else "blocked"
         )
-        if self.review_status == "revision_required":
-            if solvable:
-                raise ValueError(
-                    "revision_required approved_model_ir cannot expose solvable subproblems"
-                )
-        elif self.review_status != expected_status:
+        if self.review_status != expected_status:
             raise ValueError(
                 f"review_status must be {expected_status!r} for the execution projection"
             )
@@ -103,7 +98,10 @@ class RevisionRequirementSpec(IRModel):
 class RevisionCheckSpec(IRModel):
     requirement_id: str = Field(min_length=1, max_length=100)
     status: Literal["accepted", "revision_required", "rejected"]
-    model_paths: list[str] = Field(min_length=1, max_length=30)
+    model_paths: list[str] = Field(
+        min_length=1, max_length=30,
+        description="JSON Pointers relative to the current subproblem, never the whole ModelIR.",
+    )
     rationale: str = Field(min_length=1, max_length=600)
 
     @model_validator(mode="after")
@@ -111,6 +109,8 @@ class RevisionCheckSpec(IRModel):
         invalid = [path for path in self.model_paths if not path.startswith("/")]
         if invalid:
             raise ValueError(f"model_paths must be JSON Pointers: {invalid!r}")
+        if any(path == "/subproblems" or path.startswith("/subproblems/") for path in self.model_paths):
+            raise ValueError("revision model_paths must be relative to the current subproblem")
         return self
 
 
@@ -132,6 +132,7 @@ class MathematicalCorrespondenceCheck(IRModel):
 class SubproblemReviewSpec(IRModel):
     subproblem_id: str = Field(min_length=1, max_length=100)
     status: Literal["approved", "revision_required", "blocked"]
+    assessment_status: Literal["reviewed", "not_assessed"] = "reviewed"
     assumption_checks: list[AssumptionReviewSpec] = Field(default_factory=list, max_length=30)
     blocking_issues: list[str] = Field(default_factory=list, max_length=50)
     required_revisions: list[RevisionRequirementSpec] = Field(
@@ -145,6 +146,11 @@ class SubproblemReviewSpec(IRModel):
 
     @model_validator(mode="after")
     def require_consistent_decision(self) -> SubproblemReviewSpec:
+        if self.assessment_status == "not_assessed":
+            if self.status != "blocked":
+                raise ValueError("not_assessed review must be blocked")
+            if self.assumption_checks or self.revision_checks or self.mathematical_checks or self.required_revisions:
+                raise ValueError("not_assessed review cannot contain assessment content")
         assumption_ids = [item.assumption_id for item in self.assumption_checks]
         if len(assumption_ids) != len(set(assumption_ids)):
             raise ValueError("assumption check ids must be unique within a subproblem")

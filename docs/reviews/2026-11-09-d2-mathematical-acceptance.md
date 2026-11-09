@@ -74,6 +74,18 @@ canonical假设ID只在所属子题内唯一。`assumption_checks`从ModelIRRevi
 
 本轮证据说明获批假设归属替换已走通真实合并；新的工程阻断为整题审核请求规模与复审合同自洽性。调用链为Pipeline→ModelReviewStage→LLMModelReviewer→单次整题ModelIRReview请求，任何合同失败均无有效整题审核；拟调整范围和审批状态仅记录在唯一长期计划。未增加预算或启动无界重跑。
 
+### 获批的逐子题审核调度替换
+
+用户于2026-11-09回复“批准。开始吧”。实际Reviewer现逐题请求SubproblemReviewSpec，程序按题目顺序汇总；完整ProblemSpec、catalog、profile和完整祖先模型仍可见。初审与复审明确携带检查ID；provider必须提供完整数学检查，失败只能由系统记为not_assessed/blocked且检查内容为空，不能补造审核结论。
+
+- 局部合同RED：`.local/d22-local-review-contract-red.xml`，14 failed/2 passed；GREEN 44 passed/4.51秒。修订路径统一相对本子题，旧`/subproblems/...`拒绝，跨题ID/漏覆盖/未接受项仍不能批准。未评估不能被独立题通过掩盖。
+- 请求/恢复RED：`.local/d22-review-isolation-red.xml`，5 failed/3.53秒；GREEN `.local/d22-review-isolation-green.xml`，5 passed/3.52秒。验证单题截断、独立缓存恢复、目标/祖先模型变化、原件字节变化、数学检查缺项和复审要求传递；不提高单次预算，不改变两次尝试上限。
+- 执行投影RED：新增`test_guidance_review_projection.py`的4项失败，复现整体revision_required阻断独立题、放行未批准依赖和pipeline混淆修订/执行状态。GREEN相关26 passed/5.51秒。ApprovedModelIR只表达approved/partial/blocked，是否进行一次修订读取原始审核；终审仍需修订时可以执行独立批准分支，失败按完整依赖闭包传播，原审核和绑定保留。
+- 修订隔离RED：`test_guidance_revision_isolation.py`的3项失败，旧实现无条件重建所有题；修复后仅目标及变化影响的已批准后继重建，独立未改模型原样保留，无有效审核且依赖变化的题阻断。追加祖先上下文反例为1 failed/2 passed，证明祖先变更、中间模型JSON同值时叶子缓存仍可能过期；生成上下文改用完整祖先闭包后通过。最终相关回归111 passed/7.59秒。
+- 集成55 passed/5.88秒（`.local/d22-review-integrated-final.xml`）；完整Guidance/Polish/core为**707 passed/27.00秒**（`.local/d22-review-dispatch-full.xml`）。新增合同字段导致一处旧精确断言需直接迁移，未放宽生产校验。公共任务/API与前端未改，不重复前端构建。独立只读审查未发现可行动问题，传递依赖与特殊ID探针通过。
+
+D2.2a工程出口完成。新恢复工具`.local/run_d2_scoped_review_flash.py`默认无网，显式live才启用Flash；原题/同族额外请求上限分别24/16。它检查新单题审核边界，只从历史目录选原始生成缓存，旧整题Reviewer/Reviser不复用；缓存内容和摘要不修改，现行schema/语义/祖先上下文决定能否复用。D2.2b真实运行及D2.3仍待验收。
+
 ## D2.3：独立数学核对准备
 
 `.local/d2_independent_math.py` 与 `.local/d2-independent-preparation-20261109/` 从原DOCX核对19段、5表和SHA，原件总需求4065。6个正反例通过，旧Q1真实解独立重算7625，与既有DP参考一致。

@@ -35,7 +35,7 @@ def _approved_payload(status: str = "approved", model_id: str = "pipeline-model"
     model_ir = _solvable_ir(model_id) if status == "approved" else _blocked_ir(model_id)
     return {
         "schema_version": "1.0",
-        "review_status": status,
+        "review_status": "blocked" if status == "revision_required" else status,
         "model_id": model_id,
         "model_ir_ref": "model_ir.json",
         "review_ref": "model_review.json",
@@ -82,6 +82,17 @@ class RecordingStage:
 
     async def run(self, *, task_id: str, task: dict, input_path: Path | None, output_path: Path) -> Path:
         self.calls.append((self.name, input_path.name if input_path else None))
+        if self.name == "model_review":
+            review = {
+                "model_id": self.payload["model_id"],
+                "subproblem_reviews": [{
+                    "subproblem_id": item["subproblem_id"],
+                    "status": "approved" if item["execution_status"] == "solvable" else "blocked",
+                    "blocking_issues": [item["blocking_reason"]]
+                    if item["execution_status"] == "blocked" else [],
+                } for item in self.payload["approved_model_ir"]["subproblems"]],
+            }
+            (output_path.parent / "model_review.json").write_text(json.dumps(review), encoding="utf-8")
         output_path.write_text(json.dumps(self.payload), encoding="utf-8")
         return output_path
 
