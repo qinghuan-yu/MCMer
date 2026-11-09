@@ -160,7 +160,22 @@ Q4新模型显式定义`post_use_maintenance_survivors[t]=4*deployed[t-1]-4*dama
 
 同族harness `.local/run_d22c_source_flash.py` 15项通过；无网probe原字节重放既有初始生成检查点一次，然后使用真实产品Pipeline进行审核、最多一次纠正/修订及执行/验证/指导，停在首个Reviewer传输前，0 API。Q4 harness `.local/run_d22c_q4_review_flash.py` 6项通过；从当前真实Reviewer捕获Q4完整payload和语义闭包，保留原件/题意/三个完整祖先，0 API。两项均不复用旧审核或旧schema缓存、不向提示注入已知独立答案。
 
-生产冻结后的新实验分别为`.local/20261109-d22c-source-live-01`（总上限12）与`.local/20261109-d22c-q4-flash-01`（最多2次局部审核）；均仅deepseek-flash，单次和每合同预算不增加。实测正在进行，尚未据此勾选D2.2c.4或声称来源语义/数学验收通过。
+### 新实测终态：未达到来源裁决验收
+
+工程检查点`0d9269f`已推送。生产冻结后两项实验均在隐藏进程自然结束；只用deepseek-flash，单次/每合同预算不增加，剩余额度不用于重复追跑。
+
+| 输入与范围 | 目录（backend/下） | 新请求 | total tokens | 秒 | 终态 |
+| --- | --- | ---: | ---: | ---: | --- |
+| 同族初始生成检查点→真实后续Pipeline | `.local/20261109-d22c-source-live-01` | 4/12 | 178026 | 580.343 | blocked，无纠正/修订/执行 |
+| 原题当前Q4的全新局部初审 | `.local/20261109-d22c-q4-flash-01` | 1/2 | 113968 | 212.219 | ContractTruncationError，无有效审核 |
+
+同族两题首次均把`basis_refs`混用为模型路径/数学检查ID，schema拒绝；第二次修正该字段后，又以`/candidate_models`作数学证据路径而semantic拒绝。两题均`assessment_status=not_assessed`、执行投影为空；修订调用0次，没有source_resolution、revision_request或execution_manifest。四份原始候选的source_corrections均为空，仍把明确双对象收费和闲置保养称为真实歧义，要求三×三情景。无网合同验证通过的新裁决/撤回路径没有被真实请求行使，不能把合同失败解释为成功识别错误模型，也不能声称1388已复测通过。最终指导audit PASS仅证明阻断披露/文档规则，不代表数学验收。
+
+Q4首发prompt81200＋completion32768＝113968，全部completion用于reasoning，正文为空、finish_reason=length。现有initial=ceiling=32768，产品直接拒绝截断，没有增加额度或发第二次。独立Fraction核验仍得到部署50时rho为8%/10%/12%的模型损毁6/5/4，正确4/5/6；本轮没有有效审核，无法宣称Reviewer发现了该错误。其模型与此前见证SHA一致。
+
+本轮合计**5次、291994 tokens、未知0**；D2累计**92次已启动、3576632已知tokens、3次历史用量未知，总量仍为null**。reasoning已在completion内，不重复累计。原件、全部旧实验、生产源码与持久配置均不变，凭据扫描通过；按原始请求/响应/账本再次核对tokens及每合同次数。独立证据位于`.local/d22c-independent-audit-20261109/`：`variant-adjudication.json`、`q4-adjudication.json`、`api-and-integrity-audit.json`。
+
+结论：D2.2c.1–3工程实现已完成，D2.2c.4实测已结案但出口未通过，保留未勾选；D2.2/D2.3整体仍未验收。下一行为是获得有效的来源冲突裁决和模型证据引用，不能靠放宽路径校验、提高预算、手修输出或重复跑同一实验代替。当前成果尚不证明可选来源纠正足以纠正Reviewer对错误拆题的依赖。
 
 ## D2.3：独立数学核对与剩余出口
 
