@@ -243,8 +243,6 @@ def _validate_mathematical_checks(decision, subproblem, problem_spec: ProblemSpe
     document = subproblem.model_dump(mode="json")
     for check in decision.mathematical_checks:
         for path in check.model_paths:
-            if not path.startswith(("/execution_components/", "/equations/", "/constraints/", "/assumptions/")):
-                raise ValueError(f"mathematical path must reference this subproblem's model elements: {path!r}")
             if not _json_pointer_exists(document, path):
                 raise ValueError(f"mathematical evidence path does not exist: {path!r}")
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -91,10 +90,20 @@ class AssumptionReviewSpec(IRModel):
     sensitivity_check_coverage: str = Field(min_length=1, max_length=600)
 
 
+ProblemRecordReference = Annotated[str, Field(
+    pattern=r"^problem_spec\.json#(?:uncertainties|locked_facts)/[A-Za-z][A-Za-z0-9_.-]*$",
+    description="Scoped ProblemSpec record reference; model paths and mathematical check IDs are not source records.",
+)]
+MathematicalEvidencePath = Annotated[str, Field(
+    pattern=r"^/(?:execution_components|equations|constraints|assumptions)/",
+    description="JSON Pointer to a computational element within the current subproblem, excluding metadata such as candidate_models and data.",
+)]
+
+
 class RevisionRequirementSpec(IRModel):
     requirement_id: str = Field(min_length=1, max_length=100)
     kind: Literal["model", "source"]
-    basis_refs: list[str] = Field(default_factory=list, max_length=50)
+    basis_refs: list[ProblemRecordReference] = Field(default_factory=list, max_length=50)
     description: str = Field(min_length=1, max_length=600)
     acceptance_criteria: str = Field(min_length=1, max_length=600)
 
@@ -104,9 +113,6 @@ class RevisionRequirementSpec(IRModel):
             raise ValueError("source revision requires explicit basis_refs")
         if len(self.basis_refs) != len(set(self.basis_refs)):
             raise ValueError("revision basis_refs must be unique")
-        if any(not re.fullmatch(r"problem_spec\.json#(?:uncertainties|locked_facts)/[A-Za-z][A-Za-z0-9_.-]*", ref)
-               for ref in self.basis_refs):
-            raise ValueError("revision basis_refs must identify scoped ProblemSpec records")
         return self
 
 
@@ -140,7 +146,7 @@ class RevisionCheckSpec(IRModel):
 class MathematicalCorrespondenceCheck(IRModel):
     requirement_id: str = Field(min_length=1, max_length=160)
     status: Literal["passed", "failed", "not_assessed"]
-    model_paths: list[str] = Field(default_factory=list, max_length=30)
+    model_paths: list[MathematicalEvidencePath] = Field(default_factory=list, max_length=30)
     rationale: str = Field(min_length=1, max_length=1600)
 
     @model_validator(mode="after")

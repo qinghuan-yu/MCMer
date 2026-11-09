@@ -177,6 +177,27 @@ Q4首发prompt81200＋completion32768＝113968，全部completion用于reasoning
 
 结论：D2.2c.1–3工程实现已完成，D2.2c.4实测已结案但出口未通过，保留未勾选；D2.2/D2.3整体仍未验收。下一行为是获得有效的来源冲突裁决和模型证据引用，不能靠放宽路径校验、提高预算、手修输出或重复跑同一实验代替。当前成果尚不证明可选来源纠正足以纠正Reviewer对错误拆题的依赖。
 
+### D2.2c.4 继续：公开引用规则与来源语义对照
+
+调用边界重新核对：`core/workflow.py:97`将Guidance/Polish分流；`guidance/workflow.py:25`构造六阶段Pipeline，`reviewer.py:50`生成逐题审核和来源纠正提议，`pipeline.py:207`在一次修订时应用已通过机械校验的提议。Polish独立运行并共享core写作能力，不消费这些来源合同。本轮只修复已有审核合同，不新设产品阶段。
+
+**引用合同的RED→GREEN**：`.local/d22c4-path-probe-20261109/probe_results.json`用JSON Schema、Pydantic和实际语义校验器重放4份原始响应；四份都通过发送的schema，第1/3份随后被basis_refs规则拒绝，第2/4份被数学路径前缀规则拒绝。最小正式测试有效RED为9 failed/9 passed（`.local/d22c4-reference-schema-red-final.xml`），证明首次/重试请求没有公开其运行规则；初轮两个夹具漏字段的失败未计为有效RED。`ProblemRecordReference`和`MathematicalEvidencePath`现由字段类型统一导出schema和校验输入，移除重复语法判断；实际元素存在性、来源作用域及业务状态检查保留。Reviewer提示同步区分source basis、数学路径和较宽的revision路径，未更改合法输入范围。相关65 passed/4.01秒，完整后端**785 passed/22.54秒**（`.local/d22c4-reference-full.xml`）。4份旧响应原样被新schema拒绝、旧树SHA不变，见`replay_current_results.json`。显式增加jsonschema开发依赖，TOML验证通过；此依赖声明是配置验证，不声称TDD。
+
+**来源前置条件探针**：`.local/d22c4-source-probe-20261109/source-obligation-probe.json`证明当前合同没有逐UNC来源判断，UNC也不在数学检查覆盖ID中。两个明确标注为独立诊断的合同，沿用原第2/4响应的模型修订义务/假设检查，数学项改为明确not_assessed；它们通过真实validator和Reviewer覆盖要求，source阻断集合为空，错误题意义务以kind=model进入Modeler。该诊断不是手修原响应或实际有效审核，只证明当前职责没有来源判断前置条件。
+
+两项诊断均默认无网，显式live才启用Flash；本地guard验证分别5项和3项通过，属于tests-after，不伪称TDD。第一项仅给完整来源与ProblemSpec，逐UNC强制原文判断；第二项仅给原文与semantic_key/source_refs主题定位，移除拆题断言和候选。两者都不提供ModelIR、独立正确答案或1388，不应用输出，也不是产品验收。
+
+| 诊断 | 目录（backend/下） | 次数 | total tokens | 秒 | 独立语义裁决 |
+| --- | --- | ---: | ---: | ---: | --- |
+| 来源与既有题意候选 | `.local/20261109-d22c4-source-diagnostic-flash-01` | 1 | 17768 | 68.453 | 两UNC均声称消解；训练费纠正错误，闲置保养正确 |
+| 仅原文与主题定位 | `.local/20261109-d22c4-source-ablation-flash-01` | 1 | 10497 | 56.625 | 训练费仍判ambiguous，闲置保养specified且正确 |
+
+第一项给出LF-025：“模块训练费用按新模块个数计收……指导者费用包含在该8元/个中，不另行单独计收训练费。”它同时精确引用“训练成本同时对新模块和指导者计收”，完整范围和现有resolver均通过，但4新模块+1指导者的40被改成32。LF-026按每个未服务且未指导的周期保养，符合原文。第二项未给错误候选仍把“含指导者”视作可能包价，未解决计费关系；单样本且输出合同也变化，不能据此断言候选锚定的因果效应。两项均不能证明仅把来源提取移到独立阶段足够可靠，机械source_resolves也不能作为语义正确证据。
+
+本轮2次合计**28265 tokens、未知0**；D2累计**94次、3604897已知tokens、3次历史未知，总量null**。每次请求/响应/usage、原文/旧树/生产/配置/快照SHA再次独立核对，reasoning未重复计，原始工件不变。独立裁决和预算证据为`.local/d22c4-source-probe-20261109/live-adjudication.json`、`ablation-adjudication.json`、`api-and-integrity-audit.json`。
+
+**边界裁决**：对外schema和真实校验不一致已修复。最危险的新实证是纠正提议可以通过真实引文校验却改变原文关系；现有resolver隐藏的是机械来源和快照一致性，不拥有独立语义判断。更小的下一替换是将纠正提议与独立语义应用许可分离，保留一次修订及共享失效；完整范围和首个RED已写入唯一计划D2.2d，待批准。未采用大规模重拆，也没有放宽校验或追加提示后反复请求。D2.2c.4父项和D2整体仍未验收。
+
 ## D2.3：独立数学核对与剩余出口
 
 `.local/d2_independent_math.py` 与 `.local/d2-independent-preparation-20261109/` 从原DOCX核对19段、5表和SHA，原件总需求4065。6个正反例通过，旧Q1真实解独立重算7625，与既有DP参考一致。
