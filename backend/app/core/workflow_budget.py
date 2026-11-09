@@ -28,12 +28,28 @@ class WriterStageBudget:
 
 
 @dataclass(frozen=True)
+class ContractTokenBudget:
+    initial: int
+    ceiling: int
+
+    def __post_init__(self) -> None:
+        if not 0 < self.initial <= self.ceiling:
+            raise ValueError("token budget must satisfy 0 < initial <= ceiling")
+
+
+@dataclass(frozen=True)
 class GuidanceStageBudget:
     decomposition: int
     architecture: int
     indexed_core: int
     indexed_constraints: int
     review: int
+    structure_tokens: ContractTokenBudget = ContractTokenBudget(12288, 16384)
+    facts_tokens: ContractTokenBudget = ContractTokenBudget(24576, 32768)
+    architecture_tokens: ContractTokenBudget = ContractTokenBudget(12288, 16384)
+    indexed_core_tokens: ContractTokenBudget = ContractTokenBudget(8192, 12288)
+    indexed_constraints_tokens: ContractTokenBudget = ContractTokenBudget(32768, 32768)
+    review_tokens: ContractTokenBudget = ContractTokenBudget(32768, 32768)
 
 
 @dataclass(frozen=True)
@@ -111,11 +127,11 @@ def resolve_workflow_budget(mode: str) -> WorkflowBudget:
     return WorkflowBudget(
         mode="standard",
         guidance=GuidanceStageBudget(
-            decomposition=max(120, settings.LLM_REQUEST_TIMEOUT),
+            decomposition=max(180, settings.LLM_REQUEST_TIMEOUT),
             architecture=max(180, settings.LLM_REQUEST_TIMEOUT),
             indexed_core=max(240, settings.LLM_REQUEST_TIMEOUT),
             indexed_constraints=max(360, settings.LLM_REQUEST_TIMEOUT),
-            review=max(180, settings.LLM_REQUEST_TIMEOUT),
+            review=max(300, settings.LLM_REQUEST_TIMEOUT),
         ),
         coder=CoderStageBudget(
             max_chat_turns=max(36, settings.MAX_CHAT_TURNS),

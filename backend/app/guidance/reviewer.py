@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.core.llm.llm import LLM
+from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contracts import ProblemSpec
 from app.guidance.generation_validation import _validate_model_ir_semantics
 from app.guidance.model_generation import _request_model
@@ -19,9 +20,11 @@ class LLMModelReviewer:
         llm: LLM,
         *,
         request_timeout: int | float | None = None,
+        token_budget: ContractTokenBudget | None = None,
     ) -> None:
         self.llm = llm
         self.request_timeout = request_timeout
+        self.token_budget = token_budget
 
     async def review(
         self,
@@ -71,4 +74,5 @@ subproblem_reviews按ModelIR顺序逐题覆盖、不重不漏。原本blocked的
                 problem_spec=problem_spec,
             ),
             request_timeout=self.request_timeout,
+            token_budget=self.token_budget,
         )

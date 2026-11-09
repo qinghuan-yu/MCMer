@@ -199,13 +199,18 @@ class LLM:
         tool_choice: str = "auto",
         agent_name: str = "",
         sub_title: str = "",
+        max_tokens: Optional[int] = None,
+        max_attempts: int = 3,
     ):
         """异步对话"""
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
         kwargs = {
             "model": self.model,
             "messages": history,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "max_tokens": self.max_tokens if max_tokens is None else max_tokens,
+            "num_retries": 0,
             "timeout": self.request_timeout,
         }
         if self.api_key:
@@ -216,7 +221,7 @@ class LLM:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
 
-        for attempt in range(3):
+        for attempt in range(max_attempts):
             try:
                 response = await asyncio.wait_for(
                     acompletion(**kwargs),
@@ -229,12 +234,14 @@ class LLM:
                     f"{agent_name}: 请求超时, 第{attempt+1}次重试, "
                     f"等待{wait}s"
                 )
-                if attempt == 2:
+                if attempt == max_attempts - 1:
                     raise RuntimeError(
                         f"{agent_name or 'LLM'}: 请求超时，超过 {self.request_timeout}s"
                     )
                 await asyncio.sleep(wait)
             except (RateLimitError, ServiceUnavailableError) as e:
+                if attempt == max_attempts - 1:
+                    raise
                 wait = 2 ** attempt
                 logger.warning(
                     f"{agent_name}: {type(e).__name__}, 第{attempt+1}次重试, "
@@ -243,7 +250,7 @@ class LLM:
                 await asyncio.sleep(wait)
             except APIError as e:
                 logger.error(f"{agent_name}: API错误 - {e}")
-                if attempt == 2:
+                if attempt == max_attempts - 1:
                     raise
                 await asyncio.sleep(2)
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.llm.llm import LLM
+from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contracts import ProblemSpec
 from app.guidance.failure_contracts import (
     bounded_failure_summary,
@@ -36,12 +37,18 @@ class LLMModeler:
         architecture_timeout: int | float | None = None,
         indexed_core_timeout: int | float | None = None,
         indexed_constraints_timeout: int | float | None = None,
+        architecture_token_budget: ContractTokenBudget | None = None,
+        indexed_core_token_budget: ContractTokenBudget | None = None,
+        indexed_constraints_token_budget: ContractTokenBudget | None = None,
     ) -> None:
         self.llm = llm
         self.available_operator_ids = sorted(set(available_operator_ids or []))
         self.architecture_timeout = architecture_timeout
         self.indexed_core_timeout = indexed_core_timeout
         self.indexed_constraints_timeout = indexed_constraints_timeout
+        self.architecture_token_budget = architecture_token_budget
+        self.indexed_core_token_budget = indexed_core_token_budget
+        self.indexed_constraints_token_budget = indexed_constraints_token_budget
 
     async def model(
         self,
@@ -62,6 +69,9 @@ class LLMModeler:
             architecture_timeout=self.architecture_timeout,
             indexed_core_timeout=self.indexed_core_timeout,
             indexed_constraints_timeout=self.indexed_constraints_timeout,
+            architecture_token_budget=self.architecture_token_budget,
+            indexed_core_token_budget=self.indexed_core_token_budget,
+            indexed_constraints_token_budget=self.indexed_constraints_token_budget,
         )
 
     async def revise(
@@ -92,6 +102,9 @@ class LLMModeler:
             architecture_timeout=self.architecture_timeout,
             indexed_core_timeout=self.indexed_core_timeout,
             indexed_constraints_timeout=self.indexed_constraints_timeout,
+            architecture_token_budget=self.architecture_token_budget,
+            indexed_core_token_budget=self.indexed_core_token_budget,
+            indexed_constraints_token_budget=self.indexed_constraints_token_budget,
         )
 
 async def _request_subproblem_models(
@@ -108,6 +121,9 @@ async def _request_subproblem_models(
     architecture_timeout: int | float | None = None,
     indexed_core_timeout: int | float | None = None,
     indexed_constraints_timeout: int | float | None = None,
+    architecture_token_budget: ContractTokenBudget | None = None,
+    indexed_core_token_budget: ContractTokenBudget | None = None,
+    indexed_constraints_token_budget: ContractTokenBudget | None = None,
 ) -> ModelIR:
     system_prompt = f"{stage_duty}\n{MODEL_IR_ARCHITECTURE_CONTRACT}"
     compact_spec = _compact_problem_spec_for_modeling(problem_spec)
@@ -189,6 +205,9 @@ async def _request_subproblem_models(
                 architecture_timeout=architecture_timeout,
                 indexed_core_timeout=indexed_core_timeout,
                 indexed_constraints_timeout=indexed_constraints_timeout,
+                architecture_token_budget=architecture_token_budget,
+                indexed_core_token_budget=indexed_core_token_budget,
+                indexed_constraints_token_budget=indexed_constraints_token_budget,
             )
         except (RuntimeError, ValueError) as exc:
             generated_by_id[target_id] = _write_subproblem_modeling_failure(

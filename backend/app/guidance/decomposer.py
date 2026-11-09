@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.core.llm.llm import LLM
+from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contract_request import StructuredContractRequester
 from app.guidance.contracts import (
     ProblemFactsGenerationDraft,
@@ -24,9 +25,13 @@ class LLMProblemDecomposer:
         llm: LLM,
         *,
         request_timeout: int | float | None = None,
+        structure_token_budget: ContractTokenBudget | None = None,
+        facts_token_budget: ContractTokenBudget | None = None,
     ) -> None:
         self.llm = llm
         self.request_timeout = request_timeout
+        self.structure_token_budget = structure_token_budget
+        self.facts_token_budget = facts_token_budget
 
     async def decompose(
         self,
@@ -44,6 +49,7 @@ class LLMProblemDecomposer:
             artifact_dir=_task_artifact_dir(task),
             enrich_payload=lambda payload: {**payload, "task_summary": question},
             request_timeout=self.request_timeout,
+            token_budget=self.structure_token_budget,
         )
         structure = await structure_requester.request({
             "question": question,
@@ -66,6 +72,7 @@ class LLMProblemDecomposer:
                 input_catalog,
             ),
             request_timeout=self.request_timeout,
+            token_budget=self.facts_token_budget,
         )
         facts = await facts_requester.request({
             "subproblems": [

@@ -30,6 +30,16 @@ def test_workflow_budget_exposes_ordered_guidance_stage_timeouts() -> None:
     assert standard.guidance.indexed_constraints < strict.guidance.indexed_constraints
 
 
+@pytest.mark.parametrize(("stage", "observed_seconds"), [("decomposition", 133.828), ("review", 207.407)])
+def test_standard_timeouts_cover_recorded_flash_facts_and_review(monkeypatch, stage, observed_seconds) -> None:
+    from app.core.workflow_budget import resolve_workflow_budget, settings
+
+    monkeypatch.setattr(settings, "LLM_REQUEST_TIMEOUT", 1)
+    budget = resolve_workflow_budget("standard").guidance
+    # R3事实提取133.828秒；R5.2漏费审核207.407秒，均取得有效完整响应。
+    assert getattr(budget, stage) > observed_seconds
+
+
 def test_default_guidance_pipeline_injects_each_stage_timeout(monkeypatch) -> None:
     from app.core.workflow_budget import resolve_workflow_budget
     from app.guidance import workflow
@@ -136,4 +146,7 @@ def test_successful_contract_request_publishes_stage_timeout_diagnostic(
         "transport_attempt": 1,
         "status": "valid",
         "request_timeout_seconds": 12,
+        "request_max_tokens": None,
+        "finish_reason": None,
+        "usage": None,
     }]

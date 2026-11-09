@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.llm.llm import LLM
+from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contract_request import StructuredContractRequester
 from app.guidance.contracts import ProblemSpec
 from app.guidance.fact_coverage import FactCoverage, FactScope
@@ -41,6 +42,7 @@ async def _request_model(
     semantic_validator=None,
     request_timeout: int | float | None = None,
     checkpoint_context: Any = None,
+    token_budget: ContractTokenBudget | None = None,
 ):
     requester = StructuredContractRequester(
         llm=llm,
@@ -51,6 +53,7 @@ async def _request_model(
         semantic_validator=semantic_validator,
         request_timeout=request_timeout,
         checkpoint_context=checkpoint_context,
+        token_budget=token_budget,
     )
     return await requester.request(payload)
 
@@ -71,6 +74,9 @@ async def _request_single_subproblem_model(
     architecture_timeout: int | float | None,
     indexed_core_timeout: int | float | None,
     indexed_constraints_timeout: int | float | None,
+    architecture_token_budget: ContractTokenBudget | None = None,
+    indexed_core_token_budget: ContractTokenBudget | None = None,
+    indexed_constraints_token_budget: ContractTokenBudget | None = None,
 ) -> ModelIR:
     target_id = str(subproblem["id"])
     review_payload = (
@@ -118,6 +124,7 @@ async def _request_single_subproblem_model(
             problem_spec=problem_spec,
         ),
         request_timeout=architecture_timeout,
+        token_budget=architecture_token_budget,
         checkpoint_context=dependencies,
     )
     indexed_linear_model = None
@@ -177,6 +184,7 @@ async def _request_single_subproblem_model(
                 evidence_profile=evidence_profile,
             ),
             request_timeout=indexed_core_timeout,
+            token_budget=indexed_core_token_budget,
             checkpoint_context=dependencies,
         )
         materialized_core = core.promote_core(
@@ -247,6 +255,7 @@ async def _request_single_subproblem_model(
             artifact_dir=artifact_dir,
             semantic_validator=validate_formulation,
             request_timeout=indexed_constraints_timeout,
+            token_budget=indexed_constraints_token_budget,
             checkpoint_context={
                 **dependencies,
                 "architecture": draft.model_dump(mode="json"),

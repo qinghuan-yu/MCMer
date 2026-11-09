@@ -28,13 +28,13 @@ def build_default_guidance_pipeline(workflow_mode: str = "standard") -> Guidance
     decomposition_llm = LLM(
         model=config_manager.get_effective_model("COORDINATOR_MODEL"),
         temperature=0.1,
-        max_tokens=8192,
+        max_tokens=guidance_budget.structure_tokens.initial,
         request_timeout=guidance_budget.decomposition,
     )
     modeling_llm = LLM(
         model=config_manager.get_effective_model("MODELER_MODEL"),
         temperature=0.15,
-        max_tokens=12288,
+        max_tokens=guidance_budget.architecture_tokens.initial,
         request_timeout=max(
             guidance_budget.architecture,
             guidance_budget.indexed_core,
@@ -44,7 +44,7 @@ def build_default_guidance_pipeline(workflow_mode: str = "standard") -> Guidance
     review_llm = LLM(
         model=config_manager.get_effective_model("MODELER_MODEL"),
         temperature=0.0,
-        max_tokens=8192,
+        max_tokens=guidance_budget.review_tokens.initial,
         request_timeout=guidance_budget.review,
     )
     operator_registry = build_default_operator_registry()
@@ -52,6 +52,8 @@ def build_default_guidance_pipeline(workflow_mode: str = "standard") -> Guidance
         decomposition_stage=DecompositionStage(decomposer=LLMProblemDecomposer(
             decomposition_llm,
             request_timeout=guidance_budget.decomposition,
+            structure_token_budget=guidance_budget.structure_tokens,
+            facts_token_budget=guidance_budget.facts_tokens,
         )),
         modeling_stage=ModelingStage(modeler=LLMModeler(
             modeling_llm,
@@ -59,10 +61,14 @@ def build_default_guidance_pipeline(workflow_mode: str = "standard") -> Guidance
             architecture_timeout=guidance_budget.architecture,
             indexed_core_timeout=guidance_budget.indexed_core,
             indexed_constraints_timeout=guidance_budget.indexed_constraints,
+            architecture_token_budget=guidance_budget.architecture_tokens,
+            indexed_core_token_budget=guidance_budget.indexed_core_tokens,
+            indexed_constraints_token_budget=guidance_budget.indexed_constraints_tokens,
         )),
         model_review_stage=ModelReviewStage(reviewer=LLMModelReviewer(
             review_llm,
             request_timeout=guidance_budget.review,
+            token_budget=guidance_budget.review_tokens,
         )),
         calculation_stage=CalculationStage(
             compiler=ModelIRCompiler(registry=operator_registry),

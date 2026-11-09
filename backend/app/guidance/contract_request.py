@@ -1,4 +1,4 @@
-"""Validated LLM contract generation with one complete regeneration attempt."""
+"""Validated LLM contracts with a two-call budget and explicit truncation handling."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.recovery import RecoveryCheckpoint
 
 
@@ -29,11 +30,15 @@ STRICT_JSON_RULES = (
 
 
 class ContractGenerationError(RuntimeError):
-    """Raised after both complete contract generations fail validation."""
+    """Raised when a complete valid contract cannot be obtained within the budget."""
 
 
 class ContractRequestTimeout(RuntimeError):
     """Raised when one project-bounded LLM transport attempt times out."""
+
+
+class ContractTruncationError(ContractGenerationError):
+    """输出预算耗尽；即使正文可解析，也不能作为完整合同。"""
 
 
 class StructuredContractRequester(Generic[ModelT]):
@@ -49,6 +54,7 @@ class StructuredContractRequester(Generic[ModelT]):
         semantic_validator: Callable[[ModelT], None] | None = None,
         request_timeout: int | float | None = None,
         checkpoint_context: Any = None,
+        token_budget: ContractTokenBudget | None = None,
     ) -> None:
         self.llm = llm
         self.model_type = model_type
@@ -58,6 +64,8 @@ class StructuredContractRequester(Generic[ModelT]):
         self.enrich_payload = enrich_payload
         self.semantic_validator = semantic_validator
         self.checkpoint_context = checkpoint_context
+        self.initial_tokens = token_budget.initial if token_budget is not None else getattr(llm, "max_tokens", None)
+        self.token_ceiling = token_budget.ceiling if token_budget is not None else self.initial_tokens
         self.request_timeout = (
             request_timeout
             if request_timeout is not None
@@ -71,6 +79,7 @@ class StructuredContractRequester(Generic[ModelT]):
         context = {
             "history": history,
             "dependencies": self.checkpoint_context,
+            "token_budget": {"initial": self.initial_tokens, "ceiling": self.token_ceiling},
             "llm": {name: getattr(self.llm, name, None) for name in (
                 "model", "base_url", "api_base", "max_tokens", "temperature", "top_p", "reasoning_effort",
             )},
@@ -86,77 +95,84 @@ class StructuredContractRequester(Generic[ModelT]):
                 pass
         checkpoint.discard()
 
-        for attempt_number in (1, 2):
-            for transport_attempt in (1, 2):
-                try:
-                    response = await self._chat_once(
-                        history=history,
-                        tools=None,
-                        tool_choice="none",
-                        agent_name=self.agent_name,
-                        sub_title=self.agent_name,
-                    )
-                except ContractRequestTimeout as exc:
-                    attempts.append(_attempt_record(
-                        attempt_number,
-                        "",
-                        exc,
-                        transport_attempt=transport_attempt,
-                        request_timeout=self.request_timeout,
-                    ))
-                    self._write_diagnostic(
-                        attempts,
-                        status="retrying" if transport_attempt == 1 else "failed",
-                    )
-                    if transport_attempt == 2:
-                        raise
-                    continue
-                except Exception as exc:
-                    attempts.append(_attempt_record(
-                        attempt_number,
-                        "",
-                        exc,
-                        transport_attempt=transport_attempt,
-                        request_timeout=self.request_timeout,
-                    ))
-                    self._write_diagnostic(attempts, status="failed")
+        attempt_number, transport_attempt = 1, 1
+        request_tokens = self.initial_tokens
+        for call_number in (1, 2):
+            record = {
+                "attempt": attempt_number, "transport_attempt": transport_attempt,
+                "request_timeout_seconds": self.request_timeout,
+                "request_max_tokens": request_tokens,
+                "finish_reason": None, "usage": None,
+            }
+            attempts.append(record)
+            try:
+                response = await self._chat_once(
+                    history=history, tools=None, tool_choice="none",
+                    agent_name=self.agent_name, sub_title=self.agent_name,
+                    max_attempts=1,
+                    max_tokens=request_tokens,
+                )
+            except ContractRequestTimeout as exc:
+                record.update(_failure_record("", exc, "timeout"))
+                self._write_diagnostic(attempts, status="retrying" if call_number == 1 else "failed")
+                if call_number == 2:
                     raise
-                break
+                transport_attempt += 1
+                continue
+            except Exception as exc:
+                record.update(_failure_record("", exc, "transport"))
+                self._write_diagnostic(attempts, status="failed")
+                raise
             raw_response = str(response.choices[0].message.content or "")
+            record.update(finish_reason=getattr(response.choices[0], "finish_reason", None),
+                          usage=_response_usage(response))
+            if record["finish_reason"] == "length":
+                exc = ContractTruncationError(f"{self.agent_name}: output truncated at max_tokens={request_tokens}")
+                record.update(_failure_record(raw_response, exc, "truncation"))
+                usage = record["usage"] or {}
+                record["truncation_kind"] = (
+                    "reasoning_exhausted" if not raw_response.strip() and usage.get("completion_tokens")
+                    and usage.get("reasoning_tokens") == usage["completion_tokens"] else "output_truncated"
+                )
+                can_recover = call_number == 1 and request_tokens is not None and request_tokens < self.token_ceiling
+                self._write_diagnostic(attempts, status="retrying" if can_recover else "failed")
+                if can_recover:
+                    # 截断没有有效语义反馈；用原始完整请求和预设额度重生成一次。
+                    request_tokens = self.token_ceiling
+                    attempt_number += 1
+                    transport_attempt = 1
+                    continue
+                raise exc
+            failure_kind = "schema"
             try:
                 parsed = _extract_json(raw_response)
                 if self.enrich_payload is not None:
                     parsed = self.enrich_payload(parsed)
                 contract = self.model_type.model_validate(parsed)
+                failure_kind = "semantic"
                 if self.semantic_validator is not None:
                     self.semantic_validator(contract)
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                attempts.append(_attempt_record(
-                    attempt_number,
-                    raw_response,
-                    exc,
-                    transport_attempt=transport_attempt,
-                    request_timeout=self.request_timeout,
-                ))
-                self._write_diagnostic(attempts, status="retrying" if attempt_number == 1 else "failed")
-                if attempt_number == 2:
+                if isinstance(exc, json.JSONDecodeError):
+                    failure_kind = "syntax"
+                record.update(_failure_record(raw_response, exc, failure_kind))
+                self._write_diagnostic(attempts, status="retrying" if call_number == 1 else "failed")
+                if call_number == 2:
                     raise ContractGenerationError(
                         f"{self.agent_name} failed to generate valid {self.model_type.__name__} "
-                        f"after 2 complete attempts: {type(exc).__name__}: {exc}"
+                        f"after {attempt_number} complete attempts / {call_number} provider calls: {type(exc).__name__}: {exc}"
                     ) from exc
                 history = self._regeneration_history(
                     original_payload=payload,
                     raw_response=raw_response,
                     error=exc,
+                    failure_kind=failure_kind,
                 )
+                attempt_number += 1
+                transport_attempt = 1
                 continue
 
-            attempts.append({
-                "attempt": attempt_number,
-                "transport_attempt": transport_attempt,
-                "status": "valid",
-                "request_timeout_seconds": self.request_timeout,
-            })
+            record["status"] = "valid"
             self._write_diagnostic(
                 attempts,
                 status="valid" if len(attempts) == 1 else "recovered",
@@ -193,12 +209,14 @@ class StructuredContractRequester(Generic[ModelT]):
         original_payload: Any,
         raw_response: str,
         error: Exception,
+        failure_kind: str,
     ) -> list[dict[str, str]]:
         correction = {
             "instruction": "完整重新生成一个合法 JSON 对象；不要局部修改、不要解释、不要 Markdown。",
             "target_schema": self.model_type.model_json_schema(),
             "validation_error_type": type(error).__name__,
             "validation_error": str(error),
+            "failure_kind": failure_kind,
             "original_input": original_payload,
         }
         return [
@@ -227,6 +245,20 @@ class StructuredContractRequester(Generic[ModelT]):
                     "contract": self.model_type.__name__,
                     "status": status,
                     "request_timeout_seconds": self.request_timeout,
+                    "max_provider_calls": 2,
+                    "provider_calls": len(attempts),
+                    "reserved_completion_tokens": (
+                        sum(item["request_max_tokens"] for item in attempts)
+                        if all(item["request_max_tokens"] is not None for item in attempts) else None
+                    ),
+                    "max_reserved_completion_tokens": (
+                        self.initial_tokens + self.token_ceiling if self.initial_tokens is not None else None
+                    ),
+                    "usage_complete": all(
+                        (item["usage"] or {}).get(key) is not None
+                        for item in attempts for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                    ),
+                    "usage": _total_usage(attempts),
                     "attempts": attempts,
                 },
                 ensure_ascii=False,
@@ -236,22 +268,36 @@ class StructuredContractRequester(Generic[ModelT]):
         )
 
 
-def _attempt_record(
-    attempt: int,
-    raw_response: str,
-    error: Exception,
-    *,
-    transport_attempt: int,
-    request_timeout: int | float | None,
-) -> dict[str, Any]:
+def _failure_record(raw_response: str, error: Exception, failure_kind: str) -> dict[str, Any]:
     return {
-        "attempt": attempt,
-        "transport_attempt": transport_attempt,
         "raw_response": raw_response,
         "error_type": type(error).__name__,
         "error": str(error),
-        "request_timeout_seconds": request_timeout,
+        "failure_kind": failure_kind,
     }
+
+
+def _response_usage(response: Any) -> dict[str, int | None] | None:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    details = getattr(usage, "completion_tokens_details", None)
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "reasoning_tokens": getattr(details, "reasoning_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+
+
+def _total_usage(attempts: list[dict[str, Any]]) -> dict[str, int | None]:
+    # 只累计服务端已报告的用量；reasoning属于completion，不能再加入total。
+    totals = {}
+    for key in ("prompt_tokens", "completion_tokens", "reasoning_tokens", "total_tokens"):
+        values = [(item["usage"] or {}).get(key) for item in attempts]
+        known = [value for value in values if value is not None]
+        totals[key] = sum(known) if known else None
+    return totals
 
 
 def _extract_json(content: str) -> dict[str, Any]:
