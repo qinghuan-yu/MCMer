@@ -53,6 +53,36 @@ def generated_figure_paths(value) -> list[str]:
     return []
 
 
+def load_source_adjudication(root: Path, problem_spec):
+    """重载独立语义许可，始终对照提议产生时的题意和当前原件。"""
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.source_adjudication import (
+        SourceAdjudicationRecord,
+        validate_source_adjudication,
+    )
+
+    path = root / "source_adjudication.json"
+    if not path.is_file():
+        return None
+    previous_path = root / "problem_spec_initial.json"
+    prior_problem = (
+        ProblemSpec.model_validate_json(previous_path.read_text(encoding="utf-8"))
+        if previous_path.is_file() else problem_spec
+    )
+    profile_path = root / "evidence_profile.json"
+    if not profile_path.is_file():
+        raise ValueError("source adjudication is missing its evidence snapshot")
+    catalog_path = root / "input_catalog.json"
+    record = SourceAdjudicationRecord.model_validate_json(path.read_text(encoding="utf-8"))
+    validate_source_adjudication(
+        record, problem_spec=prior_problem,
+        input_catalog=json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.is_file() else None,
+        evidence_profile=json.loads(profile_path.read_text(encoding="utf-8")),
+        work_dir=root,
+    )
+    return record
+
+
 def load_source_resolution(root: Path, problem_spec):
     """读取已提交的来源裁决，并从保留快照和原件重新核验。"""
     from app.guidance.contracts import ProblemSpec
@@ -65,6 +95,9 @@ def load_source_resolution(root: Path, problem_spec):
     profile_path = root / "evidence_profile.json"
     if not previous_path.is_file() or not profile_path.is_file():
         raise ValueError("source resolution is missing its preserved problem or evidence snapshot")
+    adjudication = load_source_adjudication(root, problem_spec)
+    if adjudication is None:
+        raise ValueError("source resolution requires independent source adjudication permission")
     record = SourceResolutionRecord.model_validate_json(path.read_text(encoding="utf-8"))
     catalog_path = root / "input_catalog.json"
     validate_source_resolution(
@@ -74,6 +107,7 @@ def load_source_resolution(root: Path, problem_spec):
         input_catalog=json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.is_file() else None,
         evidence_profile=json.loads(profile_path.read_text(encoding="utf-8")),
         work_dir=root,
+        adjudication=adjudication,
     )
     return record
 
@@ -120,6 +154,7 @@ class RecoveryCheckpoint:
 
 STAGE_OUTPUTS = {
     "decomposition": ("problem_spec.json", "problem_spec_initial.json", "source_resolution.json",
+                      "source_adjudication.json",
                       "model_ir_initial.json", "approved_model_ir_initial.json", "revision_request.json"),
     "modeling": ("model_ir.json",),
     "model_review": ("model_review.json", "approved_model_ir.json"),

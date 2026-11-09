@@ -39,7 +39,11 @@ from app.guidance.model_review_validation import (
     validate_model_review,
 )
 from app.guidance.operator_execution import OperatorGraphExecutor
-from app.guidance.recovery import invalidate_stage_outputs, load_source_resolution
+from app.guidance.recovery import (
+    invalidate_stage_outputs,
+    load_source_adjudication,
+    load_source_resolution,
+)
 from app.guidance.stage_contracts import (
     ModelReviewer,
     Modeler,
@@ -187,10 +191,12 @@ class ModelReviewStage:
                 "model_ir_ref": model_ir_path.name,
             }
         )
+        source_adjudication = load_source_adjudication(output_path.parent, problem_spec)
         validate_model_review(
             review, model_ir, revision_request=revision_request, problem_spec=problem_spec,
             source_resolution=source_resolution, input_catalog=input_catalog,
             evidence_profile=evidence_profile, work_dir=output_path.parent,
+            source_adjudication=source_adjudication,
         )
         _write_model(output_path.parent / "model_review.json", review)
         approved_projection = _build_reviewed_model_projection(model_ir, review, problem_spec)
@@ -214,6 +220,7 @@ class ModelReviewStage:
                 problem_spec=problem_spec, evidence_profile=evidence_profile,
                 input_catalog=input_catalog, revision_request=revision_request,
                 source_resolution=source_resolution,
+                source_adjudication=source_adjudication,
             ),
         )
         _write_model(output_path, approved)

@@ -79,10 +79,11 @@ def _resolved_review_case(tmp_path):
     from app.guidance.model_ir import ModelIR
     from app.guidance.recovery import canonical_digest
     from app.guidance.source_resolution import SourceResolutionRecord
-    from test_guidance_source_resolution import _case, _correction as correction_fixture
+    from test_guidance_source_resolution import _adjudication, _case, _correction as correction_fixture
 
     before, catalog, profile = _case(tmp_path)
     correction = correction_fixture()
+    adjudication = _adjudication(before, [("sp1", correction)], catalog, profile, tmp_path)
     payload = before.model_dump(mode="json")
     payload["uncertainties"] = [item for item in payload["uncertainties"] if item["uncertainty_id"] != "UNC001"]
     payload["locked_facts"].append(correction.replacement_fact.model_dump(mode="json"))
@@ -95,6 +96,7 @@ def _resolved_review_case(tmp_path):
         prior_problem_spec_sha256=canonical_digest(before), resolved_problem_spec_sha256=canonical_digest(current),
         corrections=[correction], affected_subproblem_ids=["sp1", "sp2", "downstream"],
         source_evidence_sha256={catalog["blocks"][0]["source_ref"]: catalog["blocks"][0]["sha256"]},
+        source_adjudication_sha256=canonical_digest(adjudication),
     )
     model_data = json.loads((Path(__file__).parent / "fixtures/model_ir/generic_multiperiod_inventory.json").read_text(encoding="utf-8"))
     model_data["subproblems"][0]["subproblem_id"] = "sp1"
@@ -111,20 +113,21 @@ def _resolved_review_case(tmp_path):
             "rationale": "The applied source adjudication removed the false ambiguity.",
         }],
     )
-    return current, record, model, requested, decision, catalog, profile
+    return current, record, model, requested, decision, catalog, profile, adjudication
 
 
 def test_applied_source_resolution_can_discharge_the_exact_erroneous_obligation(tmp_path):
     from app.guidance.model_review_validation import validate_subproblem_review
 
-    spec, record, model, requested, decision, _, _ = _resolved_review_case(tmp_path)
-    validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec, source_resolution=record)
+    spec, record, model, requested, decision, _, _, adjudication = _resolved_review_case(tmp_path)
+    validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec,
+                               source_resolution=record, source_adjudication=adjudication)
 
 
 def test_withdrawal_without_applied_source_resolution_is_rejected(tmp_path):
     from app.guidance.model_review_validation import validate_subproblem_review
 
-    spec, _, model, requested, decision, _, _ = _resolved_review_case(tmp_path)
+    spec, _, model, requested, decision, _, _, _ = _resolved_review_case(tmp_path)
     with pytest.raises(ValueError, match="applied source resolution"):
         validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec)
 
@@ -132,31 +135,34 @@ def test_withdrawal_without_applied_source_resolution_is_rejected(tmp_path):
 def test_actual_model_defect_cannot_be_withdrawn_by_changing_its_source(tmp_path):
     from app.guidance.model_review_validation import validate_subproblem_review
 
-    spec, record, model, requested, decision, _, _ = _resolved_review_case(tmp_path)
+    spec, record, model, requested, decision, _, _, adjudication = _resolved_review_case(tmp_path)
     requested.required_revisions[0].kind = "model"
     with pytest.raises(ValueError, match="model defect"):
-        validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec, source_resolution=record)
+        validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec,
+                                   source_resolution=record, source_adjudication=adjudication)
 
 
 def test_withdrawal_cannot_cite_an_unapplied_correction(tmp_path):
     from app.guidance.model_review_validation import validate_subproblem_review
 
-    spec, record, model, requested, decision, _, _ = _resolved_review_case(tmp_path)
+    spec, record, model, requested, decision, _, _, adjudication = _resolved_review_case(tmp_path)
     decision.revision_checks[0].source_correction_ids = ["fabricated"]
     with pytest.raises(ValueError, match="unknown source correction"):
-        validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec, source_resolution=record)
+        validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec,
+                                   source_resolution=record, source_adjudication=adjudication)
 
 
 def test_source_obligation_cannot_be_falsely_accepted_as_a_model_repair(tmp_path):
     from app.guidance.model_review_validation import validate_subproblem_review
 
-    spec, record, model, requested, decision, _, _ = _resolved_review_case(tmp_path)
+    spec, record, model, requested, decision, _, _, adjudication = _resolved_review_case(tmp_path)
     decision.revision_checks = [RevisionCheckSpec(
         requirement_id="training_scenarios", status="accepted", model_paths=["/objective"],
         rationale="Pretend the wrong source requirement was fulfilled in the model.",
     )]
     with pytest.raises(ValueError, match="source revision"):
-        validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec, source_resolution=record)
+        validate_subproblem_review(decision, model, revision_request=requested, problem_spec=spec,
+                                   source_resolution=record, source_adjudication=adjudication)
 
 
 def test_review_binding_changes_when_source_resolution_evidence_changes(tmp_path):
@@ -164,13 +170,14 @@ def test_review_binding_changes_when_source_resolution_evidence_changes(tmp_path
     from app.guidance.model_review_contracts import ModelIRReview
     from app.guidance.model_review_validation import bind_model_review
 
-    spec, record, model, requested, decision, catalog, profile = _resolved_review_case(tmp_path)
+    spec, record, model, requested, decision, catalog, profile, adjudication = _resolved_review_case(tmp_path)
     model_ir = ModelIR(model_id="source-binding", subproblems=[model])
     args = dict(
         review=ModelIRReview(model_id=model_ir.model_id, subproblem_reviews=[decision]),
         model_ir=model_ir, approved_model_ir=model_ir, problem_spec=spec,
         input_catalog=catalog, evidence_profile=profile,
         revision_request=ModelIRReview(model_id=model_ir.model_id, subproblem_reviews=[requested]),
+        source_adjudication=adjudication,
     )
     original = bind_model_review(**args, source_resolution=record)
     changed = record.model_copy(deep=True)

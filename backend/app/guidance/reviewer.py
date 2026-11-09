@@ -12,15 +12,16 @@ from app.guidance.failure_contracts import bounded_failure_summary, safe_artifac
 from app.guidance.generation_validation import _validate_model_ir_semantics
 from app.guidance.model_generation import _request_model
 from app.guidance.model_ir import BlockedModelIR, ModelIR
-from app.guidance.model_review_contracts import ApprovedModelIR, ModelIRReview, SubproblemReviewSpec
+from app.guidance.model_review_contracts import ApprovedModelIR, ModelIRReview, RevisionRequirementSpec, SubproblemReviewSpec
 from app.guidance.model_review_validation import (
     mathematical_requirement_ids,
     validate_model_review,
     validate_subproblem_review,
     bind_model_review,
 )
-from app.guidance.recovery import file_snapshots, load_source_resolution, workspace_file
-from app.guidance.source_resolution import resolve_problem_sources
+from app.guidance.recovery import file_snapshots, load_source_adjudication, load_source_resolution, workspace_file
+from app.guidance.source_adjudication import LLMSourceAdjudicator, supported_source_proposals
+from app.guidance.source_resolution import validate_source_corrections
 
 
 REVIEW_INSTRUCTIONS = """你是独立数学审核员，只输出目标子题的SubproblemReviewSpec JSON。
@@ -72,8 +73,9 @@ class LLMModelReviewer:
         specs = {item.id: item for item in problem_spec.subproblems}
         profile = evidence_profile or {"evidence": []}
         source_resolution = load_source_resolution(work_dir, problem_spec)
+        source_adjudication = load_source_adjudication(work_dir, problem_spec) if revision_request is not None else None
         reusable = _source_unaffected_reviews(
-            work_dir, problem_spec, model_ir, revision_request, source_resolution, input_catalog, profile,
+            work_dir, problem_spec, model_ir, revision_request, source_resolution, source_adjudication, input_catalog, profile,
         )
         source_files = {item["source_file"] for item in profile.get("evidence", []) if item.get("source_file")}
         if input_catalog and input_catalog.get("source_file"):
@@ -118,6 +120,7 @@ class LLMModelReviewer:
                 validate_subproblem_review(
                     decision, subproblem, revision_request=local_revision, problem_spec=problem_spec,
                     source_resolution=source_resolution, input_catalog=input_catalog,
+                    source_adjudication=source_adjudication,
                     evidence_profile=profile, work_dir=work_dir,
                 )
                 if decision.assessment_status != "reviewed":
@@ -151,7 +154,7 @@ class LLMModelReviewer:
                      for decision in decisions for correction in decision.source_corrections]
         if proposals:
             try:
-                resolve_problem_sources(
+                validate_source_corrections(
                     problem_spec, proposals, input_catalog=input_catalog,
                     evidence_profile=profile, work_dir=work_dir,
                 )
@@ -177,15 +180,64 @@ class LLMModelReviewer:
                     subproblem_id=decision.subproblem_id, status="blocked", assessment_status="not_assessed",
                     blocking_issues=[bounded_failure_summary(str(exc), diagnostic_name)],
                 ) if decision.subproblem_id in affected else decision for decision in decisions]
+            else:
+                if revision_request is None:
+                    source_adjudication = await LLMSourceAdjudicator(
+                        self.llm, request_timeout=self.request_timeout, token_budget=self.token_budget,
+                    ).adjudicate(
+                        problem_spec=problem_spec, proposals=proposals, input_catalog=input_catalog,
+                        evidence_profile=profile, work_dir=work_dir,
+                    )
+                    work_dir.mkdir(parents=True, exist_ok=True)
+                    (work_dir / "source_adjudication.json").write_text(
+                        source_adjudication.model_dump_json(indent=2), encoding="utf-8", newline="\n",
+                    )
+                    decisions = _retain_supported_corrections(decisions, source_adjudication)
+        if revision_request is None and source_adjudication is None:
+            # 初审没有取得许可时不能遗留另一次初审的许可；终审始终保留初审工件。
+            (work_dir / "source_adjudication.json").unlink(missing_ok=True)
         review = ModelIRReview(model_id=model_ir.model_id, subproblem_reviews=decisions)
         validate_model_review(
             review, model_ir, revision_request=revision_request, problem_spec=problem_spec,
             source_resolution=source_resolution, input_catalog=input_catalog, evidence_profile=profile, work_dir=work_dir,
+            source_adjudication=source_adjudication,
         )
         return review
 
 
-def _source_unaffected_reviews(root, problem_spec, model_ir, revision_request, resolution, catalog, profile):
+def _retain_supported_corrections(decisions, adjudication):
+    supported = {(owner, item.correction_id) for owner, item in supported_source_proposals(adjudication)}
+    result = []
+    for decision in decisions:
+        rejected = [item for item in decision.source_corrections
+                    if (decision.subproblem_id, item.correction_id) not in supported]
+        if not rejected:
+            result.append(decision)
+            continue
+        identifiers = {item.requirement_id for item in decision.required_revisions}
+        suffix = 1
+        while f"source_adjudication_pending_{suffix}" in identifiers:
+            suffix += 1
+        basis = list(dict.fromkeys(
+            f"problem_spec.json#{'uncertainties' if item.target_kind == 'uncertainty' else 'locked_facts'}/{item.target_id}"
+            for item in rejected
+        ))
+        obligation = RevisionRequirementSpec(
+            requirement_id=f"source_adjudication_pending_{suffix}", kind="source", basis_refs=basis,
+            description="The proposed source correction did not receive independent semantic support; the disputed source remains unresolved.",
+            acceptance_criteria="Resolve the source relation with independently supported original evidence before modeling or execution.",
+        )
+        payload = decision.model_dump(mode="json")
+        payload["source_corrections"] = [item.model_dump(mode="json") for item in decision.source_corrections
+                                         if (decision.subproblem_id, item.correction_id) in supported]
+        payload["required_revisions"].append(obligation.model_dump(mode="json"))
+        if decision.status != "blocked":
+            payload["status"] = "revision_required"
+        result.append(SubproblemReviewSpec.model_validate(payload))
+    return result
+
+
+def _source_unaffected_reviews(root, problem_spec, model_ir, revision_request, resolution, adjudication, catalog, profile):
     if resolution is None or revision_request is None:
         return {}
     try:
@@ -202,6 +254,7 @@ def _source_unaffected_reviews(root, problem_spec, model_ir, revision_request, r
         binding = bind_model_review(
             review=original_review, model_ir=previous_model, approved_model_ir=previous_approved.approved_model_ir,
             problem_spec=previous_spec, input_catalog=catalog, evidence_profile=profile, revision_request=None,
+            source_adjudication=adjudication,
         )
         if binding != previous_approved.review_binding:
             return {}

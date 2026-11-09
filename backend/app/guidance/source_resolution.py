@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,6 +13,9 @@ from app.artifacts.evidence_profile import EvidenceProfile
 from app.artifacts.input_catalog import InputCatalog
 from app.guidance.contracts import LockedFactSpec, ProblemSpec
 from app.guidance.recovery import canonical_digest, workspace_file
+
+if TYPE_CHECKING:
+    from app.guidance.source_adjudication import SourceAdjudicationRecord
 
 
 class SourceCitation(BaseModel):
@@ -38,6 +41,7 @@ class SourceResolutionRecord(BaseModel):
 
     prior_problem_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     resolved_problem_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_adjudication_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     corrections: list[SourceCorrectionSpec]
     affected_subproblem_ids: list[str]
     source_evidence_sha256: dict[str, str]
@@ -50,7 +54,53 @@ def resolve_problem_sources(
     input_catalog: dict | None,
     evidence_profile: dict,
     work_dir: Path | None = None,
+    adjudication: SourceAdjudicationRecord | None = None,
 ) -> tuple[ProblemSpec, SourceResolutionRecord]:
+    from app.guidance.source_adjudication import supported_source_proposals, validate_source_adjudication
+
+    if adjudication is None:
+        raise ValueError("source correction application requires independent adjudication permission")
+    validate_source_adjudication(
+        adjudication, problem_spec=problem_spec, input_catalog=input_catalog,
+        evidence_profile=evidence_profile, work_dir=work_dir,
+    )
+    if proposals != supported_source_proposals(adjudication):
+        raise ValueError("source corrections must exactly match the supported adjudication proposals")
+    resolved, corrections, affected, source_hashes = _prepare_source_resolution(
+        problem_spec, proposals, input_catalog=input_catalog,
+        evidence_profile=evidence_profile, work_dir=work_dir,
+    )
+    return resolved, SourceResolutionRecord(
+        prior_problem_spec_sha256=canonical_digest(problem_spec),
+        resolved_problem_spec_sha256=canonical_digest(resolved),
+        source_adjudication_sha256=canonical_digest(adjudication), corrections=corrections,
+        affected_subproblem_ids=affected, source_evidence_sha256=source_hashes,
+    )
+
+
+def validate_source_corrections(
+    problem_spec: ProblemSpec,
+    proposals: list[tuple[str, SourceCorrectionSpec]],
+    *,
+    input_catalog: dict | None,
+    evidence_profile: dict,
+    work_dir: Path | None = None,
+) -> None:
+    """只检查提议的来源、作用域和结构，不授予语义应用许可。"""
+    _prepare_source_resolution(
+        problem_spec, proposals, input_catalog=input_catalog,
+        evidence_profile=evidence_profile, work_dir=work_dir,
+    )
+
+
+def _prepare_source_resolution(
+    problem_spec: ProblemSpec,
+    proposals: list[tuple[str, SourceCorrectionSpec]],
+    *,
+    input_catalog: dict | None,
+    evidence_profile: dict,
+    work_dir: Path | None,
+) -> tuple[ProblemSpec, list[SourceCorrectionSpec], list[str], dict[str, str]]:
     # 从完整旧快照构造新值；任何拒绝都不应留下部分修改。
     original = problem_spec.model_dump(mode="json")
     targets = {
@@ -58,7 +108,7 @@ def resolve_problem_sources(
         **{("uncertainty", item.uncertainty_id): item for item in problem_spec.uncertainties},
     }
     replacements: dict[tuple[str, str], LockedFactSpec] = {}
-    identities: dict[str, tuple[str, str]] = {}
+    identities: dict[str, SourceCorrectionSpec] = {}
     corrections: list[SourceCorrectionSpec] = []
     source_hashes: dict[str, str] = {}
     affected: set[str] = set()
@@ -82,8 +132,8 @@ def resolve_problem_sources(
             raise ValueError("source correction cannot overwrite another locked fact")
         if key in replacements and replacements[key] != replacement:
             raise ValueError(f"conflicting source corrections for {key!r}")
-        if correction.correction_id in identities and identities[correction.correction_id] != key:
-            raise ValueError("source correction identifier cannot refer to different targets")
+        if correction.correction_id in identities and identities[correction.correction_id] != correction:
+            raise ValueError("source correction identifier cannot refer to different proposals")
         references = replacement.source_refs
         if len(references) != len(set(references)) or set(references) != {item.source_ref for item in correction.evidence}:
             raise ValueError("replacement source references must exactly match quoted evidence")
@@ -100,7 +150,7 @@ def resolve_problem_sources(
         # 不同 ID 的等价提议都保留，便于各题精确引用撤回证据；只应用一次目标。
         if correction.correction_id not in identities:
             corrections.append(correction)
-            identities[correction.correction_id] = key
+            identities[correction.correction_id] = correction
 
     original["locked_facts"] = [
         replacements.get(("locked_fact", item.fact_id), item).model_dump(mode="json")
@@ -129,12 +179,7 @@ def resolve_problem_sources(
         if expanded == affected:
             break
         affected = expanded
-    return resolved, SourceResolutionRecord(
-        prior_problem_spec_sha256=canonical_digest(problem_spec),
-        resolved_problem_spec_sha256=canonical_digest(resolved), corrections=corrections,
-        affected_subproblem_ids=[item.id for item in problem_spec.subproblems if item.id in affected],
-        source_evidence_sha256=source_hashes,
-    )
+    return resolved, corrections, [item.id for item in problem_spec.subproblems if item.id in affected], source_hashes
 
 
 def validate_source_resolution(
@@ -145,11 +190,17 @@ def validate_source_resolution(
     input_catalog: dict | None,
     evidence_profile: dict,
     work_dir: Path | None = None,
+    adjudication: SourceAdjudicationRecord | None = None,
 ) -> None:
+    from app.guidance.source_adjudication import supported_source_proposals
+
+    if adjudication is None:
+        raise ValueError("source resolution reload requires independent adjudication permission")
     rebuilt, expected = resolve_problem_sources(
         previous_problem_spec,
-        [(item.replacement_fact.subproblem_ids[0], item) for item in record.corrections],
+        supported_source_proposals(adjudication),
         input_catalog=input_catalog, evidence_profile=evidence_profile, work_dir=work_dir,
+        adjudication=adjudication,
     )
     if expected != record or rebuilt != problem_spec:
         raise ValueError("source resolution record does not match its bound snapshots")

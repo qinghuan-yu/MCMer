@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app.artifacts.evidence_profile import EvidenceProfile
 from app.artifacts.input_catalog import build_input_catalog
 from app.guidance.contracts import ProblemSpec
 from app.guidance.model_ir import FactBindingSpec, ModelIR
@@ -74,12 +75,46 @@ def _case(root, *, target_kind="uncertainty"):
     return spec, model, review, catalog.model_dump(mode="json")
 
 
-def _write(root, spec, model, review):
+def _write_adjudication(root, spec, review):
+    from test_guidance_source_resolution import _adjudication
+
+    proposals = [(decision.subproblem_id, correction)
+                 for decision in review.subproblem_reviews for correction in decision.source_corrections]
+    record = _adjudication(
+        spec, proposals, json.loads((root / "input_catalog.json").read_text(encoding="utf-8")),
+        json.loads((root / "evidence_profile.json").read_text(encoding="utf-8")), root,
+    )
+    (root / "source_adjudication.json").write_text(record.model_dump_json(), encoding="utf-8")
+    return record
+
+
+def _write(root, spec, model, review, *, adjudication=True):
     # 以不同于model_dump_json默认的排版验证原始拆题字节真正保留。
     old_bytes = (json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=4) + "\n").encode("utf-8")
     (root / "problem_spec.json").write_bytes(old_bytes)
     (root / "model_ir.json").write_text(model.model_dump_json(), encoding="utf-8")
     (root / "model_review.json").write_text(review.model_dump_json(), encoding="utf-8")
+    if adjudication:
+        from app.guidance.model_review_validation import bind_model_review
+        from app.guidance.stages import _build_reviewed_model_projection
+
+        record = _write_adjudication(root, spec, review)
+        projection = _build_reviewed_model_projection(model, review, spec)
+        approved = ApprovedModelIR(
+            review_status="partial", model_id=model.model_id,
+            executable_subproblem_ids=[item.subproblem_id for item in projection.subproblems
+                                       if item.execution_status == "solvable"],
+            approved_model_ir=projection,
+            review_binding=bind_model_review(
+                review=review, model_ir=model, approved_model_ir=projection, problem_spec=spec,
+                evidence_profile=EvidenceProfile.model_validate_json(
+                    (root / "evidence_profile.json").read_text(encoding="utf-8")
+                ).model_dump(mode="json"),
+                input_catalog=json.loads((root / "input_catalog.json").read_text(encoding="utf-8")),
+                revision_request=None, source_adjudication=record,
+            ),
+        )
+        (root / "approved_model_ir.json").write_text(approved.model_dump_json(), encoding="utf-8")
     return old_bytes
 
 
@@ -208,7 +243,7 @@ def test_unresolved_source_obligation_blocks_generation_without_calling_model(tm
 def test_source_resolution_survives_modeling_and_is_removed_by_new_decomposition(tmp_path):
     from app.guidance.recovery import invalidate_stage_outputs
 
-    snapshots = ("source_resolution.json", "problem_spec_initial.json", "approved_model_ir_initial.json")
+    snapshots = ("source_resolution.json", "source_adjudication.json", "problem_spec_initial.json", "approved_model_ir_initial.json")
     for name in snapshots:
         (tmp_path / name).write_text("{}", encoding="utf-8")
     invalidate_stage_outputs(tmp_path, "modeling")
@@ -222,6 +257,7 @@ def test_source_resolution_survives_modeling_and_is_removed_by_new_decomposition
 def test_preserving_revision_keeps_original_approved_binding_bytes(tmp_path):
     from app.guidance.model_review_validation import bind_model_review
     from app.guidance.pipeline import _preserve_revision_request
+    from app.guidance.recovery import load_source_adjudication
     from app.guidance.stages import _build_reviewed_model_projection
 
     spec, model, review, catalog = _case(tmp_path)
@@ -232,7 +268,9 @@ def test_preserving_revision_keeps_original_approved_binding_bytes(tmp_path):
         executable_subproblem_ids=["independent"], approved_model_ir=projection,
         review_binding=bind_model_review(
             review=review, model_ir=model, approved_model_ir=projection, problem_spec=spec,
-            evidence_profile={"evidence": []}, input_catalog=catalog, revision_request=None,
+            evidence_profile=EvidenceProfile(evidence=[]).model_dump(mode="json"),
+            input_catalog=catalog, revision_request=None,
+            source_adjudication=load_source_adjudication(tmp_path, spec),
         ),
     )
     original_bytes = (json.dumps(approved.model_dump(mode="json"), indent=4) + "\n").encode("utf-8")
@@ -313,6 +351,7 @@ def test_pipeline_applies_one_source_correction_and_isolates_final_pending_scope
         async def review(self, **kwargs):
             calls.append("review")
             if kwargs["revision_request"] is None:
+                _write_adjudication(kwargs["work_dir"], kwargs["problem_spec"], initial_review)
                 return initial_review
             assert kwargs["problem_spec"].locked_facts == [first_correction.replacement_fact]
             return ModelIRReview.model_validate({

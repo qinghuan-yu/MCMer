@@ -198,6 +198,32 @@ Q4首发prompt81200＋completion32768＝113968，全部completion用于reasoning
 
 **边界裁决**：对外schema和真实校验不一致已修复。最危险的新实证是纠正提议可以通过真实引文校验却改变原文关系；现有resolver隐藏的是机械来源和快照一致性，不拥有独立语义判断。更小的下一替换是将纠正提议与独立语义应用许可分离，保留一次修订及共享失效；完整范围和首个RED已写入唯一计划D2.2d，待批准。未采用大规模重拆，也没有放宽校验或追加提示后反复请求。D2.2c.4父项和D2整体仍未验收。
 
+## D2.2d：获批独立语义复核与应用许可
+
+用户明确批准“实施独立语义复核门禁”。Model Reviewer现在只提出纠正；`source_adjudication.py`独立核对原件、目标源记录和完整提议，输出supported/contradicted/not_assessed，绑定题意、catalog/profile、原件和所有owner的完整提议。机械来源校验可接收待审提议，但应用只接受与许可完全一致的supported集合。旧缺许可的纠正记录和旧缺语义摘要的审核绑定直接失效，历史工件不改写。
+
+### 工程证据与独立审查
+
+- 来源RED `.local/d22d-source-red.xml`直接复现真实“双对象收费”引文配错误单对象关系，在旧resolver无许可也能应用（DID NOT RAISE）。新增异步RED `.local/d22d-source-await-red.xml`复现等待provider期间修改提议会使旧结论绑定新内容；请求现持有深拷贝快照。合同最终23 passed，`.local/d22d-source-final.xml`。
+- Reviewer RED `.local/d22d-reviewer-red.xml`为4 failed：三种语义结论均未触发独立请求，旧审核绑定缺字段仍接受。GREEN覆盖拒绝/未评估/请求失败转为未解决source义务、保留已有数学检查与独立题，终审不启动第二次复核、不覆盖初审许可。共享来源所有者和完整后继继续由统一pending source闭包阻断；真实model缺陷不可撤回。
+- 应用/恢复RED `.local/d22d-flow-red.xml`为2 failed，补充完整初审绑定RED `.local/d22d-flow-binding-red-final.xml`为7 failed/10 passed。应用前重新绑定审核、模型、执行投影、题意、来源及语义许可；缺失或自洽替换许可、改review/model/projection均拒绝。恢复基于原题意重新检查许可和已应用记录，全拒绝没有resolution时仍绑定许可。组合65 passed，`.local/d22d-flow-final-green3.xml`。
+- 独立审查复现50条合法model义务加1条source义务导致整个审核返回失败（`.local/d22d-review-capacity-red.xml`）。取消required_revisions/revision_checks不一致的固定50条上限，保留唯一ID、完整有序覆盖及每合同token/两次请求预算；原50条model义务逐项不变，source义务单独保留。同owner混合支持/拒绝仍隔离，已应用纠正后的终审新提议不能覆写许可。审查及旧flow夹具18 passed，`.local/d22d-review-audit-final.xml`；旧来源测试迁移60 passed。
+- 无网生产Stage审查 `.local/d22d-flow-readonly-audit/audit.json`：全拒绝只保留independent；删除许可或替换为另一份自洽许可后，数学审核由passed变为not_assessed，不能沿用旧批准。
+- 最终完整后端 **834 passed / 27.18秒**，`.local/d22d-full.xml`，涵盖Guidance/Polish/core。公共API、前端和求解算法未改；未重复前端构建。新行为有真实RED，旧夹具直接补显式有效许可，没有兼容路径。
+
+### 原始错误与正确关系的真实Flash复核
+
+新实验`.local/20261109-d22d-semantic-flash-01`调用生产`LLMSourceAdjudicator`，原样使用上一诊断的LF-025/LF-026提议；只发送原文、目标源记录、待审提议、提示及schema，无ModelIR或独立正确答案。预演`.local/20261109-d22d-semantic-probe-01`为0调用；独立出站审查通过。标准review额度32768/32768、最多2次，实际只用 **1次deepseek-flash、2520 prompt＋9522 completion＝12042 tokens**，其中9218 reasoning已计入completion；59.188秒自然终态、未知0。
+
+| 原样提议 | Flash结论 | 独立裁决与应用 |
+| --- | --- | --- |
+| LF-025：训练仅按新模块收费、指导者不另收费 | contradicted | 正确拒绝。原文明确向两对象计收；4新模块＋1指导者应40，错误提议为32。未提升该事实，UNC-001保留。 |
+| LF-026：每个未服务且未指导周期均保养 | supported | 与原文一致。隔离应用只提升该事实并消解UNC-002。 |
+
+完整两项提议送入应用入口时被拒绝，只有supported子集能生成`permitted_problem_spec.json`和`permitted_source_resolution.json`；原始`problem_spec.json`及所有历史运行保持原字节。调用账本、原始response、许可、应用快照、原件/历史目录/生产/配置哈希和凭据扫描均核对；独立审计见`.local/d22d-semantic-audit-20261109/audit.json`。
+
+本轮之后D2累计 **95次已启动、3616939已知tokens、3次历史未知，总用量仍为null**。本次完成D2.2d.1–4规定的工程和两项来源反例验收，压缩为计划不变量15。它证明本例错误纠正被拦截且正确提议可应用，不证明自然语言语义普遍可靠，也没有重新生成/执行整题。D2.2c.4及D2.2/D2.3仍未验收；下一步回到真实Reviewer→一次纠正/修订→执行链，继续核对同族题和既有Q4反例。
+
 ## D2.3：独立数学核对与剩余出口
 
 `.local/d2_independent_math.py` 与 `.local/d2-independent-preparation-20261109/` 从原DOCX核对19段、5表和SHA，原件总需求4065。6个正反例通过，旧Q1真实解独立重算7625，与既有DP参考一致。

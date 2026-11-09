@@ -15,7 +15,8 @@ from app.guidance.model_ir import (BlockedModelIR, ModelIR, SolvableModelIR)
 from app.guidance.model_review_contracts import (
     ApprovedModelIR, ModelIRReview, ModelReviewBinding, SubproblemReviewSpec,
 )
-from app.guidance.source_resolution import SourceResolutionRecord, resolve_problem_sources
+from app.guidance.source_adjudication import SourceAdjudicationRecord, supported_source_proposals
+from app.guidance.source_resolution import SourceResolutionRecord, validate_source_corrections
 
 
 def validate_model_review(
@@ -25,6 +26,7 @@ def validate_model_review(
     revision_request: ModelIRReview | None = None,
     problem_spec: ProblemSpec | None = None,
     source_resolution: SourceResolutionRecord | None = None,
+    source_adjudication: SourceAdjudicationRecord | None = None,
     input_catalog: dict | None = None,
     evidence_profile: dict | None = None,
     work_dir: Path | None = None,
@@ -60,13 +62,14 @@ def validate_model_review(
             decision, subproblem,
             revision_request=requested_by_id.get(decision.subproblem_id),
             problem_spec=problem_spec, source_resolution=source_resolution,
+            source_adjudication=source_adjudication,
             input_catalog=input_catalog, evidence_profile=evidence_profile, work_dir=work_dir,
         )
     proposals = [(decision.subproblem_id, correction)
                  for decision in review.subproblem_reviews for correction in decision.source_corrections]
     if proposals:
         # 单题可接受的纠正合并后仍须一致，不能按题目顺序覆盖共享事实。
-        resolve_problem_sources(problem_spec, proposals, input_catalog=input_catalog,
+        validate_source_corrections(problem_spec, proposals, input_catalog=input_catalog,
                                 evidence_profile=evidence_profile or {"evidence": []}, work_dir=work_dir)
 
 
@@ -77,6 +80,7 @@ def validate_subproblem_review(
     revision_request: SubproblemReviewSpec | None = None,
     problem_spec: ProblemSpec | None = None,
     source_resolution: SourceResolutionRecord | None = None,
+    source_adjudication: SourceAdjudicationRecord | None = None,
     input_catalog: dict | None = None,
     evidence_profile: dict | None = None,
     work_dir: Path | None = None,
@@ -90,7 +94,7 @@ def validate_subproblem_review(
     if decision.source_corrections:
         if problem_spec is None:
             raise ValueError("source corrections require the current ProblemSpec")
-        resolve_problem_sources(
+        validate_source_corrections(
             problem_spec, [(decision.subproblem_id, item) for item in decision.source_corrections],
             input_catalog=input_catalog, evidence_profile=evidence_profile or {"evidence": []}, work_dir=work_dir,
         )
@@ -134,7 +138,7 @@ def validate_subproblem_review(
     for check in decision.revision_checks:
         requirement = requirements_by_id[check.requirement_id]
         if check.status == "withdrawn":
-            _validate_source_withdrawal(check, requirement, decision.subproblem_id, problem_spec, source_resolution)
+            _validate_source_withdrawal(check, requirement, decision.subproblem_id, problem_spec, source_resolution, source_adjudication)
         elif requirement.kind == "source" and check.status == "accepted":
             raise ValueError("source revision must be resolved and withdrawn, not accepted as a model repair")
         for path in check.model_paths:
@@ -202,14 +206,19 @@ def _validate_requirement_basis(decision: SubproblemReviewSpec, problem_spec: Pr
                 raise ValueError(f"revision basis is unknown or outside the subproblem scope: {ref!r}")
 
 
-def _validate_source_withdrawal(check, requirement, target_id, problem_spec, source_resolution) -> None:
+def _validate_source_withdrawal(check, requirement, target_id, problem_spec, source_resolution, source_adjudication) -> None:
     if requirement.kind != "source":
         raise ValueError("a model defect cannot be withdrawn through source correction")
     if source_resolution is None:
         raise ValueError("withdrawal requires an applied source resolution")
+    if source_adjudication is None or _review_digest(source_adjudication) != source_resolution.source_adjudication_sha256:
+        raise ValueError("withdrawal requires the bound independent source adjudication")
     if problem_spec is None or _review_digest(problem_spec) != source_resolution.resolved_problem_spec_sha256:
         raise ValueError("applied source resolution does not match the current ProblemSpec")
     corrections = {item.correction_id: item for item in source_resolution.corrections}
+    supported = {item.correction_id: item for _, item in supported_source_proposals(source_adjudication)}
+    if any(supported.get(identifier) != correction for identifier, correction in corrections.items()):
+        raise ValueError("withdrawal requires supported source correction evidence")
     unknown = set(check.source_correction_ids) - corrections.keys()
     if unknown:
         raise ValueError(f"unknown source correction evidence: {sorted(unknown)!r}")
@@ -265,6 +274,7 @@ def bind_model_review(
     problem_spec: ProblemSpec, evidence_profile: dict, input_catalog: dict | None,
     revision_request: ModelIRReview | None,
     source_resolution: SourceResolutionRecord | None = None,
+    source_adjudication: SourceAdjudicationRecord | None = None,
 ) -> ModelReviewBinding:
     # 绑定由系统写入，LLM不能自报审核所用快照的哈希。
     return ModelReviewBinding(
@@ -276,6 +286,7 @@ def bind_model_review(
         review_sha256=_review_digest(review),
         revision_request_sha256=_review_digest(revision_request) if revision_request is not None else None,
         source_resolution_sha256=_review_digest(source_resolution) if source_resolution is not None else None,
+        source_adjudication_sha256=_review_digest(source_adjudication) if source_adjudication is not None else None,
     )
 
 
@@ -285,9 +296,10 @@ def assess_mathematical_review(
     if approved.review_binding is None or problem_spec is None:
         return VerificationLayer(status="not_assessed", reasons=["no mathematical review bound to the current model and sources was registered"])
     try:
-        from app.guidance.recovery import load_source_resolution
+        from app.guidance.recovery import load_source_adjudication, load_source_resolution
 
         source_resolution = load_source_resolution(root, problem_spec)
+        source_adjudication = load_source_adjudication(root, problem_spec)
         review = ModelIRReview.model_validate_json((root / approved.review_ref).read_text(encoding="utf-8"))
         model_ir = ModelIR.model_validate_json((root / approved.model_ir_ref).read_text(encoding="utf-8"))
         revision_request = (
@@ -302,6 +314,7 @@ def assess_mathematical_review(
             ).model_dump(mode="json"),
             input_catalog=load_review_catalog(root), revision_request=revision_request,
             source_resolution=source_resolution,
+            source_adjudication=source_adjudication,
         )
     except (OSError, ValueError) as exc:
         return VerificationLayer(status="not_assessed", reasons=[f"mathematical review evidence is unavailable or invalid: {exc}"])
@@ -311,6 +324,7 @@ def assess_mathematical_review(
         validate_model_review(
             review, model_ir, problem_spec=problem_spec, revision_request=revision_request,
             source_resolution=source_resolution, input_catalog=load_review_catalog(root),
+            source_adjudication=source_adjudication,
             evidence_profile=EvidenceProfile.model_validate_json(
                 (root / "evidence_profile.json").read_text(encoding="utf-8")
             ).model_dump(mode="json"), work_dir=root,

@@ -32,6 +32,7 @@ class ModelReviewBinding(IRModel):
     review_sha256: ReviewDigest
     revision_request_sha256: ReviewDigest | None
     source_resolution_sha256: ReviewDigest | None
+    source_adjudication_sha256: ReviewDigest | None
 
 
 class ApprovedModelIR(IRModel):
@@ -166,9 +167,8 @@ class SubproblemReviewSpec(IRModel):
     blocking_issues: list[str] = Field(default_factory=list, max_length=50)
     required_revisions: list[RevisionRequirementSpec] = Field(
         default_factory=list,
-        max_length=50,
     )
-    revision_checks: list[RevisionCheckSpec] = Field(default_factory=list, max_length=50)
+    revision_checks: list[RevisionCheckSpec] = Field(default_factory=list)
     source_corrections: list[SourceCorrectionSpec] = Field(default_factory=list, max_length=50)
     mathematical_checks: list[MathematicalCorrespondenceCheck] = Field(
         default_factory=list, max_length=250,

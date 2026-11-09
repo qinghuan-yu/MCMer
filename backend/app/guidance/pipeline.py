@@ -6,14 +6,16 @@ import json
 from pathlib import Path
 from typing import AsyncGenerator, Protocol
 
+from app.artifacts.evidence_profile import EvidenceProfile
 from app.guidance.contracts import ProblemSpec
 from app.guidance.failure_contracts import (
     bounded_failure_summary,
     bounded_subproblem_objective,
 )
 from app.guidance.model_review_contracts import (ApprovedModelIR, ModelIRReview, ModelReviewSubmission)
+from app.guidance.model_review_validation import bind_model_review, load_review_catalog
 from app.guidance.model_ir import (BlockedModelIR, ModelIR)
-from app.guidance.recovery import invalidate_stage_outputs
+from app.guidance.recovery import invalidate_stage_outputs, load_source_adjudication
 from app.guidance.source_resolution import resolve_problem_sources
 from app.schemas.response import (
     TaskProgress,
@@ -217,21 +219,44 @@ def _preserve_revision_request(root: Path, model_path: Path) -> Path:
     ]
     if (root / "source_resolution.json").exists():
         raise ValueError("source correction is limited to one revision pass")
+    adjudication = load_source_adjudication(root, problem_spec)
+    initial_model = ModelIR.model_validate_json(model_path.read_text(encoding="utf-8"))
+    approved_path = root / "approved_model_ir.json"
+    approved = _load_approved_model(approved_path) if approved_path.is_file() else None
+    bound_adjudication = (
+        approved.review_binding.source_adjudication_sha256
+        if approved is not None and approved.review_binding is not None else None
+    )
+    input_catalog = _read_json(root / "input_catalog.json") or None
+    evidence_profile = _read_json(root / "evidence_profile.json")
+    if adjudication is not None or bound_adjudication is not None:
+        if adjudication is None or approved is None or approved.review_binding is None:
+            raise ValueError("source permission requires its unchanged initial review binding")
+        current_binding = bind_model_review(
+            review=review, model_ir=initial_model, approved_model_ir=approved.approved_model_ir,
+            problem_spec=problem_spec,
+            evidence_profile=EvidenceProfile.model_validate(evidence_profile).model_dump(mode="json"),
+            input_catalog=load_review_catalog(root),
+            revision_request=None, source_adjudication=adjudication,
+        )
+        if current_binding != approved.review_binding:
+            raise ValueError("initial source permission review binding is stale")
     resolution = None
     if proposals:
+        if adjudication is None:
+            raise ValueError("source correction requires independent source adjudication permission")
         problem_spec, resolution = resolve_problem_sources(
             problem_spec, proposals,
-            input_catalog=_read_json(root / "input_catalog.json") or None,
-            evidence_profile=_read_json(root / "evidence_profile.json"),
+            input_catalog=input_catalog,
+            evidence_profile=evidence_profile,
             work_dir=root,
+            adjudication=adjudication,
         )
     # 所有纠正先验证，再保存旧字节；原审核始终指向它实际审核过的题意。
     initial_problem_path = root / "problem_spec_initial.json"
     initial_problem_path.write_bytes(original_problem_bytes)
-    initial_model = ModelIR.model_validate_json(model_path.read_text(encoding="utf-8"))
     initial_model_path = root / "model_ir_initial.json"
     initial_model_path.write_text(initial_model.model_dump_json(indent=2), encoding="utf-8")
-    approved_path = root / "approved_model_ir.json"
     if approved_path.is_file():
         (root / "approved_model_ir_initial.json").write_bytes(approved_path.read_bytes())
 

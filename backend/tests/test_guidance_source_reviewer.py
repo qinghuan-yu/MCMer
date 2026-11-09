@@ -10,7 +10,7 @@ from app.guidance.model_review_contracts import ApprovedModelIR
 from app.guidance.model_review_validation import bind_model_review
 from app.guidance.reviewer import LLMModelReviewer
 from app.guidance.source_resolution import resolve_problem_sources
-from test_guidance_source_resolution import _case, _correction
+from test_guidance_source_resolution import _adjudication, _case, _correction
 
 
 def _decision(identifier, requirements):
@@ -32,10 +32,22 @@ class SourceReviewLLM:
     def __init__(self, *, correction=None):
         self.correction = correction
         self.payloads = []
+        self.adjudication_payloads = []
 
     async def chat(self, **kwargs):
         payload = json.loads(kwargs["history"][1]["content"])
         payload = payload.get("original_input", payload)
+        if "original_sources" in payload:
+            self.adjudication_payloads.append(payload)
+            unique = {item["correction"]["correction_id"]: item["correction"] for item in payload["proposals"]}
+            result = {"checks": [{
+                "correction_id": identifier, "status": "supported",
+                "evidence": correction["evidence"],
+                "rationale": "The source independently confirms both charged participant groups.",
+            } for identifier, correction in unique.items()]}
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(result)), finish_reason="stop",
+            )])
         self.payloads.append(payload)
         decision = _decision(payload["target_subproblem_id"], payload["mathematical_requirements"])
         if self.correction is not None and payload["target_subproblem_id"] == "sp1":
@@ -57,8 +69,10 @@ class SourceReviewLLM:
 def _fixture(root, *, resolved):
     before, catalog, profile = _case(root)
     correction = _correction()
+    adjudication = _adjudication(before, [("sp1", correction)], catalog, profile, root)
     current, record = resolve_problem_sources(
         before, [("sp1", correction)], input_catalog=catalog, evidence_profile=profile, work_dir=root,
+        adjudication=adjudication,
     )
     base = json.loads((Path(__file__).parent / "fixtures/model_ir/generic_multiperiod_inventory.json").read_text(encoding="utf-8"))["subproblems"][0]
     models = []
@@ -87,12 +101,14 @@ def _fixture(root, *, resolved):
             review_binding=bind_model_review(
                 review=original_review, model_ir=model, approved_model_ir=projection,
                 problem_spec=before, input_catalog=catalog, evidence_profile=profile, revision_request=None,
+                source_adjudication=adjudication,
             ),
         )
         files.update({
             "problem_spec_initial.json": before.model_dump(mode="json"),
             "problem_spec.json": current.model_dump(mode="json"),
             "source_resolution.json": record.model_dump(mode="json"),
+            "source_adjudication.json": adjudication.model_dump(mode="json"),
             "model_ir_initial.json": model.model_dump(mode="json"),
             "approved_model_ir_initial.json": approved.model_dump(mode="json"),
         })
@@ -110,10 +126,12 @@ def _review(root, llm, spec, model, catalog, profile, revision=None):
 
 def test_reviewer_accepts_a_source_correction_only_after_checking_the_original(tmp_path):
     spec, model, _, catalog, profile = _fixture(tmp_path, resolved=False)
-    result = _review(tmp_path, SourceReviewLLM(correction=_correction()), spec, model, catalog, profile)
+    llm = SourceReviewLLM(correction=_correction())
+    result = _review(tmp_path, llm, spec, model, catalog, profile)
     assert result.subproblem_reviews[0].assessment_status == "reviewed"
     assert result.subproblem_reviews[0].status == "revision_required"
     assert result.subproblem_reviews[0].source_corrections[0].replacement_fact.value == "trainees_and_instructors"
+    assert len(llm.adjudication_payloads) == 1
 
 
 def test_final_reviewer_receives_applied_adjudication_and_can_withdraw_source_obligation(tmp_path):

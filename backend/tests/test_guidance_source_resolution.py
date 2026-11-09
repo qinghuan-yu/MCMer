@@ -85,11 +85,29 @@ def _correction(**changes):
     return SourceCorrectionSpec.model_validate(payload)
 
 
+def _adjudication(spec, proposals, catalog, profile, tmp_path):
+    from app.guidance.source_adjudication import (
+        SourceAdjudicationCheck, SourceAdjudicationResult, bind_source_adjudication,
+    )
+
+    unique = {correction.correction_id: correction for _, correction in proposals}
+    return bind_source_adjudication(
+        problem_spec=spec, proposals=proposals, input_catalog=catalog,
+        evidence_profile=profile, work_dir=tmp_path,
+        result=SourceAdjudicationResult(checks=[SourceAdjudicationCheck(
+            correction_id=correction.correction_id, status="supported",
+            evidence=correction.evidence,
+            rationale="The fixture independently confirms the complete relation in the cited source.",
+        ) for correction in unique.values()]),
+    )
+
+
 def _resolve(spec, proposals, catalog, profile, tmp_path):
     from app.guidance.source_resolution import resolve_problem_sources
 
     return resolve_problem_sources(
         spec, proposals, input_catalog=catalog, evidence_profile=profile, work_dir=tmp_path,
+        adjudication=_adjudication(spec, proposals, catalog, profile, tmp_path),
     )
 
 
@@ -268,6 +286,7 @@ def test_reloading_resolution_rejects_retyped_source_with_invented_rows(tmp_path
     from app.guidance.source_resolution import SourceResolutionRecord, validate_source_resolution
 
     spec, catalog, profile = _case(tmp_path)
+    adjudication = _adjudication(spec, [("sp1", _correction())], catalog, profile, tmp_path)
     profile["evidence"][0]["kind"] = "uploaded_file"
     profile["evidence"][0]["rows"][1][1] = "999"
     payload = spec.model_dump(mode="json")
@@ -283,12 +302,14 @@ def test_reloading_resolution_rejects_retyped_source_with_invented_rows(tmp_path
         resolved_problem_spec_sha256=canonical_digest(resolved), corrections=[correction],
         affected_subproblem_ids=["sp1", "sp2", "downstream"],
         source_evidence_sha256={"cost.csv": profile["evidence"][0]["sha256"]},
+        source_adjudication_sha256=canonical_digest(adjudication),
     )
 
     with pytest.raises(ValueError, match="source|kind|unparsed"):
         validate_source_resolution(
             record, previous_problem_spec=spec, problem_spec=resolved,
             input_catalog=catalog, evidence_profile=profile, work_dir=tmp_path,
+            adjudication=adjudication,
         )
 
 
@@ -306,15 +327,18 @@ def test_resolution_record_is_recomputed_against_both_snapshots(tmp_path):
 
     spec, catalog, profile = _case(tmp_path)
     resolved, record = _resolve(spec, [("sp1", _correction())], catalog, profile, tmp_path)
+    adjudication = _adjudication(spec, [("sp1", _correction())], catalog, profile, tmp_path)
     validate_source_resolution(
         record, previous_problem_spec=spec, problem_spec=resolved,
         input_catalog=catalog, evidence_profile=profile, work_dir=tmp_path,
+        adjudication=adjudication,
     )
     changed = resolved.model_copy(update={"task_summary": "different snapshot"})
     with pytest.raises(ValueError, match="snapshot|resolution"):
         validate_source_resolution(
             record, previous_problem_spec=spec, problem_spec=changed,
             input_catalog=catalog, evidence_profile=profile, work_dir=tmp_path,
+            adjudication=adjudication,
         )
 
 
@@ -328,8 +352,10 @@ def test_tampered_resolution_record_is_not_accepted(tmp_path, field, value):
 
     spec, catalog, profile = _case(tmp_path)
     resolved, record = _resolve(spec, [("sp1", _correction())], catalog, profile, tmp_path)
+    adjudication = _adjudication(spec, [("sp1", _correction())], catalog, profile, tmp_path)
     with pytest.raises(ValueError, match="snapshot|resolution"):
         validate_source_resolution(
             record.model_copy(update={field: value}), previous_problem_spec=spec, problem_spec=resolved,
             input_catalog=catalog, evidence_profile=profile, work_dir=tmp_path,
+            adjudication=adjudication,
         )
