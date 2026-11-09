@@ -304,7 +304,42 @@ Q4首发prompt81200＋completion32768＝113968，全部completion用于reasoning
 - **REFACTOR**：统一来源边界直接替换旧可选纠正责任；`pipeline/stages/workflow/recovery`、Modeler、Reviewer及数学合同直接迁移，无兼容双轨。旧无前置来源摘要的模型/审核缓存失效，原始拆题字节与全部历史实验保留。原数学数值、独立分支、50/51条数学义务及来源原件夹具保持真实约束，没有自动补许可绕过测试。
 - **完整验证命令**：在`backend`运行根`.venv`的`python -B -m pytest tests -q --tb=short -p no:cacheprovider --basetemp=.local/d22e-full-suite --junitxml=.local/d22e-full-suite.xml`，**862 passed/27.84秒**，含Guidance/Polish/core。公共API、前端和求解器未改，不重复无关前端构建。
 
-现状摘要：核心流已迁移到来源前置；最大剩余风险是两次语言判断与数学审核的实际语义可靠性。D2.2e.1–2完成，下一项D2.2e.3为全新来源→建模→审核/执行的有界Flash实测和独立数学裁决。当前本轮新增API为0，D2累计仍为103次已启动、3821455已知tokens、5次未知、总量null；D2.2c.4及D2.2/D2.3保持未验收。
+工程检查点现状摘要：核心流已迁移到来源前置；最大剩余风险是两次语言判断与数学审核的实际语义可靠性。D2.2e.1–2完成，随后进入D2.2e.3全新来源→建模→审核/执行实测。工程冻结时尚无新增API，D2累计为103次已启动、3821455已知tokens、5次未知、总量null；新增实测结果如下，D2.2c.4及D2.2/D2.3保持未验收。
+
+### 隔离工具与正式预演
+
+工程检查点`acaae985468269a1c584d839273d5d54b0e2acdd`已推送并核对远端，生产冻结。新工具`.local/run_d22e_source_pipeline_flash.py`只复制既有同族原件、catalog/profile和`stage_snapshots/02-modeling/problem_spec.json`；仅重放decomposition，不带旧模型、审核、修订或缓存。原始工具与历史实验不改。每合同最多两次、整轮最多12次，沿用标准token/超时额度。
+
+工具RED `.local/d22e-harness-red.xml`复现同一合同第3次调用仍放行及来源许可未进入阶段快照；GREEN `.local/d22e-harness-final.xml`为22 passed/7.20秒，含默认无网、实际provider参数、精确来源上下文、无旧模型复用、未知用量及来源未评估时的自然blocked全链。冻结SHA256为`da1a49cbe6d9aaf4d4c980113831b776dde93a957e0f5aa1e6aa7c9cf4b82f96`。
+
+正式预演`.local/20261109-d22e-source-pipeline-probe-01`为0调用、初始拆题重放1次、旧模型重放0次，停在`GuidanceSourceInterpreter`传输前。首payload仅完整原件、UNC-001/002和保留事实ID，提示/schema由当前生产生成；原件SHA仍为`1c7041b7082cebaf45baedaba0cb72289c6e6410b5de949855aab6cf969e52eb`。原件/历史树/生产/配置哈希不变，已知独立答案不进入请求。
+
+### 前置后的真实终态：工程链成立，来源语义仍失败
+
+`.local/20261109-d22e-source-pipeline-live-01`在冻结生产上运行925秒后自然blocked：**12次deepseek-flash、283312 tokens、未知0**。其中2次来源请求、9次生成请求、1次数学审核；初始架构截断恢复一次，两题数据合同各在语义失败后恢复一次，全部遵守每合同两次和原定token/时间额度。初始两题均生成solvable ModelIR，但未取得可执行批准，**没有执行计划、执行manifest或求解结果**。
+
+| 实际边界 | 原始结果与独立裁决 |
+| --- | --- |
+| 来源解释001与复核002 | UNC-002正确提升为LF-025，明确逐空闲期保养；UNC-001仍判ambiguous且supported，与“训练成本同时对新模块和指导者计收”矛盾。工程记录ready仅表示许可完整，不代表本例语义正确。 |
+| 实际出站信息 | DOCX原句和完整费用表都原样进入两次请求，未注入独立数值答案；不是原文缺失或预处理改写造成的错误。两次请求共享误判，不足以识别候选锚定的因果或推断模型的一般能力。 |
+| sp1新模型 | 架构假设把基线描述为每新模块8元已含指导者，实际目标却有新模块与指导者两项训练费；公式计费正确但与假设文字矛盾。不能仅凭架构文字断言其实际公式漏费。 |
+| sp2新模型 | 实际目标仅含新模块训练费。另设的total_operating_cost_alt为同一解加上指导者费用，未进入目标，也不是独立情景优化；不能把候选/假设中声明三情景当成三情景已计算。 |
+| sp1初审012 | 有效初审指出假设与公式不一致，但REV-UNC-001-training-basis要求基准情景删除独立指导者费用，并另设分开计费情景。真实不一致被发现，修订方向却跟随错误来源许可；source_conflicts为空。 |
+| 预算与终态 | sp2初审尚未实际发送即被12次总上限阻止；流程进入唯一数学修订，sp1也在发送前被预算阻止，sp2依赖阻断。初始模型、初审和题意原字节保留；终审为not_assessed，批准投影为空。没有第13次API调用，没有扩大额度或手修响应。 |
+
+最终Guidance audit PASS只证明阻断披露和文档规则。`verification_report.json`和`result_registry.json`由阻断出口正常写入，不能据文件存在声称执行成功；done消息准确为model approval blocked execution。原始语义错误和本轮实际预算阻断分别保留，不能把未求解仅归因于来源误判，也不能把预算耗尽解释为已识别所有数学缺陷。
+
+独立工程链审计`.local/d22e-source-pipeline-flow-audit-20261109/audit.json`的33项检查通过，重算原始响应→来源许可、初终审绑定/投影及10份阶段快照；确认进程退出、无执行产物、实验全树审计前后SHA一致。恢复语义仍允许同一实际输入的纯算子缓存复用，但新执行证据必须绑定当前来源许可；没有宣称许可变化会清空所有算子结果。
+
+独立用量/完整性审计`.local/d22e-source-pipeline-usage-audit-20261109/audit.json`的142项检查通过：原始响应合计**128301 prompt＋155011 completion＝283312 tokens**，其中131893 reasoning已包含在completion；9个逻辑合同均最多两次。D2累计**115次已启动、4104767已知tokens、5次历史未知，总量null**。原件、历史树、旧账本、生产、持久配置和工具SHA一致，凭据扫描通过。账本中Pydantic补入的可选null用量元字段在比较时剔除，全部非null用量字段与原响应一致。
+
+来源逐项独立证据为`.local/d22e-source-pipeline-math-audit-20261109/source-semantics.json`，保留原件→实际请求→两响应→许可→假设→目标公式映射。完整后端862项已在同一生产检查点通过，本轮只新增本地实验及文档，没有重复无变化的全量测试。来源语义及模型费用出口未通过，旧1388独立基准与1311漏费反例仍为历史对照，不是本轮新执行结果。
+
+**固定计划独立代入**：`.local/d22e-source-pipeline-math-audit-20261109/fixed-plan-substitution.json`直接把既有独立可行计划代入原始007/011及对应canonical公式，不调用产品编译器或求解器、不重新求最优。sp1的66条约束/72个变量域全部满足，六项费用合计1388；sp2的74条约束/74个变量域全部满足，但目标五项仅1356，差额32正是指导者训练费。sp2的alt值1388只对同一计划补记该费，没有独立优化。该见证证明新模型的费用缺陷，不能声称本轮求得1356或1388最优解。
+
+独立数学终态汇总为`.local/d22e-source-pipeline-math-audit-20261109/terminal-adjudication.json`（SHA256 `bb337d3b47caf659e7e2d5cc561e73dd736ebe953bb9d5ab0b3beb0dd76469a8`）；372份实验工件审计前后SHA完全一致。初始solvable模型与预算阻断后的最终模型分开裁决，保留UNC-001错误许可反例和UNC-002正确许可正例；没有新增API、改写原实验或补造执行结果。
+
+本轮完成D2.2e.3要求的完整回归、真实实测和独立裁决，结论为来源语义/费用出口未通过。D2.2e工程及实验压缩为计划不变量17，下一未完成项回到D2.2c.4；D2.2/D2.3保持未勾选。后续先依据该反例确定可检验的来源语义判据，不继续重发已结案实验或提高额度。
 
 ## D2.3：独立数学核对与剩余出口
 
