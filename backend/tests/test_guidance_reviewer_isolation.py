@@ -154,6 +154,7 @@ def test_revision_reuses_unchanged_approved_reviews_and_supplies_exact_local_req
     previous.pop("executable_subproblem_ids")
     previous["subproblem_reviews"][0].update(status="revision_required", required_revisions=[{
         "requirement_id": "fix-objective", "description": "Correct the source objective.",
+        "kind": "model",
         "acceptance_criteria": "The local objective has the supported coefficients.",
     }])
     llm.calls.clear()

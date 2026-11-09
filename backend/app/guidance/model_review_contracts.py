@@ -12,6 +12,7 @@ from app.guidance.model_ir import (
     ModelIR,
     SolvableModelIR,
 )
+from app.guidance.source_resolution import SourceCorrectionSpec
 
 
 class ModelReviewSubmission(IRModel):
@@ -31,6 +32,7 @@ class ModelReviewBinding(IRModel):
     input_catalog_sha256: ReviewDigest | None
     review_sha256: ReviewDigest
     revision_request_sha256: ReviewDigest | None
+    source_resolution_sha256: ReviewDigest | None
 
 
 class ApprovedModelIR(IRModel):
@@ -91,21 +93,42 @@ class AssumptionReviewSpec(IRModel):
 
 class RevisionRequirementSpec(IRModel):
     requirement_id: str = Field(min_length=1, max_length=100)
+    kind: Literal["model", "source"]
+    basis_refs: list[str] = Field(default_factory=list, max_length=50)
     description: str = Field(min_length=1, max_length=600)
     acceptance_criteria: str = Field(min_length=1, max_length=600)
+
+    @model_validator(mode="after")
+    def require_source_basis(self) -> RevisionRequirementSpec:
+        if self.kind == "source" and not self.basis_refs:
+            raise ValueError("source revision requires explicit basis_refs")
+        if len(self.basis_refs) != len(set(self.basis_refs)):
+            raise ValueError("revision basis_refs must be unique")
+        if any(not re.fullmatch(r"problem_spec\.json#(?:uncertainties|locked_facts)/[A-Za-z][A-Za-z0-9_.-]*", ref)
+               for ref in self.basis_refs):
+            raise ValueError("revision basis_refs must identify scoped ProblemSpec records")
+        return self
 
 
 class RevisionCheckSpec(IRModel):
     requirement_id: str = Field(min_length=1, max_length=100)
-    status: Literal["accepted", "revision_required", "rejected"]
+    status: Literal["accepted", "revision_required", "rejected", "withdrawn"]
     model_paths: list[str] = Field(
-        min_length=1, max_length=30,
+        default_factory=list, max_length=30,
         description="JSON Pointers relative to the current subproblem, never the whole ModelIR.",
     )
+    source_correction_ids: list[str] = Field(default_factory=list, max_length=50)
     rationale: str = Field(min_length=1, max_length=600)
 
     @model_validator(mode="after")
     def require_json_pointer_paths(self) -> RevisionCheckSpec:
+        if self.status == "withdrawn":
+            if not self.source_correction_ids or self.model_paths:
+                raise ValueError("withdrawn revision requires source correction evidence, not model paths")
+        elif not self.model_paths or self.source_correction_ids:
+            raise ValueError("model revision checks require model paths and cannot claim source withdrawal")
+        if len(self.source_correction_ids) != len(set(self.source_correction_ids)):
+            raise ValueError("source correction evidence must be unique")
         invalid = [path for path in self.model_paths if not path.startswith("/")]
         if invalid:
             raise ValueError(f"model_paths must be JSON Pointers: {invalid!r}")
@@ -140,6 +163,7 @@ class SubproblemReviewSpec(IRModel):
         max_length=50,
     )
     revision_checks: list[RevisionCheckSpec] = Field(default_factory=list, max_length=50)
+    source_corrections: list[SourceCorrectionSpec] = Field(default_factory=list, max_length=50)
     mathematical_checks: list[MathematicalCorrespondenceCheck] = Field(
         default_factory=list, max_length=250,
     )
@@ -149,7 +173,7 @@ class SubproblemReviewSpec(IRModel):
         if self.assessment_status == "not_assessed":
             if self.status != "blocked":
                 raise ValueError("not_assessed review must be blocked")
-            if self.assumption_checks or self.revision_checks or self.mathematical_checks or self.required_revisions:
+            if self.assumption_checks or self.revision_checks or self.mathematical_checks or self.required_revisions or self.source_corrections:
                 raise ValueError("not_assessed review cannot contain assessment content")
         assumption_ids = [item.assumption_id for item in self.assumption_checks]
         if len(assumption_ids) != len(set(assumption_ids)):
@@ -161,19 +185,22 @@ class SubproblemReviewSpec(IRModel):
             raise ValueError("approved subproblem contains failed mathematical checks")
         requirement_ids = [item.requirement_id for item in self.required_revisions]
         check_ids = [item.requirement_id for item in self.revision_checks]
+        correction_ids = [item.correction_id for item in self.source_corrections]
+        if len(correction_ids) != len(set(correction_ids)):
+            raise ValueError("source correction ids must be unique within a subproblem")
         if len(requirement_ids) != len(set(requirement_ids)):
             raise ValueError("revision requirement ids must be unique within a subproblem")
         if len(check_ids) != len(set(check_ids)):
             raise ValueError("revision check ids must be unique within a subproblem")
         if self.status == "approved":
-            if self.blocking_issues or self.required_revisions:
+            if self.blocking_issues or self.required_revisions or self.source_corrections:
                 raise ValueError(
                     "approved subproblem review cannot contain blocking issues or revisions"
                 )
         elif self.status == "revision_required":
-            if not self.required_revisions:
+            if not self.required_revisions and not self.source_corrections:
                 raise ValueError(
-                    "revision_required subproblem review must provide required_revisions"
+                    "revision_required subproblem review must provide required_revisions or source_corrections"
                 )
         elif not self.blocking_issues:
             raise ValueError("blocked subproblem review must provide blocking_issues")

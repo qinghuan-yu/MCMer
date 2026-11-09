@@ -126,6 +126,7 @@ class SequentialReviewStage:
                 "assumption_checks": [],
                 "required_revisions": [{
                     "requirement_id": "declare-missing-operator",
+                    "kind": "model",
                     "description": "Declare the missing operator explicitly.",
                     "acceptance_criteria": "The revised ModelIR declares the operator.",
                 }] if status == "revision_required" else [],
@@ -226,7 +227,9 @@ def test_guidance_pipeline_allows_exactly_one_model_ir_revision(tmp_path: Path) 
 
     calls: list[tuple[str, str | None]] = []
     pipeline = GuidancePipeline(
-        decomposition_stage=RecordingStage("decomposition", calls),
+        decomposition_stage=RecordingStage(
+            "decomposition", calls, {"task_summary": "Analyze the problem."},
+        ),
         modeling_stage=SequentialModelingStage(calls),
         model_review_stage=SequentialReviewStage(calls),
         calculation_stage=RecordingStage("calculation", calls),

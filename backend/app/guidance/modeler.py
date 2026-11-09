@@ -22,10 +22,12 @@ from app.guidance.model_ir import (
     ModelIR,
 )
 from app.guidance.model_review_contracts import ModelIRReview
+from app.guidance.model_review_validation import unresolved_source_subproblem_ids
 from app.guidance.modeling_context import (
     MODEL_IR_ARCHITECTURE_CONTRACT,
     _compact_problem_spec_for_modeling,
 )
+from app.guidance.recovery import load_source_resolution
 
 
 class LLMModeler:
@@ -89,6 +91,8 @@ class LLMModeler:
             stage_duty=(
                 "你是数学建模 ModelIR 修订架构构建器。逐条处理 "
                 "model_review.subproblem_reviews[0].required_revisions，"
+                "其中只包含模型修复义务；来源纠正已由系统写入当前problem_spec。"
+                "必须使用当前锁定事实，不得重新引入已消解的旧歧义或旧假设情景。"
                 "若因上游模型变化重新构建本题，须依据最新 dependency_models 重新核对依赖关系；"
                 "并使用 previous_model_summary 理解旧路线和显式 assumptions。无法在现有数据和"
                 "算子能力下诚实修复的子问题才改为 blocked；不得通过虚构数据、参数或约束绕过审核。"
@@ -151,8 +155,16 @@ async def _request_subproblem_models(
     )
     revision_targets = {
         identifier for identifier, decision in decisions.items()
-        if decision.status == "revision_required" and decision.required_revisions
+        if decision.status == "revision_required" and (decision.required_revisions or decision.source_corrections)
     }
+    source_resolution = load_source_resolution(artifact_dir, problem_spec) if previous_model_ir is not None else None
+    source_affected = set(source_resolution.affected_subproblem_ids) if source_resolution is not None else set()
+    revision_targets.update(source_affected)
+    pending_source_ids = (
+        unresolved_source_subproblem_ids(review, problem_spec, source_resolution)
+        if review is not None else set()
+    )
+    revision_targets.update(pending_source_ids)
     changed_models: set[str] = set()
     dependency_closures: dict[str, set[str]] = {}
     total = len(compact_subproblems)
@@ -201,6 +213,7 @@ async def _request_subproblem_models(
                 identifier: generated_by_id[identifier].subproblems[0].model_dump(mode="json")
                 for identifier in sorted(dependency_ids)
             },
+            **({"source_resolution": source_resolution.model_dump(mode="json")} if source_resolution is not None else {}),
         }
         request_name = (
             agent_name
@@ -208,6 +221,8 @@ async def _request_subproblem_models(
             else f"{agent_name}_{safe_artifact_component(target_id)}"
         )
         try:
+            if target_id in pending_source_ids:
+                raise ValueError("source interpretation obligations must be resolved before model generation")
             blocked_dependencies = [
                 identifier for identifier in sorted(dependency_ids)
                 if isinstance(generated_by_id[identifier].subproblems[0], BlockedModelIR)
@@ -253,7 +268,8 @@ async def _request_subproblem_models(
             )
         # 中间模型即使内容相同，其上游发生变化也须继续使后继模型失效。
         if previous_model_ir is not None and (
-            changed_dependencies
+            target_id in source_affected
+            or changed_dependencies
             or generated_by_id[target_id].subproblems[0] != previous_by_id[target_id]
         ):
             changed_models.add(target_id)

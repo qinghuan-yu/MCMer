@@ -30,6 +30,7 @@ def _revision_request(identifier):
         subproblem_id=identifier, status="revision_required",
         required_revisions=[{
             "requirement_id": "objective_scope",
+            "kind": "model",
             "description": "Correct the objective scope.",
             "acceptance_criteria": "The objective covers the intended period.",
         }],
@@ -64,6 +65,7 @@ def test_unassessed_review_cannot_approve_or_request_mathematical_revisions(stat
     }),
     ("required_revisions", {
         "requirement_id": "objective_scope", "description": "Change the model.",
+        "kind": "model",
         "acceptance_criteria": "A contract should exist.",
     }),
 ])

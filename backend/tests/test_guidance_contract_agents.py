@@ -102,6 +102,8 @@ def _blocked_ir(
 def _revision_requirement(requirement_id: str, description: str) -> dict:
     return {
         "requirement_id": requirement_id,
+        "kind": "model",
+        "basis_refs": [],
         "description": description,
         "acceptance_criteria": f"The revised ModelIR satisfies: {description}",
     }
@@ -571,6 +573,7 @@ def test_modeler_scopes_review_payload_to_target_subproblem() -> None:
             )],
             "revision_checks": [],
             "mathematical_checks": [],
+            "source_corrections": [],
         }
     ]
 

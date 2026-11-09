@@ -14,6 +14,7 @@ from app.guidance.failure_contracts import (
 from app.guidance.model_review_contracts import (ApprovedModelIR, ModelIRReview, ModelReviewSubmission)
 from app.guidance.model_ir import (BlockedModelIR, ModelIR)
 from app.guidance.recovery import invalidate_stage_outputs
+from app.guidance.source_resolution import resolve_problem_sources
 from app.schemas.response import (
     TaskProgress,
     TaskResult,
@@ -204,15 +205,47 @@ def _write_review_submission(
 
 
 def _preserve_revision_request(root: Path, model_path: Path) -> Path:
+    problem_path = root / "problem_spec.json"
+    original_problem_bytes = problem_path.read_bytes()
+    problem_spec = ProblemSpec.model_validate_json(original_problem_bytes)
+    review = ModelIRReview.model_validate_json(
+        (root / "model_review.json").read_text(encoding="utf-8")
+    )
+    proposals = [
+        (decision.subproblem_id, correction)
+        for decision in review.subproblem_reviews for correction in decision.source_corrections
+    ]
+    if (root / "source_resolution.json").exists():
+        raise ValueError("source correction is limited to one revision pass")
+    resolution = None
+    if proposals:
+        problem_spec, resolution = resolve_problem_sources(
+            problem_spec, proposals,
+            input_catalog=_read_json(root / "input_catalog.json") or None,
+            evidence_profile=_read_json(root / "evidence_profile.json"),
+            work_dir=root,
+        )
+    # 所有纠正先验证，再保存旧字节；原审核始终指向它实际审核过的题意。
+    initial_problem_path = root / "problem_spec_initial.json"
+    initial_problem_path.write_bytes(original_problem_bytes)
     initial_model = ModelIR.model_validate_json(model_path.read_text(encoding="utf-8"))
     initial_model_path = root / "model_ir_initial.json"
     initial_model_path.write_text(initial_model.model_dump_json(indent=2), encoding="utf-8")
+    approved_path = root / "approved_model_ir.json"
+    if approved_path.is_file():
+        (root / "approved_model_ir_initial.json").write_bytes(approved_path.read_bytes())
 
-    review = ModelIRReview.model_validate_json(
-        (root / "model_review.json").read_text(encoding="utf-8")
-    ).model_copy(update={"model_ir_ref": initial_model_path.name})
+    review = review.model_copy(update={
+        "model_ir_ref": initial_model_path.name,
+        "problem_spec_ref": initial_problem_path.name,
+    })
     path = root / "revision_request.json"
     path.write_text(review.model_dump_json(indent=2), encoding="utf-8")
+    if resolution is not None:
+        (root / "source_resolution.json").write_text(
+            resolution.model_dump_json(indent=2), encoding="utf-8", newline="\n",
+        )
+        problem_path.write_text(problem_spec.model_dump_json(indent=2), encoding="utf-8", newline="\n")
     return path
 
 

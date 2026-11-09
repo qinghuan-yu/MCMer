@@ -32,6 +32,7 @@ def test_approved_rereview_requires_complete_accepted_revision_evidence() -> Non
                 "required_revisions": [
                     RevisionRequirementSpec(
                         requirement_id="constraint-coverage",
+                        kind="model",
                         description="Add the missing typed constraint.",
                         acceptance_criteria=(
                             "The revised ModelIR exposes the objective."

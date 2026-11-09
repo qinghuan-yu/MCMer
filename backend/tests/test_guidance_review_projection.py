@@ -45,6 +45,7 @@ def _review(model_ir, repair_status="revision_required"):
             "status": repair_status if subproblem.subproblem_id == "repair" else "approved",
             "required_revisions": [{
                 "requirement_id": "repair-conservation",
+                "kind": "model",
                 "description": "Repair the state conservation equation.",
                 "acceptance_criteria": "The state equation conserves the registered stock.",
             }] if subproblem.subproblem_id == "repair" and repair_status == "revision_required" else [],

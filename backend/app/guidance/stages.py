@@ -32,9 +32,14 @@ from app.guidance.model_review_contracts import (
     ModelIRReview,
     ModelReviewSubmission,
 )
-from app.guidance.model_review_validation import bind_model_review, load_review_catalog, validate_model_review
+from app.guidance.model_review_validation import (
+    bind_model_review,
+    load_review_catalog,
+    unresolved_source_subproblem_ids,
+    validate_model_review,
+)
 from app.guidance.operator_execution import OperatorGraphExecutor
-from app.guidance.recovery import invalidate_stage_outputs
+from app.guidance.recovery import invalidate_stage_outputs, load_source_resolution
 from app.guidance.stage_contracts import (
     ModelReviewer,
     Modeler,
@@ -108,8 +113,9 @@ class ModelingStage:
         else:
             review = ModelIRReview.model_validate_json(source_path.read_text(encoding="utf-8"))
             problem_spec = ProblemSpec.model_validate_json(
-                (output_path.parent / review.problem_spec_ref).read_text(encoding="utf-8")
+                (output_path.parent / "problem_spec.json").read_text(encoding="utf-8")
             )
+            load_source_resolution(output_path.parent, problem_spec)
             previous_model_ir = ModelIR.model_validate_json(
                 (output_path.parent / review.model_ir_ref).read_text(encoding="utf-8")
             )
@@ -165,6 +171,7 @@ class ModelReviewStage:
         )
         evidence_profile = load_evidence_profile(output_path.parent).model_dump(mode="json")
         input_catalog = load_review_catalog(output_path.parent)
+        source_resolution = load_source_resolution(output_path.parent, problem_spec)
         review = await self.reviewer.review(
             problem_spec=problem_spec,
             model_ir=model_ir,
@@ -180,7 +187,11 @@ class ModelReviewStage:
                 "model_ir_ref": model_ir_path.name,
             }
         )
-        validate_model_review(review, model_ir, revision_request=revision_request, problem_spec=problem_spec)
+        validate_model_review(
+            review, model_ir, revision_request=revision_request, problem_spec=problem_spec,
+            source_resolution=source_resolution, input_catalog=input_catalog,
+            evidence_profile=evidence_profile, work_dir=output_path.parent,
+        )
         _write_model(output_path.parent / "model_review.json", review)
         approved_projection = _build_reviewed_model_projection(model_ir, review, problem_spec)
         executable_ids = [
@@ -202,6 +213,7 @@ class ModelReviewStage:
                 review=review, model_ir=model_ir, approved_model_ir=approved_projection,
                 problem_spec=problem_spec, evidence_profile=evidence_profile,
                 input_catalog=input_catalog, revision_request=revision_request,
+                source_resolution=source_resolution,
             ),
         )
         _write_model(output_path, approved)
@@ -220,10 +232,12 @@ def _build_reviewed_model_projection(
     dependencies = {
         item.id: item.depends_on_subproblem_ids for item in problem_spec.subproblems
     }
+    pending_source_ids = unresolved_source_subproblem_ids(review, problem_spec)
     executable = {
         item.subproblem_id for item in model_ir.subproblems
         if isinstance(item, SolvableModelIR)
         and decisions[item.subproblem_id].status == "approved"
+        and item.subproblem_id not in pending_source_ids
     }
     # 依赖闭包与题目排列无关；下游不能沿用未获批准的上游模型。
     while True:
@@ -246,6 +260,8 @@ def _build_reviewed_model_projection(
         reasons = decision.blocking_issues or [
             item.description for item in decision.required_revisions
         ]
+        if subproblem.subproblem_id in pending_source_ids:
+            reasons = [*reasons, "Unresolved source interpretation affects this subproblem."]
         unavailable_dependencies = [
             identifier for identifier in dependencies[subproblem.subproblem_id]
             if identifier not in executable

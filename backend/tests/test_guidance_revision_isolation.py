@@ -41,6 +41,7 @@ def test_revision_preserves_unaffected_models_and_invalidates_changed_dependenci
         ["Observations are unavailable."] if identifier == "unavailable" else [],
         "required_revisions": [{
             "requirement_id": "repair-equation", "description": "Repair the physical equation.",
+            "kind": "model",
             "acceptance_criteria": "The equation matches the source.",
         }] if identifier == "repair" else [],
     } for identifier in identifiers])

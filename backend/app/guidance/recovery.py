@@ -53,6 +53,31 @@ def generated_figure_paths(value) -> list[str]:
     return []
 
 
+def load_source_resolution(root: Path, problem_spec):
+    """读取已提交的来源裁决，并从保留快照和原件重新核验。"""
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.source_resolution import SourceResolutionRecord, validate_source_resolution
+
+    path = root / "source_resolution.json"
+    if not path.is_file():
+        return None
+    previous_path = root / "problem_spec_initial.json"
+    profile_path = root / "evidence_profile.json"
+    if not previous_path.is_file() or not profile_path.is_file():
+        raise ValueError("source resolution is missing its preserved problem or evidence snapshot")
+    record = SourceResolutionRecord.model_validate_json(path.read_text(encoding="utf-8"))
+    catalog_path = root / "input_catalog.json"
+    validate_source_resolution(
+        record,
+        previous_problem_spec=ProblemSpec.model_validate_json(previous_path.read_text(encoding="utf-8")),
+        problem_spec=problem_spec,
+        input_catalog=json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.is_file() else None,
+        evidence_profile=json.loads(profile_path.read_text(encoding="utf-8")),
+        work_dir=root,
+    )
+    return record
+
+
 class RecoveryCheckpoint:
     """每个拥有者只保留一个已验证结果；失败不会回退到旧输入的结果。"""
 
@@ -94,7 +119,8 @@ class RecoveryCheckpoint:
 
 
 STAGE_OUTPUTS = {
-    "decomposition": ("problem_spec.json", "model_ir_initial.json", "revision_request.json"),
+    "decomposition": ("problem_spec.json", "problem_spec_initial.json", "source_resolution.json",
+                      "model_ir_initial.json", "approved_model_ir_initial.json", "revision_request.json"),
     "modeling": ("model_ir.json",),
     "model_review": ("model_review.json", "approved_model_ir.json"),
     "calculation": ("compilation_result.json", "execution_plan.json", "execution_manifest.json",

@@ -140,6 +140,28 @@ Q4新模型显式定义`post_use_maintenance_survivors[t]=4*deployed[t-1]-4*dama
 
 **D2.2b复测与独立裁决任务完成，D2.2/D2.3整体未验收。** 生产代码仍为`bee9e6a`，未重复707项全量或前端构建。下一项来源裁决/错误修订义务撤回的具体范围与RED验收已写入唯一长期计划D2.2c，等待新边界批准；审核截断、证据路径、参数敏感性和指导出口限制均保留。
 
+## D2.2c：获批来源裁决与有据撤回
+
+用户明确批准实施。原始反例是同族题将明确双对象收费及闲置保养关系列为歧义，错误义务推动模型删去指导者费用。当前迁移让Reviewer提出有精确引文的来源纠正，系统从原件验证并生成新的ProblemSpec，不覆盖旧题意；消解歧义必须提升完整locked fact。修订义务显式分为source/model，只有已应用且精确覆盖全部basis的来源裁决才能撤回source义务，真实model缺陷不能撤回。
+
+### RED → GREEN → 集成验证
+
+- 来源合同：4 RED→4 GREEN（`.local/d22c-source-review-{red,green}.xml`）；撤回/绑定：6 failed、4 passed→10 GREEN（`d22c-source-evidence-{red,green}.xml`）。旧审核绑定缺少必填nullable来源摘要即失效，不猜测迁移。
+- 来源解析：22 failed、4 passed→26 GREEN；覆盖真实原件、伪引文/表格、错作用域、同target等价提议和冲突、完整关系事实提升及旧对象不变。最终来源文件29 passed（`d22c-source-kind-green.xml`）。机械引文核验不证明自然语言的数学含义正确。
+- Reviewer：3 failed、1 passed→4 GREEN（`d22c-source-reviewer-{red,green}.xml`）。只复用原题意/模型/审核/catalog/profile绑定都重算一致、且完整祖先未变的无关approved决定。共享冲突2 RED→37项相关GREEN（`d22c-conflicts-{red,green}.xml`），拒绝整批冲突、隔离共享范围及后继，保留独立决定和原始错误证据。
+- 有界流程：6 RED与2项原始绑定快照RED→11 GREEN（`d22c-flow-final.xml`），相关回归32 passed。Pipeline保存原字节题意/模型/批准绑定，在既有一次修订内应用来源裁决，Modeler读取新题意；共享来源所有者及完整后继均失效，即使中间模型JSON同值。终审再提出纠正只阻断，不触发第二轮循环。
+- 独立审查补充一：将CSV来源伪装为uploaded_file并伪造rows仍可获得纠正/重载通过。修正夹具后3项RED均为DID NOT RAISE（`d22c-source-kind-red-final.xml`）；类型必须匹配真实格式，未解析通用附件不再注册自报rows为原文，来源模块29 GREEN。无关通用附件不会阻止合法原文裁决。
+- 独立审查补充二：没有具体纠正提议、仅有source义务时，共享来源的其他题及后继仍可执行/复用。uncertainty与locked_fact两种对象的投影、修订共4 RED；由统一未裁决来源闭包收集basis和纠正目标，两个消费者直接使用，相关32 GREEN（`d22c-pending-scope-{red,green}.xml`）。仅独立题保留，待决范围不调用生成API。
+- REFACTOR：来源裁决由单一新模块拥有；内部合同及调用方直接迁移，无兼容门面。原有8个测试文件补显式kind/model及合法最小夹具，保留原断言。最终完整后端 **767 passed / 24.44秒**（`.local/d22c-final-full.xml`），覆盖Guidance/Polish/core；公共协议和前端未改，不重复前端构建。
+
+### 清理与实测准备
+
+删除68个确认无引用且可重建目录（67个pytest basetemp及本地pycache）、19812文件、157531971字节（150.23MiB）；12983份保留文件SHA一致。证据为`.local/d22c-cleanup-{manifest,result,verification}-20261109.json`。正式测试、原始API响应/模型、恢复链、报告引用和独立数学基准保留，清理不是验收。
+
+同族harness `.local/run_d22c_source_flash.py` 15项通过；无网probe原字节重放既有初始生成检查点一次，然后使用真实产品Pipeline进行审核、最多一次纠正/修订及执行/验证/指导，停在首个Reviewer传输前，0 API。Q4 harness `.local/run_d22c_q4_review_flash.py` 6项通过；从当前真实Reviewer捕获Q4完整payload和语义闭包，保留原件/题意/三个完整祖先，0 API。两项均不复用旧审核或旧schema缓存、不向提示注入已知独立答案。
+
+生产冻结后的新实验分别为`.local/20261109-d22c-source-live-01`（总上限12）与`.local/20261109-d22c-q4-flash-01`（最多2次局部审核）；均仅deepseek-flash，单次和每合同预算不增加。实测正在进行，尚未据此勾选D2.2c.4或声称来源语义/数学验收通过。
+
 ## D2.3：独立数学核对与剩余出口
 
 `.local/d2_independent_math.py` 与 `.local/d2-independent-preparation-20261109/` 从原DOCX核对19段、5表和SHA，原件总需求4065。6个正反例通过，旧Q1真实解独立重算7625，与既有DP参考一致。

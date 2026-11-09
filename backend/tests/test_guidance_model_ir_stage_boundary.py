@@ -173,6 +173,7 @@ def test_model_review_stage_passes_explicit_revision_request(tmp_path: Path) -> 
             "assumption_checks": [],
             "required_revisions": [{
                 "requirement_id": "register-compiler-operator",
+                "kind": "model",
                 "description": "Register a supported compiler operator.",
                 "acceptance_criteria": "The revised ModelIR uses a registered operator.",
             }],
@@ -236,6 +237,7 @@ def test_modeling_stage_revision_reads_model_ir_review_without_model_spec_aliase
                 "assumption_checks": [],
                 "required_revisions": [{
                     "requirement_id": "register-compiler-operator",
+                    "kind": "model",
                     "description": "Register a supported compiler operator.",
                     "acceptance_criteria": "The revised ModelIR uses a registered operator.",
                 }],
