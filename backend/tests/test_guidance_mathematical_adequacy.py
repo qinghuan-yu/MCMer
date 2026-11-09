@@ -103,8 +103,7 @@ def _execute_case(root: Path, mutation: str) -> tuple[dict, dict]:
         "model_ir.json": model,
         "model_review.json": ModelIRReview(
             model_id=model.model_id,
-            assumption_checks=[],
-            subproblem_reviews=[{"subproblem_id": subproblem_id, "status": "approved"}],
+            subproblem_reviews=[{"subproblem_id": subproblem_id, "status": "approved", "assumption_checks": []}],
         ),
         "approved_model_ir.json": ApprovedModelIR(
             review_status="approved",

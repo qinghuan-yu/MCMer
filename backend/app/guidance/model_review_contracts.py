@@ -132,6 +132,7 @@ class MathematicalCorrespondenceCheck(IRModel):
 class SubproblemReviewSpec(IRModel):
     subproblem_id: str = Field(min_length=1, max_length=100)
     status: Literal["approved", "revision_required", "blocked"]
+    assumption_checks: list[AssumptionReviewSpec] = Field(default_factory=list, max_length=30)
     blocking_issues: list[str] = Field(default_factory=list, max_length=50)
     required_revisions: list[RevisionRequirementSpec] = Field(
         default_factory=list,
@@ -144,6 +145,9 @@ class SubproblemReviewSpec(IRModel):
 
     @model_validator(mode="after")
     def require_consistent_decision(self) -> SubproblemReviewSpec:
+        assumption_ids = [item.assumption_id for item in self.assumption_checks]
+        if len(assumption_ids) != len(set(assumption_ids)):
+            raise ValueError("assumption check ids must be unique within a subproblem")
         mathematical_ids = [item.requirement_id for item in self.mathematical_checks]
         if len(mathematical_ids) != len(set(mathematical_ids)):
             raise ValueError("mathematical requirement ids must be unique within a subproblem")
@@ -181,7 +185,6 @@ class ModelIRReview(IRModel):
     dimensional_consistency: str = "unknown"
     data_sufficiency: str = "unknown"
     computational_feasibility: str = "unknown"
-    assumption_checks: list[AssumptionReviewSpec] = Field(max_length=100)
     subproblem_reviews: list[SubproblemReviewSpec] = Field(min_length=1, max_length=50)
 
     @model_validator(mode="after")

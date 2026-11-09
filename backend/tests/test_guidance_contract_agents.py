@@ -360,10 +360,10 @@ def test_modeler_and_reviser_receive_the_same_architecture_contract(tmp_path: Pa
     previous_model = ModelIR.model_validate(_blocked_ir())
     review = ModelIRReview(
         model_id=previous_model.model_id,
-        assumption_checks=[],
         subproblem_reviews=[{
             "subproblem_id": "problem1",
             "status": "revision_required",
+            "assumption_checks": [],
             "required_revisions": [_revision_requirement(
                 "correct-model-architecture",
                 "Correct the model architecture.",
@@ -474,10 +474,10 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
         dimensional_consistency="reviewed",
         data_sufficiency="reviewed",
         computational_feasibility="reviewed",
-        assumption_checks=[],
         subproblem_reviews=[{
             "subproblem_id": "problem1",
             "status": "revision_required",
+            "assumption_checks": [],
             "required_revisions": [_revision_requirement(
                 "restore-physical-multiplier",
                 "Restore the omitted physical multiplier.",
@@ -536,15 +536,16 @@ def test_modeler_scopes_review_payload_to_target_subproblem() -> None:
 
     review = ModelIRReview(
         model_id="mixed-review",
-        assumption_checks=[],
         subproblem_reviews=[
             {
                 "subproblem_id": "approved_problem",
                 "status": "approved",
+                "assumption_checks": [],
             },
             {
                 "subproblem_id": "target_problem",
                 "status": "revision_required",
+                "assumption_checks": [],
                 "required_revisions": [_revision_requirement(
                     "repair-target",
                     "Repair only the target subproblem.",
@@ -561,6 +562,7 @@ def test_modeler_scopes_review_payload_to_target_subproblem() -> None:
         {
             "subproblem_id": "target_problem",
             "status": "revision_required",
+            "assumption_checks": [],
             "blocking_issues": [],
             "required_revisions": [_revision_requirement(
                 "repair-target",
@@ -1353,10 +1355,10 @@ def test_model_reviewer_receives_problem_and_model_ir_contracts(tmp_path: Path) 
         "dimensional_consistency": "not applicable",
         "data_sufficiency": "missing operator disclosed",
         "computational_feasibility": "blocked honestly",
-        "assumption_checks": [],
         "subproblem_reviews": [{
             "subproblem_id": "problem1",
             "status": "blocked",
+            "assumption_checks": [],
             "blocking_issues": [
                 "The compiler operator is not registered yet."
             ],
@@ -1413,7 +1415,11 @@ def test_model_reviewer_rejects_runtime_parameter_without_producing_operator(
         "dimensional_consistency": "reviewed",
         "data_sufficiency": "reviewed",
         "computational_feasibility": "reviewed",
-        "assumption_checks": [],
+        "subproblem_reviews": [{
+            "subproblem_id": model_ir.subproblems[0].subproblem_id,
+            "status": "approved",
+            "assumption_checks": [],
+        }],
     })
 
     with pytest.raises(ValueError, match="indexed_runtime_source_unknown_artifact"):

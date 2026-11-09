@@ -28,10 +28,10 @@ def _review_payload(model) -> dict:
     ]
     return {
         "model_id": model.model_id,
-        "assumption_checks": [],
         "subproblem_reviews": [{
             "subproblem_id": subproblem.subproblem_id,
             "status": "approved",
+            "assumption_checks": [],
             "mathematical_checks": [{
                 "requirement_id": requirement,
                 "status": "passed",

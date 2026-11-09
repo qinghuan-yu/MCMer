@@ -109,10 +109,10 @@ class SequentialReviewStage:
             "model_id": "pipeline-model",
             "status": status,
             "model_ir_ref": "model_ir.json",
-            "assumption_checks": [],
             "subproblem_reviews": [{
                 "subproblem_id": "problem1",
                 "status": status,
+                "assumption_checks": [],
                 "required_revisions": [{
                     "requirement_id": "declare-missing-operator",
                     "description": "Declare the missing operator explicitly.",

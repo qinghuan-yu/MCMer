@@ -47,35 +47,22 @@ def validate_model_review(
                 f"blocked Model IR subproblem {decision.subproblem_id!r} "
                 "must receive a blocked review"
             )
-    expected = [
-        assumption.id
-        for subproblem in model_ir.subproblems
-        if isinstance(subproblem, SolvableModelIR)
-        for assumption in subproblem.assumptions
-    ]
-    reviewed = [item.assumption_id for item in review.assumption_checks]
-    if reviewed != expected:
-        raise ValueError(
-            f"assumption review coverage mismatch: expected={expected!r}; reviewed={reviewed!r}"
+        expected = (
+            [assumption.id for assumption in subproblem.assumptions]
+            if isinstance(subproblem, SolvableModelIR) else []
         )
-    assumption_owner = {
-        assumption.id: subproblem.subproblem_id
-        for subproblem in model_ir.subproblems
-        if isinstance(subproblem, SolvableModelIR)
-        for assumption in subproblem.assumptions
-    }
-    decision_by_id = {
-        item.subproblem_id: item for item in review.subproblem_reviews
-    }
-    for check in review.assumption_checks:
-        if (
-            check.status != "accepted"
-            and decision_by_id[assumption_owner[check.assumption_id]].status == "approved"
-        ):
+        reviewed = [item.assumption_id for item in decision.assumption_checks]
+        if reviewed != expected:
             raise ValueError(
-                "approved subproblem review contains an unaccepted assumption: "
-                f"{check.assumption_id!r}"
+                f"assumption review coverage mismatch for {decision.subproblem_id!r}: "
+                f"expected={expected!r}; reviewed={reviewed!r}"
             )
+        for check in decision.assumption_checks:
+            if check.status != "accepted" and decision.status == "approved":
+                raise ValueError(
+                    "approved subproblem review contains an unaccepted assumption: "
+                    f"{decision.subproblem_id!r}/{check.assumption_id!r}"
+                )
 
     if revision_request is None:
         if any(item.revision_checks for item in review.subproblem_reviews):

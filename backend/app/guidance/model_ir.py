@@ -449,6 +449,9 @@ class SolvableModelIR(IRModel):
 
     @model_validator(mode="after")
     def require_baseline_and_recommended_models(self) -> SolvableModelIR:
+        assumption_ids = [assumption.id for assumption in self.assumptions]
+        if len(assumption_ids) != len(set(assumption_ids)):
+            raise ValueError("modeling assumption ids must be unique within a subproblem")
         roles = {candidate.role for candidate in self.candidate_models}
         missing = {"baseline", "recommended"} - roles
         if missing:
@@ -509,12 +512,4 @@ class ModelIR(IRModel):
         identifiers = [item.subproblem_id for item in self.subproblems]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("subproblem ids must be unique")
-        assumption_ids = [
-            assumption.id
-            for item in self.subproblems
-            if isinstance(item, SolvableModelIR)
-            for assumption in item.assumptions
-        ]
-        if len(assumption_ids) != len(set(assumption_ids)):
-            raise ValueError("modeling assumption ids must be globally unique")
         return self

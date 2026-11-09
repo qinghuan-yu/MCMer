@@ -69,10 +69,10 @@ class IRReviewer:
             dimensional_consistency="checked from variable and data units",
             data_sufficiency="sufficient for the selected operators",
             computational_feasibility="registered operators required",
-            assumption_checks=[],
             subproblem_reviews=[{
                 "subproblem_id": "problem1",
                 "status": "blocked",
+                "assumption_checks": [],
                 "blocking_issues": [
                     "The compiler operator is not registered yet."
                 ],
@@ -167,10 +167,10 @@ def test_model_review_stage_passes_explicit_revision_request(tmp_path: Path) -> 
     ))
     revision_request = ModelIRReview(
         model_id="stage_boundary_model",
-        assumption_checks=[],
         subproblem_reviews=[{
             "subproblem_id": "problem1",
             "status": "revision_required",
+            "assumption_checks": [],
             "required_revisions": [{
                 "requirement_id": "register-compiler-operator",
                 "description": "Register a supported compiler operator.",
@@ -230,10 +230,10 @@ def test_modeling_stage_revision_reads_model_ir_review_without_model_spec_aliase
         ModelIRReview(
             model_id="stage_boundary_model",
             model_ir_ref=model_ir_path.name,
-            assumption_checks=[],
             subproblem_reviews=[{
                 "subproblem_id": "problem1",
                 "status": "revision_required",
+                "assumption_checks": [],
                 "required_revisions": [{
                     "requirement_id": "register-compiler-operator",
                     "description": "Register a supported compiler operator.",

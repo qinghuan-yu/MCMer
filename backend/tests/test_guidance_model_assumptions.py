@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,130 @@ def _model_payload(*, include_assumptions: bool = True) -> dict:
     else:
         payload["subproblems"][0].pop("assumptions", None)
     return payload
+
+
+def _assumption_check(assumption_id: str, status: str = "accepted") -> dict:
+    return {
+        "assumption_id": assumption_id,
+        "status": status,
+        "rationale": "The declared scenario was reviewed for this subproblem.",
+        "alternative_scenario_coverage": "Both local alternatives were considered.",
+        "sensitivity_check_coverage": "The local sensitivity evidence was reviewed.",
+    }
+
+
+def _scoped_review_case():
+    payload = _model_payload()
+    first = payload["subproblems"][0]
+    first["subproblem_id"] = "first"
+    second = deepcopy(first)
+    second["subproblem_id"] = "second"
+    second["assumptions"][0]["statement"] = "The second subproblem uses its own resource convention."
+    payload["subproblems"] = [first, second]
+    review = {
+        "model_id": payload["model_id"],
+        "subproblem_reviews": [{
+            "subproblem_id": item["subproblem_id"],
+            "status": "approved",
+            "assumption_checks": [_assumption_check(item["assumptions"][0]["id"])],
+        } for item in payload["subproblems"]],
+    }
+    return payload, review
+
+
+@pytest.mark.parametrize("rejected_index", [0, 1])
+def test_same_named_assumptions_receive_independent_subproblem_decisions(rejected_index: int) -> None:
+    from app.guidance.model_ir import ModelIR
+    from app.guidance.model_review_contracts import ModelIRReview
+    from app.guidance.model_review_validation import validate_model_review
+
+    payload, review_payload = _scoped_review_case()
+    decision = review_payload["subproblem_reviews"][rejected_index]
+    decision["status"] = "blocked"
+    decision["blocking_issues"] = ["This subproblem's assumption lacks supporting evidence."]
+    decision["assumption_checks"][0]["status"] = "rejected"
+    review = ModelIRReview.model_validate(review_payload)
+    model_ir = ModelIR.model_validate(payload)
+
+    validate_model_review(review, model_ir)
+
+    assert review.status == "partial"
+    assert review.executable_subproblem_ids == [payload["subproblems"][1 - rejected_index]["subproblem_id"]]
+    assert review.subproblem_reviews[1 - rejected_index].assumption_checks[0].status == "accepted"
+    decision["status"] = "approved"
+    decision.pop("blocking_issues")
+    with pytest.raises(ValueError, match="approved subproblem review contains an unaccepted assumption"):
+        validate_model_review(ModelIRReview.model_validate(review_payload), model_ir)
+
+
+@pytest.mark.parametrize("failure", ["missing", "duplicate", "wrong_owner", "wrong_order"])
+def test_assumption_review_coverage_is_exact_within_each_subproblem(failure: str) -> None:
+    from app.guidance.model_ir import ModelIR
+    from app.guidance.model_review_contracts import ModelIRReview
+    from app.guidance.model_review_validation import validate_model_review
+
+    payload, review_payload = _scoped_review_case()
+    for subproblem, decision in zip(payload["subproblems"], review_payload["subproblem_reviews"]):
+        extra = _assumption_payload()
+        extra["id"] = f"only_{subproblem['subproblem_id']}"
+        subproblem["assumptions"].append(extra)
+        decision["assumption_checks"].append(_assumption_check(extra["id"]))
+    checks = review_payload["subproblem_reviews"][0]["assumption_checks"]
+    if failure == "missing":
+        checks.pop()
+    elif failure == "duplicate":
+        checks.append(deepcopy(checks[0]))
+    elif failure == "wrong_owner":
+        checks[1]["assumption_id"] = "only_second"
+    else:
+        checks.reverse()
+
+    with pytest.raises(ValueError, match="assumption (review coverage mismatch|check ids must be unique)"):
+        validate_model_review(
+            ModelIRReview.model_validate(review_payload), ModelIR.model_validate(payload),
+        )
+
+
+@pytest.mark.parametrize("old_checks", [[], [_assumption_check("old_assumption")]])
+def test_review_rejects_legacy_root_assumption_checks(old_checks: list[dict]) -> None:
+    from app.guidance.model_review_contracts import ModelIRReview
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ModelIRReview.model_validate({
+            "model_id": "old_review",
+            "assumption_checks": old_checks,
+            "subproblem_reviews": [{"subproblem_id": "first", "status": "approved"}],
+        })
+
+
+def test_blocked_model_subproblem_cannot_receive_assumption_checks() -> None:
+    from app.guidance.model_ir import ModelIR
+    from app.guidance.model_review_contracts import ModelIRReview
+    from app.guidance.model_review_validation import validate_model_review
+
+    model_ir = ModelIR.model_validate({
+        "model_id": "blocked_model",
+        "subproblems": [{
+            "subproblem_id": "blocked",
+            "execution_status": "blocked",
+            "objective": "Estimate a result.",
+            "blocking_reason": "Required data is missing.",
+            "missing_inputs": ["observations"],
+            "recovery_action": "Provide the observations.",
+            "expected_outputs": ["estimate"],
+        }],
+    })
+    payload = {
+        "model_id": model_ir.model_id,
+        "subproblem_reviews": [{
+            "subproblem_id": "blocked", "status": "blocked",
+            "blocking_issues": ["Required data is missing."],
+        }],
+    }
+    validate_model_review(ModelIRReview.model_validate(payload), model_ir)
+    payload["subproblem_reviews"][0]["assumption_checks"] = [_assumption_check("invented")]
+    with pytest.raises(ValueError, match="assumption review coverage mismatch"):
+        validate_model_review(ModelIRReview.model_validate(payload), model_ir)
 
 
 def test_modeling_assumption_requires_alternatives_and_sensitivity_checks() -> None:
@@ -89,16 +214,18 @@ def test_approved_review_must_cover_every_modeling_assumption() -> None:
         dimensional_consistency="passed",
         data_sufficiency="passed under the declared scenario",
         computational_feasibility="passed",
-        assumption_checks=[accepted],
         subproblem_reviews=[{
             "subproblem_id": model_ir.subproblems[0].subproblem_id,
             "status": "approved",
+            "assumption_checks": [accepted],
         }],
     )
 
     validate_model_review(review, model_ir)
 
-    incomplete = review.model_copy(update={"assumption_checks": []})
+    incomplete = review.model_copy(update={"subproblem_reviews": [
+        review.subproblem_reviews[0].model_copy(update={"assumption_checks": []}),
+    ]})
     with pytest.raises(ValueError, match="assumption review coverage mismatch"):
         validate_model_review(incomplete, model_ir)
 

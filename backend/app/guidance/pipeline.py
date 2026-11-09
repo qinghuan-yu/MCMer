@@ -347,7 +347,6 @@ def _write_modeling_failure_contracts(
         dimensional_consistency="not_reviewed",
         data_sufficiency="not_reviewed",
         computational_feasibility="blocked",
-        assumption_checks=[],
         subproblem_reviews=[
             {
                 "subproblem_id": subproblem.subproblem_id,

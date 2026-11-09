@@ -25,7 +25,6 @@ def test_approved_rereview_requires_complete_accepted_revision_evidence() -> Non
     model_ir = _model_ir()
     revision_request = ModelIRReview(
         model_id=model_ir.model_id,
-        assumption_checks=[],
         subproblem_reviews=[
             {
                 "subproblem_id": "finite_inventory_policy",
@@ -50,7 +49,6 @@ def test_approved_rereview_requires_complete_accepted_revision_evidence() -> Non
     )
     approved = ModelIRReview(
         model_id=model_ir.model_id,
-        assumption_checks=[],
         subproblem_reviews=[
             {
                 "subproblem_id": "finite_inventory_policy",

@@ -76,14 +76,15 @@ def test_model_review_derives_partial_status_from_per_subproblem_decisions():
             {
                 "subproblem_id": "unavailable_estimate",
                 "status": "blocked",
+                "assumption_checks": [],
                 "blocking_issues": ["The required observations are not registered."],
             },
             {
                 "subproblem_id": "finite_inventory_policy",
                 "status": "approved",
+                "assumption_checks": [],
             },
         ],
-        "assumption_checks": [],
     })
 
     assert review.status == "partial"
@@ -209,6 +210,7 @@ def test_model_review_stage_projects_per_subproblem_decisions(
                     {
                         "subproblem_id": "unavailable_estimate",
                         "status": "blocked",
+                        "assumption_checks": [],
                         "blocking_issues": [
                             "The required observations are not registered."
                         ],
@@ -216,9 +218,9 @@ def test_model_review_stage_projects_per_subproblem_decisions(
                     {
                         "subproblem_id": "finite_inventory_policy",
                         "status": "approved",
+                        "assumption_checks": [],
                     },
                 ],
-                "assumption_checks": [],
             })
 
     model_path = tmp_path / "model_ir.json"
