@@ -1,0 +1,298 @@
+{
+  "schema_version": "1.0",
+  "scope": "Frozen four-asset derived subtask; failure receipt, not a mathematical reproduction package",
+  "limits": {
+    "limits": {
+      "model": "deepseek-flash",
+      "endpoint": "https://api.deepseek.com",
+      "max_calls": 24,
+      "max_total_tokens": 400000,
+      "max_total_run_seconds": 1800,
+      "max_runs": 2,
+      "second_run_requires_repair_evidence": true,
+      "same_contract_max_attempts": 2
+    },
+    "case_sha256": "41f4aa2162dd043c91ae5d8183cd7e1cfa01d007d1ae0975ea8ba8e942cc2843"
+  },
+  "calls": [
+    {
+      "number": 1,
+      "agent": "GuidanceDecomposerStructure",
+      "status": "returned",
+      "reserved_tokens": 27312,
+      "max_tokens": 12288,
+      "finish_reason": "stop",
+      "seconds": 45.516,
+      "total_tokens": 9952
+    },
+    {
+      "number": 2,
+      "agent": "GuidanceDecomposerFacts",
+      "status": "returned",
+      "reserved_tokens": 43067,
+      "max_tokens": 24576,
+      "finish_reason": "stop",
+      "seconds": 79.562,
+      "total_tokens": 19334
+    },
+    {
+      "number": 3,
+      "agent": "GuidanceModeler_sp1",
+      "status": "returned",
+      "reserved_tokens": 83486,
+      "max_tokens": 12288,
+      "finish_reason": "length",
+      "seconds": 84.094,
+      "total_tokens": 30934
+    },
+    {
+      "number": 4,
+      "agent": "GuidanceModeler_sp1",
+      "status": "returned",
+      "reserved_tokens": 87582,
+      "max_tokens": 16384,
+      "finish_reason": "stop",
+      "seconds": 92.406,
+      "total_tokens": 33461
+    },
+    {
+      "number": 5,
+      "agent": "GuidanceModeler_sp1_indexed_core",
+      "status": "returned",
+      "reserved_tokens": 51139,
+      "max_tokens": 8192,
+      "finish_reason": "stop",
+      "seconds": 34.313,
+      "total_tokens": 16945
+    },
+    {
+      "number": 6,
+      "agent": "GuidanceModeler_sp1_indexed_constraints",
+      "status": "returned",
+      "reserved_tokens": 81756,
+      "max_tokens": 32768,
+      "finish_reason": "stop",
+      "seconds": 124.422,
+      "total_tokens": 36181
+    },
+    {
+      "number": 7,
+      "agent": "GuidanceModeler_sp1_indexed_constraints",
+      "status": "returned",
+      "reserved_tokens": 82756,
+      "max_tokens": 32768,
+      "finish_reason": "stop",
+      "seconds": 138.891,
+      "total_tokens": 36608
+    },
+    {
+      "number": 8,
+      "agent": "GuidanceDecomposerStructure",
+      "status": "returned",
+      "reserved_tokens": 27312,
+      "max_tokens": 12288,
+      "finish_reason": "stop",
+      "seconds": 37.547,
+      "total_tokens": 9552
+    },
+    {
+      "number": 9,
+      "agent": "GuidanceDecomposerFacts",
+      "status": "returned",
+      "reserved_tokens": 42732,
+      "max_tokens": 24576,
+      "finish_reason": "stop",
+      "seconds": 75.312,
+      "total_tokens": 17669
+    },
+    {
+      "number": 10,
+      "agent": "GuidanceSourceInterpreter",
+      "status": "returned",
+      "reserved_tokens": 45882,
+      "max_tokens": 32768,
+      "finish_reason": "stop",
+      "seconds": 69.234,
+      "total_tokens": 12775
+    },
+    {
+      "number": 11,
+      "agent": "GuidanceSourceAdjudicator",
+      "status": "returned",
+      "reserved_tokens": 47776,
+      "max_tokens": 32768,
+      "finish_reason": "stop",
+      "seconds": 21.25,
+      "total_tokens": 6955
+    },
+    {
+      "number": 12,
+      "agent": "GuidanceModeler",
+      "status": "returned",
+      "reserved_tokens": 92413,
+      "max_tokens": 12288,
+      "finish_reason": "length",
+      "seconds": 69.985,
+      "total_tokens": 33045
+    },
+    {
+      "number": 13,
+      "agent": "GuidanceModeler",
+      "status": "returned",
+      "reserved_tokens": 96509,
+      "max_tokens": 16384,
+      "finish_reason": "stop",
+      "seconds": 65.766,
+      "total_tokens": 32923
+    },
+    {
+      "number": 14,
+      "agent": "GuidanceModeler_indexed_core",
+      "status": "returned",
+      "reserved_tokens": 55291,
+      "max_tokens": 8192,
+      "finish_reason": "stop",
+      "seconds": 19.484,
+      "total_tokens": 15557
+    }
+  ],
+  "runs": [
+    {
+      "number": 1,
+      "git_head": "75149885c5e013b07b99730948bc60285a4c08f1",
+      "code_sha256": "e5ac8df5d27068932a6510075c3779862c52f1d49939c6f3d32af11f2ecf97d7",
+      "model": "deepseek/deepseek-flash",
+      "endpoint": "https://api.deepseek.com",
+      "ledger_record": {
+        "number": 1,
+        "code_sha": "e5ac8df5d27068932a6510075c3779862c52f1d49939c6f3d32af11f2ecf97d7",
+        "repair_evidence": null,
+        "status": "blocked",
+        "seconds": 603.625
+      },
+      "summary": {
+        "status": "blocked",
+        "seconds": 603.625,
+        "persistent_config_unchanged": true,
+        "code_unchanged": true,
+        "task_unchanged": true,
+        "credential_scan_passed": true,
+        "calls_total": 7,
+        "known_tokens": 183415,
+        "unknown_usage_calls": 0
+      },
+      "failures": {
+        "modeling_failure_sp1.json": {
+          "failed_stage": "modeling",
+          "failed_operation": "subproblem_model_ir_generation",
+          "subproblem_id": "sp1",
+          "error_type": "ContractGenerationError",
+          "error": "GuidanceModeler_sp1_indexed_constraints failed to generate valid IndexedLinearFormulationDraft after 2 complete attempts / 2 provider calls: ValidationError: 2 validation errors for SolvableModelIR\ncandidate_models.0.operator_node_ids\n  List should have at most 20 items after validation, not 21 [type=too_long, input_value=['const_S1_return', 'cons..., 'solve_indexed_model'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/too_long\ncandidate_models.1.operator_node_ids\n  List should have at most 20 items after validation, not 21 [type=too_long, input_value=['const_S1_return', 'cons..., 'solve_indexed_model'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/too_long",
+          "contract_diagnostics": [
+            "contract_diagnostics/GuidanceModeler_sp1.json",
+            "contract_diagnostics/GuidanceModeler_sp1_indexed_constraints.json",
+            "contract_diagnostics/GuidanceModeler_sp1_indexed_core.json"
+          ],
+          "resume_from": "problem_spec.json"
+        },
+        "modeling_failure_sp2.json": {
+          "failed_stage": "modeling",
+          "failed_operation": "subproblem_model_ir_generation",
+          "subproblem_id": "sp2",
+          "error_type": "ValueError",
+          "error": "upstream subproblems are blocked: sp1",
+          "contract_diagnostics": [],
+          "resume_from": "problem_spec.json"
+        },
+        "modeling_failure_sp3.json": {
+          "failed_stage": "modeling",
+          "failed_operation": "subproblem_model_ir_generation",
+          "subproblem_id": "sp3",
+          "error_type": "ValueError",
+          "error": "upstream subproblems are blocked: sp1, sp2",
+          "contract_diagnostics": [],
+          "resume_from": "problem_spec.json"
+        }
+      },
+      "api_artifact_sha256": {
+        "api/001_request.json": "62fe7f17204149784311b358d159e5398a2c431674024614097435317ce9cdf5",
+        "api/001_response.json": "3b3eefdee93d70490356fdb20c9ec252264ba038ded8ddd7ebf79b9355eed55e",
+        "api/002_request.json": "263e53f0e3bc620dab04226e7ce104361653a969c78d544f5d37a39697b09d3a",
+        "api/002_response.json": "f8572860240c5b3388a5d4be400f5b15cf0df5fcc28ef269b186b284ef62b4b7",
+        "api/003_request.json": "4e226fac8760f2d2ccf4aaae030d7e5f961efb2c47f9c0d93540c7db957e0128",
+        "api/003_response.json": "68eafed1df120f21eb58a75328e72c5ac1d71206f693fb76e55e51cbf175cf8e",
+        "api/004_request.json": "b0e3f08d6fcc1b67c17879c9edd86afa064a323da4aa688b1ef8d0a1af12572c",
+        "api/004_response.json": "596f4c787864d34bd272e51e47048a164f16e0cdc7ce8259867e62d2884ac564",
+        "api/005_request.json": "54f32ef71ab679fee6e8ac47962ca2cc9452731726465c274cb1b939edd69934",
+        "api/005_response.json": "955f76339e1c63a93ae8f2f705048499c07ea078fe51a2f4b690cd9808bd1237",
+        "api/006_request.json": "1b910dbdf62f8ba9c6f63f52b81f895c83d49b570037f4c2c0b157ea791ecd7c",
+        "api/006_response.json": "0660f83cd78a16bfdbcc38d57c2350faa0ab1dc5dd1f6a6572a155cf1546ffb5",
+        "api/007_request.json": "c07623c30e0b6d7f74e55d5bea84080915c7392cc1170817511bc1d386a34881",
+        "api/007_response.json": "34c6a5e3f10e1b6a33c4a9caf4c6754d59fda82fd0b0abf0ead501b835403fc2"
+      }
+    },
+    {
+      "number": 2,
+      "git_head": "ba369e104542d1973cab96b26ec34eab6f8acd26",
+      "code_sha256": "530e04fddc26667fdfa0ec273e28bf6dae99ab45691ac2e7ff3f6227770e94c7",
+      "model": "deepseek/deepseek-flash",
+      "endpoint": "https://api.deepseek.com",
+      "ledger_record": {
+        "number": 2,
+        "code_sha": "530e04fddc26667fdfa0ec273e28bf6dae99ab45691ac2e7ff3f6227770e94c7",
+        "repair_evidence": "48ca9a9e9f66d3f9f8f728ee1071a48c5039cc75eb02740f01c74d4f5a2c1ddb",
+        "status": "blocked",
+        "seconds": 363.562
+      },
+      "summary": {
+        "status": "blocked",
+        "seconds": 363.562,
+        "persistent_config_unchanged": true,
+        "code_unchanged": true,
+        "task_unchanged": true,
+        "credential_scan_passed": true,
+        "calls_total": 14,
+        "known_tokens": 311891,
+        "unknown_usage_calls": 0
+      },
+      "failures": {
+        "modeling_failure_SP1.json": {
+          "failed_stage": "modeling",
+          "failed_operation": "subproblem_model_ir_generation",
+          "subproblem_id": "SP1",
+          "error_type": "RuntimeError",
+          "error": "total token budget cannot reserve this request",
+          "contract_diagnostics": [
+            "contract_diagnostics/GuidanceModeler.json",
+            "contract_diagnostics/GuidanceModeler_indexed_constraints.json",
+            "contract_diagnostics/GuidanceModeler_indexed_core.json"
+          ],
+          "resume_from": "problem_spec.json"
+        }
+      },
+      "api_artifact_sha256": {
+        "api/008_request.json": "62fe7f17204149784311b358d159e5398a2c431674024614097435317ce9cdf5",
+        "api/008_response.json": "0e44d9e31f9f9b2610d2bac8031097bb232eced29234394a31d727c03b00ba34",
+        "api/009_request.json": "af527ff6a2cfcdbd2caed272c3fe47f554eccf5a94901555256e99b2894de893",
+        "api/009_response.json": "38b862adaa62bc0a419aa28f49920e6ae93cad689ed026769dd4010a26d70be0",
+        "api/010_request.json": "14f1515a1b236b4637e69e42c260eab77257843c8a85484c1043162c913888f1",
+        "api/010_response.json": "b9d1afa00ab604263f4d79c0cd6dabf52f00bb00d9633db64b21e928701f680a",
+        "api/011_request.json": "b4127f4e6282181b5df86b356c04c4d697cf363037f2e158955259e9fdbce284",
+        "api/011_response.json": "98c8671f80343065dd6ee7f26ea933cb945cfc79b1091a02906bf0e7684e5417",
+        "api/012_request.json": "df53b0e9340274a97e2382cf0980f6125a7552573a45fb55f58ae20902495a6f",
+        "api/012_response.json": "827d6241edabef2d61e779b308dc13672df462f738d2d37b081c4fc439c6b0a6",
+        "api/013_request.json": "15293a30fce4bd58f33e2398289d14f42a44f5f87583e18d7f72759636050751",
+        "api/013_response.json": "f9d69da385ec4beb5b3c35bc2afb68d56429b4ff3e6175202a8e96cc4c7a654f",
+        "api/014_request.json": "6cdd85ff83f3196f4e691148e147ec9fc0f287ab7ad5e98a7525be127f08f3e5",
+        "api/014_response.json": "6cde046f127bdd7ffe787d20fd116350633e25b672bdb8b92a0d438836acdb48"
+      }
+    }
+  ],
+  "totals": {
+    "calls": 14,
+    "known_tokens": 311891,
+    "unknown_usage_calls": 0,
+    "run_seconds": 967.187,
+    "remaining_runs": 0
+  }
+}
