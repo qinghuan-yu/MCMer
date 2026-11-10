@@ -1,0 +1,2 @@
+# Preserve the original bytes and SHA-256 of archived test evidence.
+backend/closeout/validation/*.xml -text
