@@ -293,10 +293,14 @@ ExecutionComponent = Annotated[
 ]
 
 
+# 生成草稿最多引用这些图节点；正式模型还包含至多一个系统托管求解节点。
+MAX_CANDIDATE_GRAPH_NODE_REFS = 20
+
+
 class CandidateModel(IRModel):
     id: str = Field(min_length=1, max_length=100)
     role: Literal["baseline", "recommended", "alternative"]
-    operator_node_ids: list[str] = Field(min_length=1, max_length=20)
+    operator_node_ids: list[str] = Field(min_length=1, max_length=MAX_CANDIDATE_GRAPH_NODE_REFS + 1)
     selection_metric: str = Field(min_length=1, max_length=100)
     applicability_boundary: str = Field(min_length=1, max_length=500)
 

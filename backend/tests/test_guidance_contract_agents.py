@@ -695,6 +695,48 @@ def test_combination_draft_preserves_forecast_when_adding_indexed_solver() -> No
     )
 
 
+def test_full_candidate_graph_reserves_a_reference_for_the_indexed_solver() -> None:
+    from app.guidance.model_ir import IndexedLinearModelSpec
+    from app.guidance.model_ir_drafts import ModelIRGenerationDraft
+
+    fixture = Path(__file__).parent / "fixtures/model_ir/generic_multiperiod_inventory.json"
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    subproblem, indexed_model, _ = _prepare_indexed_draft(payload)
+    subproblem["execution_components"] = ["operator_graph", "indexed_linear_model"]
+    node_ids = [f"source_{i}" for i in range(20)]
+    subproblem["variables"] = [
+        {"id": node, "role": "derived", "symbol": node, "unit": "unit", "shape": []}
+        for node in node_ids
+    ]
+    subproblem["operators"] = [
+        {"node_id": node, "operator_id": "data.scalar_constant", "outputs": [node], "parameters": {"value": 1}}
+        for node in node_ids
+    ]
+    for candidate in subproblem["candidate_models"]:
+        candidate["operator_node_ids"] = node_ids.copy()
+    draft = ModelIRGenerationDraft.model_validate(payload)
+
+    promoted = draft.promote(IndexedLinearModelSpec.model_validate(indexed_model))
+
+    assert all(c.operator_node_ids == node_ids + ["solve_indexed_model"]
+               for c in promoted.subproblems[0].candidate_models)
+    assert all(c.operator_node_ids == node_ids for c in draft.subproblems[0].candidate_models)
+    from app.guidance.model_ir import ModelIR
+    ModelIR.model_validate_json(promoted.model_dump_json())
+
+
+def test_candidate_reference_limits_keep_the_generation_budget_bounded() -> None:
+    from app.guidance.model_ir import CandidateModel
+    from app.guidance.model_ir_drafts import CandidateModelDraft
+
+    fields = {"id": "candidate", "role": "recommended", "selection_metric": "profit",
+              "applicability_boundary": "Only the declared model"}
+    with pytest.raises(ValueError, match="at most 20"):
+        CandidateModelDraft(**fields, operator_node_ids=[f"n{i}" for i in range(21)])
+    with pytest.raises(ValueError):
+        CandidateModel(**fields, operator_node_ids=[f"n{i}" for i in range(22)])
+
+
 def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
     tmp_path: Path,
 ) -> None:

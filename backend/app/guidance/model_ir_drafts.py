@@ -28,6 +28,7 @@ from app.guidance.model_ir import (
     IndexedVariableReference,
     IndexedVariableSpec,
     ModelIR,
+    MAX_CANDIDATE_GRAPH_NODE_REFS,
     ModelingAssumptionSpec,
     OperatorGraphExecutionComponent,
     OperatorInvocation,
@@ -44,7 +45,7 @@ from app.guidance.static_bindings import FactValueBinding, StaticParameterBindin
 
 
 class CandidateModelDraft(CandidateModel):
-    operator_node_ids: list[str] = Field(default_factory=list, max_length=20)
+    operator_node_ids: list[str] = Field(default_factory=list, max_length=MAX_CANDIDATE_GRAPH_NODE_REFS)
 
 
 class SolvableModelIRDraft(IRModel):
