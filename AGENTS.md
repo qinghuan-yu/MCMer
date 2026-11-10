@@ -9,6 +9,17 @@ These rules are mandatory for every agent modifying this repository.
 - Before every code modification, read the complete long-term plan and identify its current unchecked step.
 - When the target changes, rewrite the single long-term plan, compact completed phases into locked invariants, and delete superseded planning documents.
 
+## Product and Runtime Direction
+
+- The target is a mathematical modeling agent built from model APIs, a thin harness, and a shared mathematical evidence kernel. The active plan owns milestones and implementation scope; this file owns execution rules.
+- Treat ModelIR and registered solvers as structured computation tools. Do not require every exploratory computation to become ModelIR, and do not preserve the fixed stage schedule as a permanent product constraint.
+- Generated code experiments are in scope only inside a verified isolation boundary with explicit file, network, dependency, time, memory, and output limits. No fallback to unrestricted host execution; experiment workers must not inherit credentials or configuration secrets.
+- Keep exploratory observations, assumptions, and formally accepted results distinct. Both ModelIR and code execution must retain source, transformation, version, run, and validation evidence before their results can support final claims.
+- The harness owns task state, total budgets, tool dispatch, cancellation, recovery, and submission to validation. A model completion message, successful script, or second LLM opinion is not sufficient to mark mathematics verified.
+- Preserve evidence and failure-isolation guarantees when replacing orchestration. Do not create a second result authority, hidden fallback, or permanent parallel production workflow. An isolated comparison runner may retain a frozen baseline for evaluation.
+- Attribute harness improvements only through comparisons with the same model, input, tool capabilities, tool information, environment, budget, and acceptance criteria. Report interface fixes and model changes separately from scheduling improvements.
+- Real API tests use only `deepseek-flash` within the authorized data scope. Exclude biological research problems. Keep failed runs and unknown usage in the ledger; do not silently expand budgets or resample until success.
+
 ## Verify Before Diagnosing
 
 - Never propose a refactoring, claim a capability gap, or mark code as dead based solely on static reading or file line counts.
@@ -28,6 +39,7 @@ These rules are mandatory for every agent modifying this repository.
 - Stop implementation and explain the conflicting data flow and coupling with empirical evidence.
 - Propose the module-level replacement, including affected files, migration boundary, and verification.
 - Obtain explicit user approval before replacing the conflicting module.
+- Apply existing approval to its stated scope without asking again. A direction or plan update alone does not mark a new implementation complete or approve unspecified module replacements; prepare the concrete migration and verification before requesting any additional approval.
 
 ## Plan State
 
