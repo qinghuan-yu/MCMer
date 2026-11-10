@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "case_id": "cumcm1998a_four_asset_conditional",
+  "task_file": "portfolio_task.txt",
+  "task_sha256": "8218c20588b4a215b050a4ccf4b4251f8fe06f4671a3cf2ff42fe7f9af2528bb",
+  "scope": "Single derived numerical scenario; not the original full contest problem",
+  "source_url": "https://www.mcm.edu.cn/upload_cn/node/1/SkAh1A7Q6f2dd01e58aa621f920e79f45cd5d255.pdf",
+  "source_pdf_page": 11,
+  "source_pdf_sha256": "44450a0946bf28e4e4ce2dd051cac72987bdd0edbe2b92bd8c28b960f60569bc",
+  "source_text_sha256": "8e06e89aefbf3dd0218c5899fe7880e5bb9f84c082ea85b666babbf2332c95a3",
+  "production_base": "a0185021b99101e026ef54d12632c006e69e9498",
+  "scenario": {
+    "capital_yuan": 10000,
+    "maximum_individual_risk_loss_yuan": 200,
+    "fee_payment": "inside_initial_capital",
+    "objective": "end_wealth_minus_initial_capital",
+    "amount_domain": "continuous_nonnegative"
+  },
+  "budget": {
+    "model": "deepseek-flash",
+    "endpoint": "https://api.deepseek.com",
+    "max_calls": 24,
+    "max_total_tokens": 400000,
+    "max_total_run_seconds": 1800,
+    "max_runs": 2,
+    "second_run_requires_repair_evidence": true,
+    "same_contract_max_attempts": 2
+  },
+  "acceptance": [
+    "Fresh default Guidance pipeline generates the model from the frozen task; no probe model, reference answer, output repair, or source/review bypass.",
+    "Original four asset rows and bank rate match the source; capital and risk cap remain explicit scenario conditions.",
+    "Allocation and bank balance are nonnegative and sum with actual fees to 10000 yuan within 1e-6 yuan.",
+    "Fees are zero at zero purchase, p*u for a positive purchase below u, and p*x above u; all four assets must follow the rule.",
+    "Maximum individual loss q*x is at most 200 yuan within 1e-6 yuan; do not substitute a sum or bare risk rate.",
+    "Recompute net profit including bank interest and all actual fees; end wealth minus capital must agree within 1e-6 yuan.",
+    "Feasible net profit agrees within 1e-6 yuan with independent exact enumeration of all 81 fee regimes; equivalent optimal allocations are allowed.",
+    "Production source, model review and numerical checks remain intact; rejected/unknown/failed evidence is not promoted.",
+    "Guidance/report contains all four allocations and fees, bank balance, maximum loss, net profit, all-bank comparison, source and scenario limitations.",
+    "Reproduce the frozen response and computation in a fresh directory; preserve dependency versions, contract/source hashes, request and usage ledger.",
+    "Do not claim full original-problem completion, predictive investment accuracy, generalization, or autonomous-harness capability."
+  ],
+  "reference_policy": "The independent verifier and manual probe artifacts are audit-only and must never be included in model requests."
+}
