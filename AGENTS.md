@@ -11,13 +11,13 @@ These rules are mandatory for every agent modifying this repository.
 
 ## Product and Runtime Direction
 
-- The target is a mathematical modeling agent built from model APIs, a thin harness, and a shared mathematical evidence kernel. The active plan owns milestones and implementation scope; this file owns execution rules.
-- Treat ModelIR and registered solvers as structured computation tools. Do not require every exploratory computation to become ModelIR, and do not preserve the fixed stage schedule as a permanent product constraint.
-- Generated code experiments are in scope only inside a verified isolation boundary with explicit file, network, dependency, time, memory, and output limits. No fallback to unrestricted host execution; experiment workers must not inherit credentials or configuration secrets.
+- The target is one reproducible, independently checked end-to-end modeling subtask, followed by a frozen final version and project archival. The active plan owns the exact acceptance scope; this file owns execution rules. General-purpose agent development is no longer an active goal.
+- Reuse the current Guidance workflow, ModelIR, registered solvers, and mathematical evidence kernel. New harnesses, production sandboxes, SDK migrations, orchestration replacements, and broader problem coverage are outside the closeout scope unless the user explicitly changes that scope.
+- New generated-code execution is outside this closeout scope. Existing isolation guarantees still apply: no unrestricted host fallback, no inherited credentials or configuration secrets, and explicit file, network, dependency, time, memory, and output limits for any approved isolated experiment.
 - Keep exploratory observations, assumptions, and formally accepted results distinct. Both ModelIR and code execution must retain source, transformation, version, run, and validation evidence before their results can support final claims.
-- The harness owns task state, total budgets, tool dispatch, cancellation, recovery, and submission to validation. A model completion message, successful script, or second LLM opinion is not sufficient to mark mathematics verified.
-- Preserve evidence and failure-isolation guarantees when replacing orchestration. Do not create a second result authority, hidden fallback, or permanent parallel production workflow. An isolated comparison runner may retain a frozen baseline for evaluation.
-- Attribute harness improvements only through comparisons with the same model, input, tool capabilities, tool information, environment, budget, and acceptance criteria. Report interface fixes and model changes separately from scheduling improvements.
+- Keep the existing workflow responsible for execution state, budgets, cancellation, recovery, and validation. A model completion message, successful script, or second LLM opinion is not sufficient to mark mathematics verified; a new harness is not a prerequisite for closeout.
+- Preserve evidence and failure-isolation guarantees. Do not create a second result authority, hidden fallback, or parallel production workflow to make the demonstration pass.
+- Freeze the single task and acceptance criteria before live execution. Only fix reproduced blockers for that task; retain unrelated historical failures as explicit limitations. Do not treat one successful subtask as full-problem, generalization, or competitive-performance evidence. Stop feature development once archival acceptance is satisfied.
 - Real API tests use only `deepseek-flash` within the authorized data scope. Exclude biological research problems. Keep failed runs and unknown usage in the ledger; do not silently expand budgets or resample until success.
 
 ## Verify Before Diagnosing
