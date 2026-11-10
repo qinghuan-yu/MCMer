@@ -9,6 +9,7 @@ from app.core.llm.llm import LLM
 from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contract_request import StructuredContractRequester
 from app.guidance.contracts import ProblemSpec
+from app.guidance.operators import OperatorRegistry
 from app.guidance.fact_coverage import FactCoverage, FactScope
 from app.guidance.generation_validation import (
     _validate_generation_draft_slice,
@@ -66,7 +67,7 @@ async def _request_single_subproblem_model(
     subproblem: dict[str, Any],
     slice_spec: dict[str, Any],
     evidence_profile: dict,
-    available_operator_ids: list[str],
+    registry: OperatorRegistry,
     request_name: str,
     artifact_dir: Path,
     previous_model: Any | None,
@@ -93,13 +94,15 @@ async def _request_single_subproblem_model(
         "required_fact_ids": list(fact_scope.fact_ids),
         "fact_coverage": coverage.payload(),
         "evidence_profile": evidence_profile,
-        "available_operator_ids": available_operator_ids,
+        "available_operators": registry.model_contracts(),
+        "operator_contract_sha256": registry.contract_sha256(),
     }
     if previous_model is not None:
         payload["previous_model_summary"] = _compact_previous_model_summary(previous_model)
     if review_payload is not None:
         payload["model_review"] = review_payload
     dependencies = {
+        "operator_contract_sha256": registry.contract_sha256(),
         "upstream_models": slice_spec.get("dependency_models", {}),
         "previous_model": previous_model.model_dump(mode="json") if previous_model is not None else None,
         "source_preflight_sha256": slice_spec.get("source_preflight_sha256"),
@@ -121,7 +124,7 @@ async def _request_single_subproblem_model(
         semantic_validator=lambda generation_draft: _validate_generation_draft_slice(
             generation_draft,
             expected_id=target_id,
-            available_operator_ids=available_operator_ids,
+            registry=registry,
             problem_spec=problem_spec,
         ),
         request_timeout=architecture_timeout,
@@ -210,7 +213,7 @@ async def _request_single_subproblem_model(
                 expected_id=target_id,
                 problem_spec=problem_spec,
                 evidence_profile=evidence_profile,
-                available_operator_ids=available_operator_ids,
+                registry=registry,
             )
 
         constraints = await _request_model(
@@ -271,6 +274,6 @@ async def _request_single_subproblem_model(
         expected_id=target_id,
         problem_spec=problem_spec,
         evidence_profile=evidence_profile,
-        available_operator_ids=available_operator_ids,
+        registry=registry,
     )
     return promoted

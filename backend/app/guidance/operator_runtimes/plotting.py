@@ -22,15 +22,15 @@ def xy_evidence(*, inputs: dict, parameters: dict, random_seed, work_dir: Path) 
     figure, axis = plt.subplots(figsize=(8, 4.5))
     axis.plot(inputs["x"], inputs["observed"], label="observed", linewidth=2)
     axis.plot(inputs["x"], inputs["predicted"], label="fitted", linewidth=2)
-    axis.set_title(str(parameters.get("title", "Observed and fitted")))
-    axis.set_xlabel(str(parameters.get("x_label", "x")))
-    axis.set_ylabel(str(parameters.get("y_label", "y")))
+    axis.set_title(str(parameters["title"]))
+    axis.set_xlabel(str(parameters["x_label"]))
+    axis.set_ylabel(str(parameters["y_label"]))
     axis.legend()
     figure.tight_layout()
-    figure.savefig(relative_path, dpi=int(parameters.get("dpi", 150)))
+    figure.savefig(relative_path, dpi=int(parameters["dpi"]))
     plt.close(figure)
     return {"figure": {
         "path": PurePosixPath(parameters["path"]).as_posix(),
-        "role": str(parameters.get("role", "result_fit")),
-        "linked_result_ids": list(parameters.get("linked_result_ids", [])),
+        "role": str(parameters["role"]),
+        "linked_result_ids": list(parameters["linked_result_ids"]),
     }}

@@ -5,7 +5,7 @@ import importlib
 import pytest
 
 from app.guidance.model_validators import build_default_model_validator_registry
-from app.guidance.operator_catalog import DEFAULT_OPERATOR_IDS, build_default_operator_registry
+from app.guidance.operator_catalog import build_default_operator_registry
 
 
 OPERATOR_OWNERS = {
@@ -39,11 +39,11 @@ def test_registered_operator_is_owned_by_its_numerical_domain(
     registry = build_default_operator_registry()
     runtime = registry.runtime(operator_id)
 
-    assert DEFAULT_OPERATOR_IDS == set(OPERATOR_OWNERS)
+    assert {item.operator_id for item in build_default_operator_registry().definitions()} == set(OPERATOR_OWNERS)
     assert runtime is not None
     assert runtime.executor is not None
     assert runtime.executor.__module__ == f"app.guidance.operator_runtimes.{owner}"
-    assert runtime.definition.version == "1.0.0"
+    assert runtime.definition.version == "2.0.0"
     assert runtime.definition.deterministic is True
     assert runtime.definition.validator_id == f"{operator_id}.validator.v1"
 

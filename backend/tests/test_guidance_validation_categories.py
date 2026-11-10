@@ -1,3 +1,4 @@
+from app.guidance.operator_catalog import build_default_operator_registry
 import json
 from pathlib import Path
 
@@ -33,7 +34,12 @@ def _model_payload(*, indexed: bool, graph_method: str | None, families: list[st
             }],
             "operators": [{
                 "node_id": "numerical_method", "operator_id": graph_method,
-                "inputs": {"values": "source.value"}, "outputs": ["method_result"],
+                "inputs": {"data": "source.value"} if graph_method == QUADRATIC else {"time": "source.value", "target": "source.value"},
+                "outputs": ["method_result"],
+                "parameters": {"starts": [[0], [1]], "objective": {"quadratic": [[2]], "linear": [0]},
+                               "bounds": {"lower": [0], "upper": [1]}} if graph_method == QUADRATIC else
+                              {"future_time": [11], "candidate_periods": [2], "season_length": 2,
+                               "initial_train_size": 5, "interval_level": 0.95},
             }],
         })
     nodes = (["solve"] if indexed else []) + (["numerical_method"] if graph_method else [])
@@ -91,7 +97,7 @@ def test_validation_categories_match_actual_execution_methods(
         def validate() -> None:
             _validate_generation_draft_slice(
                 model, expected_id=subproblem_id,
-                available_operator_ids=["optimization.milp", QUADRATIC, FORECAST],
+                registry=build_default_operator_registry(),
                 problem_spec=ProblemSpec(task_summary="Validate method categories.", subproblems=[{
                     "id": subproblem_id, "required_fact_ids": [],
                     "required_uncertainty_ids": [], "depends_on_subproblem_ids": [],

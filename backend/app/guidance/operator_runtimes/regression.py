@@ -60,8 +60,8 @@ def zero_intercept_grouped(
     return {"fit": {"groups": groups}}
 
 def _basis_column(x: np.ndarray, spec: dict, candidate: float | None) -> np.ndarray:
-    def number(name: str, default: float | None = None) -> float:
-        value = spec.get(name, default)
+    def number(name: str) -> float:
+        value = spec[name]
         if value == "$candidate":
             if candidate is None:
                 raise ValueError("basis references a candidate outside grid search")
@@ -82,7 +82,7 @@ def _basis_column(x: np.ndarray, spec: dict, candidate: float | None) -> np.ndar
     if kind == "shifted_ramp":
         return np.maximum(x - number("shift"), 0.0)
     if kind == "capped_shifted_ramp":
-        shifted = np.maximum(x - number("shift", 0.0), 0.0)
+        shifted = np.maximum(x - number("shift"), 0.0)
         return np.minimum(shifted, number("cap"))
     if kind == "triangular":
         location = number("location")
@@ -117,7 +117,7 @@ def basis_least_squares(
     del random_seed, work_dir
     x = np.asarray(inputs["x"], dtype=float)
     y = np.asarray(inputs["y"], dtype=float)
-    search = parameters.get("search")
+    search = parameters["search"]
     if not search:
         return {"fit": _fit_basis(x, y, parameters["basis"])}
     candidates = [float(value) for value in search["candidates"]]
@@ -172,7 +172,7 @@ def continuous_hinge_bic(
         candidates.append({"candidate": candidate, "bic": bic, "predicted": predictions})
     best = min(candidates, key=lambda item: item["bic"])
     improvement = float(baseline_bic - best["bic"])
-    supported = improvement > float(parameters.get("support_threshold", 2.0))
+    supported = improvement > float(parameters["support_threshold"])
     selected = best["predicted"] if supported else baseline_predictions
     residuals = y - selected
     near_optimal = [item["candidate"] for item in candidates if item["bic"] <= best["bic"] + 2.0]

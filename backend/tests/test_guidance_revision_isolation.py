@@ -62,6 +62,12 @@ def test_revision_preserves_unaffected_models_and_invalidates_changed_dependenci
 
     monkeypatch.setattr("app.guidance.modeler._request_single_subproblem_model", generate)
     write_source_preflight(tmp_path, problem_spec)
+    from app.guidance.operator_catalog import build_default_operator_registry
+    from app.guidance.recovery import RecoveryCheckpoint
+    RecoveryCheckpoint(tmp_path, "model_operator_contract", "current").save({
+        "model_ir": previous.model_dump(mode="json"),
+        "operator_contract_sha256": build_default_operator_registry().contract_sha256(),
+    }, {"validated": True})
     result = asyncio.run(LLMModeler(object()).revise(
         problem_spec=problem_spec, previous_model_ir=previous, review=review,
         evidence_profile={"evidence": []}, task={}, work_dir=tmp_path,

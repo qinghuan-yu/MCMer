@@ -1,3 +1,4 @@
+from app.guidance.operator_parameters import OperatorParameters
 import asyncio
 import json
 from pathlib import Path
@@ -118,6 +119,10 @@ def _scalar_model(value=2):
 
 
 def _registry(calls, fail):
+    class ProbeParameters(OperatorParameters):
+        name: str
+        value: int
+
     registry = OperatorRegistry()
 
     def execute(*, inputs, parameters, random_seed, work_dir):
@@ -128,7 +133,7 @@ def _registry(calls, fail):
         return {"value": inputs.get("value", parameters["value"]) + (1 if inputs else 0)}
 
     for name, inputs in [("test.source", {}), ("test.add", {"value": OperatorPort(value_kind="scalar", unit="dimensionless")})]:
-        registry.register(OperatorDefinition(
+        registry.register(OperatorDefinition(parameter_model=ProbeParameters,
             operator_id=name, version="1", inputs=inputs,
             outputs={"value": OperatorPort(value_kind="scalar", unit="dimensionless")},
             deterministic=True, validator_id=f"{name}.validate",

@@ -14,8 +14,8 @@ def periodic_key_moments(
     sample_count = int(parameters["sample_count"])
     period = int(parameters["period"])
     end_offset = int(parameters["window_end_offset"])
-    moments = {int(value) for value in parameters.get("fixed_moments", [])}
-    for start in parameters.get("periodic_starts", []):
+    moments = {int(value) for value in parameters["fixed_moments"]}
+    for start in parameters["periodic_starts"]:
         for value in range(int(start), sample_count, period):
             moments.add(value)
             moments.add(min(value + end_offset, sample_count - 1))
@@ -43,7 +43,7 @@ def leave_one_out(*, inputs: dict, parameters: dict, random_seed, work_dir: Path
     del random_seed, work_dir
     x = np.asarray(inputs["x"], dtype=float)
     y = np.asarray(inputs["y"], dtype=float)
-    zero_intercept = bool(parameters.get("zero_intercept", False))
+    zero_intercept = bool(parameters["zero_intercept"])
 
     def coefficients(x_values: np.ndarray, y_values: np.ndarray) -> np.ndarray:
         design = x_values[:, None] if zero_intercept else np.column_stack([np.ones(len(x_values)), x_values])

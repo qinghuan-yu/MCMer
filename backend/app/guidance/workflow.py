@@ -10,7 +10,7 @@ from app.guidance.modeler import LLMModeler
 from app.guidance.reviewer import LLMModelReviewer
 from app.guidance.decomposer import LLMProblemDecomposer
 from app.guidance.model_ir_compiler import ModelIRCompiler
-from app.guidance.operator_catalog import DEFAULT_OPERATOR_IDS, build_default_operator_registry
+from app.guidance.operator_catalog import build_default_operator_registry
 from app.guidance.operator_execution import OperatorGraphExecutor
 from app.guidance.pipeline import GuidancePipeline
 from app.guidance.stages import CalculationStage, DecompositionStage, ModelingStage, ModelReviewStage, SourceStage
@@ -63,7 +63,7 @@ def build_default_guidance_pipeline(workflow_mode: str = "standard") -> Guidance
         )),
         modeling_stage=ModelingStage(modeler=LLMModeler(
             modeling_llm,
-            available_operator_ids=sorted(DEFAULT_OPERATOR_IDS),
+            registry=operator_registry,
             architecture_timeout=guidance_budget.architecture,
             indexed_core_timeout=guidance_budget.indexed_core,
             indexed_constraints_timeout=guidance_budget.indexed_constraints,

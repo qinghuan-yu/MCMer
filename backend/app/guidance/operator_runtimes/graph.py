@@ -33,7 +33,7 @@ def shortest_path_max_flow(
 ) -> dict:
     del random_seed, work_dir
     metrics = np.asarray(inputs["metrics"], dtype=float)
-    endpoints = np.asarray(parameters.get("endpoints", []), dtype=float)
+    endpoints = np.asarray(parameters["endpoints"], dtype=float)
     if (
         metrics.ndim != 2
         or metrics.shape[1] != 2
@@ -46,9 +46,9 @@ def shortest_path_max_flow(
             "graph metrics and endpoints must be aligned finite matrices with two columns"
         )
     raw_edges = np.column_stack([endpoints, metrics])
-    node_count = parameters.get("node_count")
-    source = parameters.get("source")
-    sink = parameters.get("sink")
+    node_count = parameters["node_count"]
+    source = parameters["source"]
+    sink = parameters["sink"]
     if (
         not isinstance(node_count, int)
         or isinstance(node_count, bool)

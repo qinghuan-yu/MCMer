@@ -51,11 +51,10 @@ def valid_milp_output(*, outputs: dict) -> list[str]:
 
 def solve_milp(*, inputs: dict, parameters: dict, random_seed, work_dir: Path) -> dict:
     del random_seed, work_dir
-    if set(parameters) == {"compiled_model"} and isinstance(parameters["compiled_model"], dict):
+    if parameters["compiled_model"] is not None:
         model = parameters["compiled_model"]
     elif (
-        set(parameters) == {"indexed_model_template"}
-        and isinstance(parameters["indexed_model_template"], dict)
+        parameters["indexed_model_template"] is not None
     ):
         model = _materialize_indexed_model(
             parameters["indexed_model_template"],

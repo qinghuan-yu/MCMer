@@ -1,3 +1,4 @@
+from app.guidance.operator_parameters import EmptyParameters
 import asyncio
 import json
 
@@ -114,7 +115,7 @@ def _registry(
 
     registry = OperatorRegistry()
     registry.register(
-        OperatorDefinition(
+        OperatorDefinition(parameter_model=EmptyParameters,
             operator_id="statistics.typed_fit",
             version="1.0.0",
             inputs={
@@ -344,7 +345,7 @@ def test_compiler_rejects_operator_dependency_cycle_before_execution() -> None:
         outputs=["x"],
     ))
     registry = _registry()
-    registry.register(OperatorDefinition(
+    registry.register(OperatorDefinition(parameter_model=EmptyParameters,
         operator_id="transform.scalar_to_vector",
         version="1.0.0",
         inputs={

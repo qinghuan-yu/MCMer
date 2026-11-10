@@ -1,3 +1,6 @@
+from app.guidance.operator_parameters import EmptyParameters
+
+from app.guidance.operator_catalog import build_default_operator_registry
 import asyncio
 import json
 import time
@@ -330,7 +333,7 @@ def test_modeler_retries_operator_graph_architecture_without_variables(
     write_source_preflight(tmp_path, problem_spec)
     result = asyncio.run(LLMModeler(
         llm,
-        available_operator_ids=sorted({item["operator_id"] for item in subproblem["operators"]}),
+        registry=build_default_operator_registry(),
     ).model(
         problem_spec=problem_spec,
         task={},
@@ -522,7 +525,7 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
     write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
     asyncio.run(LLMModeler(
         llm,
-        available_operator_ids=["optimization.milp"],
+        registry=build_default_operator_registry(),
     ).revise(
         problem_spec=problem_spec,
         previous_model_ir=previous_model,
@@ -635,7 +638,7 @@ def test_modeler_rejects_milp_as_an_untyped_operator_graph() -> None:
         _validate_generation_draft_slice(
             draft,
             expected_id="problem1",
-            available_operator_ids=["optimization.milp"],
+            registry=build_default_operator_registry(),
             problem_spec=ProblemSpec(
                 task_summary="Estimate the model.",
                 subproblems=[_subproblem()],
@@ -777,18 +780,8 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
         )],
     )
     write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
-    model_ir = asyncio.run(LLMModeler(
-        StubLLM([architecture, core, constraints]),
-        available_operator_ids=["forecast.test", "optimization.milp"],
-    ).model(
-        problem_spec=problem_spec,
-        evidence_profile=evidence_profile,
-        task={},
-        work_dir=tmp_path,
-    ))
-
     registry = build_default_operator_registry()
-    registry.register(OperatorDefinition(
+    registry.register(OperatorDefinition(parameter_model=EmptyParameters,
         operator_id="forecast.test",
         version="1.0.0",
         inputs={},
@@ -796,6 +789,16 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
         deterministic=True,
         validator_id="forecast.test.validator.v1",
     ))
+    model_ir = asyncio.run(LLMModeler(
+        StubLLM([architecture, core, constraints]),
+        registry=registry,
+    ).model(
+        problem_spec=problem_spec,
+        evidence_profile=evidence_profile,
+        task={},
+        work_dir=tmp_path,
+    ))
+
     compilation = ModelIRCompiler(registry=registry).compile(model_ir)
 
     assert compilation.status == "compiled", compilation.diagnostics
@@ -898,10 +901,7 @@ def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
     write_source_preflight(tmp_path, problem_spec, profile={"evidence": []})
     asyncio.run(LLMModeler(
         llm,
-        available_operator_ids=[
-            "forecast.future_basis_rolling_origin",
-            "optimization.milp",
-        ],
+        registry=build_default_operator_registry(),
     ).model(
         problem_spec=problem_spec,
         evidence_profile={"evidence": []},
@@ -910,10 +910,41 @@ def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
     ))
 
     payload = json.loads(llm.calls[0]["history"][1]["content"])
-    assert payload["available_operator_ids"] == [
-        "forecast.future_basis_rolling_origin",
-        "optimization.milp",
-    ]
+    assert "available_operator_ids" not in payload
+    descriptions = payload.get("available_operators")
+    assert descriptions, "Generation must receive the runtime input/output/parameter contracts."
+    forecast = next(item for item in descriptions if item["operator_id"] == "forecast.future_basis_rolling_origin")
+    assert set(forecast["inputs"]) == {"time", "target"}
+    assert "future_time" in forecast["parameters_schema"]["properties"]
+
+
+@pytest.mark.parametrize("contract_state", ["matching", "missing", "changed"])
+def test_revision_reuse_requires_the_original_operator_contract(tmp_path, contract_state):
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.modeler import LLMModeler
+    from app.guidance.model_review_contracts import ModelIRReview
+    from app.guidance.recovery import RecoveryCheckpoint
+
+    registry = build_default_operator_registry()
+    spec = ProblemSpec(task_summary="Check the available methods.", subproblems=[_subproblem(objective="Estimate the result.")])
+    write_source_preflight(tmp_path, spec)
+    previous = asyncio.run(LLMModeler(StubLLM(_blocked_ir()), registry=registry).model(
+        problem_spec=spec, evidence_profile={"evidence": []}, task={}, work_dir=tmp_path,
+    ))
+    if contract_state == "missing":
+        RecoveryCheckpoint(tmp_path, "model_operator_contract", "current").discard()
+    elif contract_state == "changed":
+        registry.get("data.read_excel_table").version = "3.0.0"
+    review = ModelIRReview(model_id=previous.model_id, subproblem_reviews=[{
+        "subproblem_id": "problem1", "status": "blocked", "assumption_checks": [],
+        "required_revisions": [], "blocking_issues": ["No available method."],
+    }])
+    llm = StubLLM(_blocked_ir())
+    asyncio.run(LLMModeler(llm, registry=registry).revise(
+        problem_spec=spec, previous_model_ir=previous, review=review,
+        evidence_profile={"evidence": []}, task={}, work_dir=tmp_path,
+    ))
+    assert len(llm.calls) == (0 if contract_state == "matching" else 1)
 
 
 def test_modeler_generates_each_subproblem_separately_and_merges_contracts(tmp_path: Path) -> None:
@@ -1060,7 +1091,7 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
     write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
     result = asyncio.run(LLMModeler(
         llm,
-        available_operator_ids=["optimization.milp"],
+        registry=build_default_operator_registry(),
     ).model(
         problem_spec=problem_spec,
         evidence_profile=evidence_profile,
@@ -1319,7 +1350,7 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
     write_source_preflight(tmp_path, problem_spec, profile=evidence_profile)
     result = asyncio.run(LLMModeler(
         llm,
-        available_operator_ids=["optimization.milp"],
+        registry=build_default_operator_registry(),
     ).model(
         problem_spec=problem_spec,
         evidence_profile=evidence_profile,

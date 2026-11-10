@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.guidance.contracts import ProblemSpec
+from app.guidance.operators import OperatorRegistry
 from app.guidance.evidence_consistency import validate_model_evidence_consistency
 from app.guidance.fact_coverage import FactCoverage, FactScope
 from app.guidance.indexed_linear import (
@@ -74,7 +75,7 @@ def _validate_generation_draft_slice(
     draft: ModelIRGenerationDraft,
     *,
     expected_id: str,
-    available_operator_ids: list[str],
+    registry: OperatorRegistry,
     problem_spec: ProblemSpec,
 ) -> FactCoverage:
     identifiers = [item.subproblem_id for item in draft.subproblems]
@@ -94,7 +95,7 @@ def _validate_generation_draft_slice(
         coverage.require_complete()
     components = set(subproblem.execution_components)
     if "indexed_linear_model" in components:
-        if "optimization.milp" not in available_operator_ids:
+        if registry.get("optimization.milp") is None:
             raise ValueError("optimization.milp is not available")
     if any(
         item.operator_id == "optimization.milp"
@@ -105,10 +106,13 @@ def _validate_generation_draft_slice(
         )
     unsupported = sorted({
         item.operator_id for item in subproblem.operators
-        if item.operator_id not in set(available_operator_ids)
+        if registry.get(item.operator_id) is None
     })
     if unsupported:
         raise ValueError(f"operator_id is not available: {unsupported!r}")
+    for invocation in subproblem.operators:
+        definition = registry.get(invocation.operator_id)
+        definition.validate_call(inputs=invocation.inputs, parameters=invocation.parameters, outputs=invocation.outputs)
     operator_ids = {item.operator_id for item in subproblem.operators}
     if "indexed_linear_model" in components:
         operator_ids.add("optimization.milp")
@@ -219,7 +223,7 @@ def _validate_model_ir_slice(
     expected_id: str,
     problem_spec: ProblemSpec,
     evidence_profile: dict,
-    available_operator_ids: list[str],
+    registry: OperatorRegistry,
 ) -> None:
     identifiers = [item.subproblem_id for item in model_ir.subproblems]
     if identifiers != [expected_id]:
@@ -228,24 +232,23 @@ def _validate_model_ir_slice(
         )
     validate_model_evidence_consistency(problem_spec, model_ir, evidence_profile)
     validate_model_fact_coverage(problem_spec, model_ir)
-    if available_operator_ids:
-        supported = set(available_operator_ids)
-        unsupported = sorted({
-            operator_id
-            for subproblem in model_ir.subproblems
-            if isinstance(subproblem, SolvableModelIR)
-            for component in subproblem.execution_components
-            for operator_id in (
-                [operator.operator_id for operator in component.operators]
-                if isinstance(component, OperatorGraphExecutionComponent)
-                else ["optimization.milp"]
-                if isinstance(component, IndexedLinearExecutionComponent)
-                else []
-            )
-            if operator_id not in supported
-        })
-        if unsupported:
-            raise ValueError(f"operator_id is not available: {unsupported!r}")
+    supported = {item.operator_id for item in registry.definitions()}
+    unsupported = sorted({
+        operator_id
+        for subproblem in model_ir.subproblems
+        if isinstance(subproblem, SolvableModelIR)
+        for component in subproblem.execution_components
+        for operator_id in (
+            [operator.operator_id for operator in component.operators]
+            if isinstance(component, OperatorGraphExecutionComponent)
+            else ["optimization.milp"]
+            if isinstance(component, IndexedLinearExecutionComponent)
+            else []
+        )
+        if operator_id not in supported
+    })
+    if unsupported:
+        raise ValueError(f"operator_id is not available: {unsupported!r}")
     _validate_model_ir_semantics(model_ir)
 
 def _validate_model_ir_contract(

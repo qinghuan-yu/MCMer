@@ -47,7 +47,7 @@ def mcda_weighted_ranking(
     normalized = _mcda_normalize(matrix, criterion_types)
     method = parameters["weight_method"]
     if method == "provided":
-        weights = np.asarray(parameters.get("weights", []), dtype=float).reshape(-1)
+        weights = np.asarray(parameters["weights"], dtype=float).reshape(-1)
     elif method == "entropy":
         probabilities = normalized / np.sum(normalized, axis=0)
         positive = probabilities > 0.0
@@ -69,8 +69,8 @@ def mcda_weighted_ranking(
     scores = normalized @ weights
     ranking = _mcda_ranking(scores)
 
-    fraction = float(parameters.get("perturbation_fraction", 0.05))
-    stability_threshold = float(parameters.get("stability_threshold", 0.8))
+    fraction = float(parameters["perturbation_fraction"])
+    stability_threshold = float(parameters["stability_threshold"])
     if not 0.0 < fraction < 1.0:
         raise ValueError("perturbation_fraction must be between zero and one")
     if not 0.0 <= stability_threshold <= 1.0:

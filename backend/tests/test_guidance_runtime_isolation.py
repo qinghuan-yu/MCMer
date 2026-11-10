@@ -1,3 +1,4 @@
+from app.guidance.operator_parameters import EmptyParameters, OperatorParameters
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -28,7 +29,7 @@ def test_failed_subproblem_does_not_publish_orphan_figures(tmp_path):
     for name, executor in [
         ("figure", figure), ("fail", fail), ("success", lambda **kwargs: {"out": {"value": 42}}),
     ]:
-        registry.register(OperatorDefinition(
+        registry.register(OperatorDefinition(parameter_model=EmptyParameters,
             operator_id=name, version="1", inputs={},
             outputs={"out": OperatorPort(value_kind="artifact", unit="unspecified")},
             deterministic=True, validator_id=name + ".validator",
@@ -38,7 +39,7 @@ def test_failed_subproblem_does_not_publish_orphan_figures(tmp_path):
         ("fail", "failed_question", "fail", "failed_solution"),
         ("solve", payload["subproblems"][1]["subproblem_id"], "success", "solution"),
     ]
-    plan = ExecutionPlan.model_validate({"model_id": model.model_id, "graph": {"nodes": [{
+    plan = ExecutionPlan.model_validate({"model_id": model.model_id, "operator_contract_sha256": registry.contract_sha256(), "graph": {"nodes": [{
         "node_id": node, "subproblem_id": question, "operator_id": operator,
         "operator_version": "1", "ir_source": "probe", "inputs": {}, "outputs": [output],
         "parameters": {}, "validator_id": operator + ".validator", "dependencies": [],
@@ -55,6 +56,9 @@ def test_failed_subproblem_does_not_publish_orphan_figures(tmp_path):
 
 
 def test_failure_propagates_through_skipped_nodes_to_downstream_subproblem(tmp_path):
+    class ProbeParameters(OperatorParameters):
+        fail: bool = False
+
     fixture = Path(__file__).parent / "fixtures/model_ir/generic_multiperiod_inventory.json"
     payload = json.loads(fixture.read_text(encoding="utf-8"))
     failed = deepcopy(payload["subproblems"][0])
@@ -71,7 +75,7 @@ def test_failure_propagates_through_skipped_nodes_to_downstream_subproblem(tmp_p
         calls.append("downstream")
         return {"out": {"value": 42}}
 
-    registry.register(OperatorDefinition(
+    registry.register(OperatorDefinition(parameter_model=ProbeParameters,
         operator_id="probe", version="1", inputs={},
         outputs={"out": OperatorPort(value_kind="artifact", unit="unspecified")},
         deterministic=True, validator_id="probe.validator",
@@ -83,7 +87,7 @@ def test_failure_propagates_through_skipped_nodes_to_downstream_subproblem(tmp_p
         ("dependent", downstream, ["skipped"], {}, "dependent_value"),
         ("solve", downstream, [], {}, "solution"),
     ]
-    plan = ExecutionPlan.model_validate({"model_id": model.model_id, "graph": {"nodes": [{
+    plan = ExecutionPlan.model_validate({"model_id": model.model_id, "operator_contract_sha256": registry.contract_sha256(), "graph": {"nodes": [{
         "node_id": node, "subproblem_id": question, "operator_id": "probe",
         "operator_version": "1", "ir_source": "probe", "inputs": {}, "outputs": [output],
         "parameters": parameters, "validator_id": "probe.validator", "dependencies": dependencies,

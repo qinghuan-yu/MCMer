@@ -1,3 +1,4 @@
+from app.guidance.operator_catalog import build_default_operator_registry
 import json
 import re
 from types import SimpleNamespace
@@ -746,7 +747,7 @@ def test_modeler_slices_structured_facts_by_target_subproblem(tmp_path: Path) ->
     }])
     write_source_preflight(tmp_path, spec, interpretation=interpretation, adjudication=adjudication)
 
-    result = asyncio.run(LLMModeler(llm, available_operator_ids=["data.scalar_constant"]).model(
+    result = asyncio.run(LLMModeler(llm, registry=build_default_operator_registry()).model(
         problem_spec=spec,
         evidence_profile={"evidence": []},
         task={},

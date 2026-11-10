@@ -12,7 +12,7 @@ from scipy.optimize import minimize
 def _quadratic_components(spec: dict, dimension: int) -> tuple[np.ndarray, np.ndarray, float]:
     quadratic = np.asarray(spec["quadratic"], dtype=float)
     linear = np.asarray(spec["linear"], dtype=float).reshape(-1)
-    constant = float(spec.get("constant", 0.0))
+    constant = float(spec["constant"])
     if quadratic.shape != (dimension, dimension) or linear.shape != (dimension,):
         raise ValueError("quadratic expression dimensions do not match the decision vector")
     if not np.allclose(quadratic, quadratic.T, atol=1e-12):
@@ -103,11 +103,11 @@ def constrained_quadratic_multistart(
     if lower.shape != (dimension,) or upper.shape != (dimension,) or np.any(lower > upper):
         raise ValueError("bounds do not match the decision vector")
 
-    linear = parameters.get("linear_constraints", {})
-    a_ub = np.asarray(linear.get("a_ub", []), dtype=float).reshape(-1, dimension)
-    b_ub = np.asarray(linear.get("b_ub", []), dtype=float).reshape(-1)
-    a_eq = np.asarray(linear.get("a_eq", []), dtype=float).reshape(-1, dimension)
-    b_eq = np.asarray(linear.get("b_eq", []), dtype=float).reshape(-1)
+    linear = parameters["linear_constraints"]
+    a_ub = np.asarray(linear["a_ub"], dtype=float).reshape(-1, dimension)
+    b_ub = np.asarray(linear["b_ub"], dtype=float).reshape(-1)
+    a_eq = np.asarray(linear["a_eq"], dtype=float).reshape(-1, dimension)
+    b_eq = np.asarray(linear["b_eq"], dtype=float).reshape(-1)
     if len(a_ub) != len(b_ub) or len(a_eq) != len(b_eq):
         raise ValueError("linear constraint matrices and bounds have inconsistent rows")
 
@@ -116,10 +116,10 @@ def constrained_quadratic_multistart(
             _quadratic_components(spec, dimension),
             float(spec["upper_bound"]),
         )
-        for spec in parameters.get("quadratic_constraints", [])
+        for spec in parameters["quadratic_constraints"]
     ]
-    tolerance = float(parameters.get("constraint_tolerance", 1e-7))
-    multistart_tolerance = float(parameters.get("multistart_tolerance", 1e-6))
+    tolerance = float(parameters["constraint_tolerance"])
+    multistart_tolerance = float(parameters["multistart_tolerance"])
 
     def violation(value: np.ndarray) -> dict:
         return _constraint_violation(
@@ -194,7 +194,7 @@ def constrained_quadratic_multistart(
     problem = {
         "objective": parameters["objective"],
         "linear_constraints": linear,
-        "quadratic_constraints": parameters.get("quadratic_constraints", []),
+        "quadratic_constraints": parameters["quadratic_constraints"],
         "bounds": bounds_spec,
         "constraint_tolerance": tolerance,
     }
@@ -218,7 +218,7 @@ def constrained_quadratic_multistart(
         },
         "sensitivity": {
             "max_relative_change": solution_spread,
-            "threshold": float(parameters.get("sensitivity_threshold", 1e-4)),
+            "threshold": float(parameters["sensitivity_threshold"]),
         },
         "extreme_inputs": {
             "finite": bool(np.all(np.isfinite(solution))),

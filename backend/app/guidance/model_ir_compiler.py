@@ -63,6 +63,7 @@ class OperatorExecutionGraph(CompilerContract):
 class ExecutionPlan(CompilerContract):
     schema_version: Literal["1.0"] = "1.0"
     model_id: str
+    operator_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     graph: OperatorExecutionGraph
 
 
@@ -134,6 +135,7 @@ class ModelIRCompiler:
             blocked_subproblems=blocked,
             execution_plan=ExecutionPlan(
                 model_id=model_ir.model_id,
+                operator_contract_sha256=self.registry.contract_sha256(),
                 graph=OperatorExecutionGraph(nodes=nodes),
             ),
         )
@@ -397,25 +399,40 @@ class ModelIRCompiler:
                 definition = definitions.get(node_id)
                 if definition is None:
                     continue
+                if node_id == indexed_node_id and compiled_indexed_model is None and indexed_model_template is None:
+                    # 展开失败已有精确数学诊断，不对未生成的系统参数再报必填错误。
+                    continue
+                inputs = (
+                    {**invocation.inputs, **runtime_parameter_inputs}
+                    if node_id == indexed_node_id else invocation.inputs
+                )
+                parameters = (
+                    {"compiled_model": compiled_indexed_model}
+                    if node_id == indexed_node_id and compiled_indexed_model is not None
+                    else {"indexed_model_template": indexed_model_template}
+                    if node_id == indexed_node_id and indexed_model_template is not None
+                    else invocation.parameters
+                )
+                try:
+                    parameters = definition.validate_call(
+                        inputs=inputs, parameters=parameters, outputs=invocation.outputs,
+                    )
+                except ValueError as exc:
+                    diagnostics.append(CompilationDiagnostic(
+                        code="operator_call_contract_invalid",
+                        subproblem_id=subproblem.subproblem_id,
+                        node_id=node_id, message=str(exc),
+                    ))
+                    continue
                 compiled_nodes.append(ExecutionNode(
                     node_id=node_id,
                     subproblem_id=subproblem.subproblem_id,
                     ir_source=ir_sources[node_id],
                     operator_id=definition.operator_id,
                     operator_version=definition.version,
-                    inputs=(
-                        {**invocation.inputs, **runtime_parameter_inputs}
-                        if node_id == indexed_node_id
-                        else invocation.inputs
-                    ),
+                    inputs=inputs,
                     outputs=invocation.outputs,
-                    parameters=(
-                        {"compiled_model": compiled_indexed_model}
-                        if node_id == indexed_node_id and compiled_indexed_model is not None
-                        else {"indexed_model_template": indexed_model_template}
-                        if node_id == indexed_node_id and indexed_model_template is not None
-                        else invocation.parameters
-                    ),
+                    parameters=parameters,
                     random_seed=invocation.random_seed,
                     validator_id=definition.validator_id,
                     dependencies=sorted(_node_dependencies(

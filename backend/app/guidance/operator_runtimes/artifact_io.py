@@ -61,10 +61,8 @@ def _path_value(artifact: object, path: str) -> object:
 
 def extract_mapping(*, inputs: dict, parameters: dict, random_seed, work_dir: Path) -> dict:
     del random_seed, work_dir
-    fields = parameters.get("fields")
+    fields = parameters["fields"]
     if fields is not None:
-        if not isinstance(fields, dict) or not fields:
-            raise ValueError("mapping projection fields must be a non-empty mapping")
         value = {
             str(name): _path_value(inputs["artifact"], str(path))
             for name, path in fields.items()
@@ -85,9 +83,9 @@ def extract_matrix(*, inputs: dict, parameters: dict, random_seed, work_dir: Pat
 def extract_scalar(*, inputs: dict, parameters: dict, random_seed, work_dir: Path) -> dict:
     del random_seed, work_dir
     value = _path_value(inputs["artifact"], parameters["path"])
-    indices = parameters.get("indices")
+    indices = parameters["indices"]
     if indices is not None:
-        if not isinstance(value, list) or not isinstance(indices, list) or not indices:
+        if not isinstance(value, list):
             raise ValueError("indexed scalar projection requires a non-empty list")
         selected = []
         for index in indices:
@@ -95,11 +93,9 @@ def extract_scalar(*, inputs: dict, parameters: dict, random_seed, work_dir: Pat
                 raise ValueError("scalar projection index is out of bounds")
             selected.append(value[index])
         value = selected
-    reducer = parameters.get("reducer")
+    reducer = parameters["reducer"]
     if reducer == "sum":
         value = sum(value)
-    elif reducer is not None:
-        raise ValueError(f"unsupported scalar reducer: {reducer}")
     if not isinstance(value, (int, float, str, bool)):
         raise ValueError("selected artifact value is not scalar")
     return {"value": value}
@@ -109,10 +105,8 @@ def extract_vector(*, inputs: dict, parameters: dict, random_seed, work_dir: Pat
     value = _path_value(inputs["artifact"], parameters["path"])
     if not isinstance(value, list):
         raise ValueError("selected artifact value is not a vector")
-    indices = parameters.get("indices")
+    indices = parameters["indices"]
     if indices is not None:
-        if not isinstance(indices, list) or not indices:
-            raise ValueError("vector projection indices must be a non-empty list")
         selected: list[Any] = []
         for index in indices:
             if not isinstance(index, int) or isinstance(index, bool) or index < 0 or index >= len(value):
@@ -144,22 +138,20 @@ def read_excel_table(*, inputs: dict, parameters: dict, random_seed, work_dir: P
     del random_seed
     frame = pd.read_excel(
         workspace_path(inputs["source"], work_dir),
-        sheet_name=parameters.get("sheet", 0),
+        sheet_name=parameters["sheet"],
     )
-    row_limit = parameters.get("row_limit")
+    row_limit = parameters["row_limit"]
     if row_limit is not None:
-        if not isinstance(row_limit, int) or isinstance(row_limit, bool) or row_limit <= 0:
-            raise ValueError("row_limit must be a positive integer")
         frame = frame.iloc[:row_limit].copy()
-    columns = parameters.get("columns")
+    columns = parameters["columns"]
     if columns:
         frame = frame.loc[:, columns]
-    frame = frame.rename(columns=parameters.get("rename", {}))
-    for column in parameters.get("forward_fill", []):
+    frame = frame.rename(columns=parameters["rename"])
+    for column in parameters["forward_fill"]:
         frame[column] = frame[column].ffill()
     table = {str(column): frame[column].tolist() for column in frame.columns}
-    matrix_columns = parameters.get("matrix_columns")
+    matrix_columns = parameters["matrix_columns"]
     if matrix_columns:
-        matrix_name = str(parameters.get("matrix_name", "matrix"))
+        matrix_name = str(parameters["matrix_name"])
         table[matrix_name] = frame.loc[:, matrix_columns].to_numpy(dtype=float).tolist()
     return {"table": table}

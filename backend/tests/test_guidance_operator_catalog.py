@@ -18,7 +18,7 @@ def _runtime(operator_id: str):
 
 def _execute(operator_id: str, *, inputs: dict, parameters: dict, work_dir: Path) -> dict:
     registered = _runtime(operator_id)
-    outputs = registered.executor(
+    outputs = registered.invoke(
         inputs=inputs,
         parameters=parameters,
         random_seed=None,
@@ -29,9 +29,9 @@ def _execute(operator_id: str, *, inputs: dict, parameters: dict, work_dir: Path
 
 
 def test_catalog_exposes_only_problem_independent_operator_ids() -> None:
-    from app.guidance.operator_catalog import DEFAULT_OPERATOR_IDS
+    from app.guidance.operator_catalog import build_default_operator_registry
 
-    assert DEFAULT_OPERATOR_IDS == {
+    assert {item.operator_id for item in build_default_operator_registry().definitions()} == {
         "artifact.extract_mapping",
         "artifact.extract_matrix",
         "artifact.extract_scalar",
@@ -53,7 +53,7 @@ def test_catalog_exposes_only_problem_independent_operator_ids() -> None:
         "regression.basis_least_squares",
         "regression.zero_intercept_grouped",
     }
-    assert not any("traffic" in item or "anchor" in item or "wuyi" in item for item in DEFAULT_OPERATOR_IDS)
+    assert not any("traffic" in item or "anchor" in item or "wuyi" in item for item in {item.operator_id for item in build_default_operator_registry().definitions()})
 
 
 def _future_forecast_parameters() -> dict:
@@ -90,7 +90,7 @@ def test_future_forecast_rejects_missing_indices_unordered_time_and_insufficient
             parameters[key] = value
 
     with pytest.raises(ValueError, match=message):
-        registered.executor(
+        registered.invoke(
             inputs={"time": time, "target": target},
             parameters=parameters,
             random_seed=None,
@@ -196,7 +196,7 @@ def test_milp_rejects_nonfinite_coefficients_and_invalid_integrality(
     compiled[field] = value
 
     with pytest.raises(ValueError, match=message):
-        registered.executor(
+        registered.invoke(
             inputs={},
             parameters={"compiled_model": compiled},
             random_seed=None,
@@ -210,7 +210,7 @@ def test_milp_rejects_infeasible_model(tmp_path: Path) -> None:
     compiled["upper_bounds"] = [1.0]
 
     with pytest.raises(ValueError, match="infeasible"):
-        registered.executor(
+        registered.invoke(
             inputs={},
             parameters={"compiled_model": compiled},
             random_seed=None,

@@ -91,7 +91,7 @@ def test_joint_formulation_charges_each_defined_training_participant(tmp_path, o
     }])
     write_source_preflight(tmp_path, spec, profile=evidence)
     llm = StageLLM()
-    model = asyncio.run(LLMModeler(llm, available_operator_ids=["optimization.milp"]).model(
+    model = asyncio.run(LLMModeler(llm, registry=build_default_operator_registry()).model(
         problem_spec=spec, evidence_profile=evidence, task={}, work_dir=tmp_path,
     ))
     assert model.subproblems[0].execution_status == "solvable", model.subproblems[0]

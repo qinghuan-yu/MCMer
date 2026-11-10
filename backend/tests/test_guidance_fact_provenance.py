@@ -1,3 +1,4 @@
+from app.guidance.operator_catalog import build_default_operator_registry
 import asyncio
 from copy import deepcopy
 import json
@@ -435,7 +436,7 @@ def test_modeler_reuses_a_fact_in_architecture_parameters_and_constraints(tmp_pa
     write_source_preflight(tmp_path, spec)
 
     model = asyncio.run(LLMModeler(
-        llm, available_operator_ids=["data.scalar_constant", "optimization.milp"],
+        llm, registry=build_default_operator_registry(),
     ).model(problem_spec=spec, task={}, work_dir=tmp_path))
 
     subproblem = model.subproblems[0]
@@ -489,7 +490,7 @@ def test_modeler_rejects_unknown_and_cross_scope_facts_at_every_stage(tmp_path, 
     write_source_preflight(tmp_path, spec)
 
     result = asyncio.run(LLMModeler(
-        llm, available_operator_ids=["data.scalar_constant", "optimization.milp"],
+        llm, registry=build_default_operator_registry(),
     ).model(problem_spec=spec, task={}, work_dir=tmp_path))
 
     assert result.subproblems[0].execution_status == "blocked"
@@ -541,7 +542,7 @@ def test_final_coverage_uses_union_of_all_stages(tmp_path, cover_at):
 
     result = asyncio.run(LLMModeler(
         _StageLLM(architecture, core, constraints),
-        available_operator_ids=["data.scalar_constant", "optimization.milp"],
+        registry=build_default_operator_registry(),
     ).model(problem_spec=spec, evidence_profile=evidence, task={}, work_dir=tmp_path))
 
     if cover_at is None:
@@ -571,7 +572,7 @@ def test_rejected_core_attempt_cannot_satisfy_final_coverage(tmp_path):
     write_source_preflight(tmp_path, spec)
 
     result = asyncio.run(LLMModeler(
-        llm, available_operator_ids=["data.scalar_constant", "optimization.milp"],
+        llm, registry=build_default_operator_registry(),
     ).model(problem_spec=spec, task={}, work_dir=tmp_path))
 
     assert result.subproblems[0].execution_status == "blocked"

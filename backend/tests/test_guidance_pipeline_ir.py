@@ -501,7 +501,7 @@ def test_modeling_failure_contracts_bound_objectives_for_brief_problem_specs(
 
 def test_default_pipeline_uses_seven_stages_timeout_budget_and_default_operators() -> None:
     from app.core.workflow_budget import resolve_workflow_budget
-    from app.guidance.operator_catalog import DEFAULT_OPERATOR_IDS
+    from app.guidance.operator_catalog import build_default_operator_registry
     from app.guidance.workflow import build_default_guidance_pipeline
 
     pipeline = build_default_guidance_pipeline("standard")
@@ -538,7 +538,7 @@ def test_default_pipeline_uses_seven_stages_timeout_budget_and_default_operators
     )
     calculation = pipeline._stages["calculation"]
     assert calculation.compiler.registry is calculation.executor.registry
-    assert all(calculation.compiler.registry.get(item) is not None for item in DEFAULT_OPERATOR_IDS)
+    assert all(calculation.compiler.registry.get(item) is not None for item in {item.operator_id for item in build_default_operator_registry().definitions()})
 
 
 def test_pipeline_progress_describes_operator_graph_not_generated_program() -> None:

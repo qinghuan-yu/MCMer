@@ -222,7 +222,7 @@ def future_basis_rolling_origin(
 
     denominator = np.maximum(np.abs(future_predictions), 1e-10)
     sensitivity = float(np.max(np.abs(reduced_predictions - future_predictions) / denominator))
-    sensitivity_threshold = float(parameters.get("sensitivity_threshold", 0.2))
+    sensitivity_threshold = float(parameters["sensitivity_threshold"])
 
     return {"forecast": {
         "history_time": time.tolist(),
@@ -305,8 +305,8 @@ def robust_regularized_time_split(
     alpha = float(parameters["alpha"])
     huber_delta = float(parameters["huber_delta"])
     interval_level = float(parameters["interval_level"])
-    max_iterations = int(parameters.get("max_iterations", 100))
-    tolerance = float(parameters.get("tolerance", 1e-8))
+    max_iterations = int(parameters["max_iterations"])
+    tolerance = float(parameters["tolerance"])
     if alpha < 0 or huber_delta <= 0 or not 0 < interval_level < 1:
         raise ValueError("invalid regularization, Huber, or interval parameters")
 
@@ -395,7 +395,7 @@ def robust_regularized_time_split(
         },
         "sensitivity": {
             "max_relative_change": sensitivity,
-            "threshold": float(parameters.get("sensitivity_threshold", 0.1)),
+            "threshold": float(parameters["sensitivity_threshold"]),
         },
         "extreme_inputs": {
             "finite": bool(np.all(np.isfinite(predictions))),

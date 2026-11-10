@@ -11,7 +11,7 @@ def _future_forecast_evidence() -> dict:
     time = np.arange(32, dtype=float)
     target = 10.0 + 0.5 * time + 3.0 * np.sin(2.0 * np.pi * time / 4.0)
     runtime = build_default_operator_registry().runtime("forecast.future_basis_rolling_origin")
-    return runtime.executor(
+    return runtime.invoke(
         inputs={"time": time.tolist(), "target": target.tolist()},
         parameters={
             "future_time": [32.0, 33.0, 34.0],
@@ -453,7 +453,7 @@ def test_future_forecast_rejects_sensitivity_above_declared_threshold() -> None:
     target = 10.0 + 0.5 * time + 3.0 * np.sin(2.0 * np.pi * time / 4.0)
     target[-1] += 10.0
     runtime = build_default_operator_registry().runtime("forecast.future_basis_rolling_origin")
-    evidence = runtime.executor(
+    evidence = runtime.invoke(
         inputs={"time": time.tolist(), "target": target.tolist()},
         parameters={
             "future_time": [32.0, 33.0, 34.0],

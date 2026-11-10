@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.guidance.operator_parameters import EmptyParameters, MilpParameters
+
 from copy import deepcopy
 from pathlib import Path
 
@@ -15,7 +17,7 @@ from app.guidance.operators import OperatorDefinition, OperatorPort, OperatorReg
 
 def _registry() -> OperatorRegistry:
     registry = OperatorRegistry()
-    registry.register(OperatorDefinition(
+    registry.register(OperatorDefinition(parameter_model=MilpParameters,
         operator_id="optimization.milp",
         version="1.0.0",
         inputs={},
@@ -220,7 +222,7 @@ def _compile_runtime_demand_plan():
     }
     _add_forecast_component(subproblem)
     registry = build_default_operator_registry()
-    registry.register(OperatorDefinition(
+    registry.register(OperatorDefinition(parameter_model=EmptyParameters,
         operator_id="forecast.test",
         version="1.0.0",
         inputs={},
@@ -305,7 +307,7 @@ def test_indexed_linear_ir_compiles_runtime_parameter_dependency_before_milp() -
     })
 
     registry = _registry()
-    registry.register(OperatorDefinition(
+    registry.register(OperatorDefinition(parameter_model=EmptyParameters,
         operator_id="forecast.test",
         version="1.0.0",
         inputs={},
@@ -348,7 +350,7 @@ def test_runtime_parameter_model_gets_index_diagnostics_before_execution() -> No
         "binder": "unknown_period",
     }]
     registry = _registry()
-    registry.register(OperatorDefinition(
+    registry.register(OperatorDefinition(parameter_model=EmptyParameters,
         operator_id="forecast.test",
         version="1.0.0",
         inputs={},
@@ -396,7 +398,7 @@ def test_indexed_linear_ir_rejects_runtime_parameter_dependency_cycle() -> None:
     _add_forecast_component(subproblem, inputs={"solution": "solution"})
 
     registry = _registry()
-    registry.register(OperatorDefinition(
+    registry.register(OperatorDefinition(parameter_model=EmptyParameters,
         operator_id="forecast.test",
         version="1.0.0",
         inputs={"solution": OperatorPort(value_kind="artifact", unit="unspecified")},
@@ -418,7 +420,7 @@ def test_milp_materializes_runtime_parameter_from_upstream_artifact(
     registry, solve = _compile_runtime_demand_plan()
     runtime = registry.runtime("optimization.milp")
 
-    outputs = runtime.executor(
+    outputs = runtime.invoke(
         inputs={"demand": {"future_predictions": [4.0, 5.0]}},
         parameters=solve.parameters,
         random_seed=None,
@@ -458,7 +460,7 @@ def test_milp_rejects_invalid_runtime_parameter_before_solver(
     runtime = registry.runtime("optimization.milp")
 
     with pytest.raises(ValueError, match=message):
-        runtime.executor(
+        runtime.invoke(
             inputs={"demand": artifact},
             parameters=solve.parameters,
             random_seed=None,
@@ -492,7 +494,7 @@ def test_generic_multiperiod_inventory_fixture_closes_delay_state_and_tiered_cos
     assert compilation.status == "compiled", compilation.diagnostics
     node = compilation.execution_plan.graph.nodes[0]
     runtime = operator_registry.runtime("optimization.milp")
-    outputs = runtime.executor(
+    outputs = runtime.invoke(
         inputs={},
         parameters=node.parameters,
         random_seed=None,

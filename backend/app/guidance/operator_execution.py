@@ -91,6 +91,8 @@ class OperatorGraphExecutor:
                 failures_by_node[node.node_id] = upstream_failure
                 continue
             try:
+                if execution_plan.operator_contract_sha256 != self.registry.contract_sha256():
+                    raise ValueError("operator contract digest mismatch; recompile the Model IR")
                 registered = self.registry.runtime(node.operator_id)
                 if registered is None or registered.executor is None or registered.validator is None:
                     raise RuntimeError(f"operator runtime is not registered: {node.operator_id}")
@@ -99,11 +101,17 @@ class OperatorGraphExecutor:
                     raise RuntimeError(f"operator version mismatch for node {node.node_id}")
                 if definition.validator_id != node.validator_id:
                     raise RuntimeError(f"operator validator mismatch for node {node.node_id}")
+                parameters = definition.validate_call(
+                    inputs=node.inputs, parameters=node.parameters, outputs=node.outputs,
+                )
+                if not definition.deterministic and node.random_seed is None:
+                    raise ValueError("nondeterministic operator requires an explicit random seed")
                 resolved_inputs = {
                     name: _resolve_input(reference, values)
                     for name, reference in node.inputs.items()
                 }
                 context = {
+                    "operator_contract_sha256": execution_plan.operator_contract_sha256,
                     "node": node.model_dump(mode="json"),
                     "registration": definition.model_dump(mode="json"), "inputs": resolved_inputs,
                     "dependencies": {dep: node_fingerprints[dep] for dep in node.dependencies},
@@ -112,27 +120,22 @@ class OperatorGraphExecutor:
                 }
                 checkpoint = RecoveryCheckpoint(work_dir, "operators", node.node_id)
                 raw_outputs = checkpoint.load(context)
-                if raw_outputs is not None and registered.validator(outputs=raw_outputs):
-                    raw_outputs = None
+                if raw_outputs is not None:
+                    try:
+                        registered.validate_outputs(raw_outputs)
+                    except ValueError:
+                        raw_outputs = None
                 was_reused = raw_outputs is not None
                 if raw_outputs is None:
                     checkpoint.discard()
-                    raw_outputs = registered.executor(
+                    raw_outputs = registered.invoke(
                         inputs=resolved_inputs,
-                        parameters=node.parameters,
+                        parameters=parameters,
                         random_seed=node.random_seed,
                         work_dir=work_dir,
                     )
-                if not isinstance(raw_outputs, dict):
-                    raise RuntimeError(f"operator returned a non-mapping result: {node.node_id}")
-                issues = registered.validator(outputs=raw_outputs)
-                if issues:
-                    raise RuntimeError(
-                        f"operator validation failed for {node.node_id}: " + "; ".join(issues)
-                    )
+                registered.validate_outputs(raw_outputs)
                 output_ports = list(definition.outputs)
-                if set(raw_outputs) != set(output_ports):
-                    raise RuntimeError(f"operator output ports do not match registration: {node.node_id}")
                 checkpoint.save(context, raw_outputs, files=generated_figure_paths(raw_outputs))
                 node_fingerprints[node.node_id] = canonical_digest({"context": context, "outputs": raw_outputs})
                 if was_reused:

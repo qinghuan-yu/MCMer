@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.guidance.operator_catalog import build_default_operator_registry
+
 import importlib
 import asyncio
 from pathlib import Path
@@ -96,7 +98,7 @@ def test_indexed_core_request_requires_exact_static_parameter_source(monkeypatch
             subproblem={"id": "problem1"},
             slice_spec={"locked_facts": [], "uncertainties": []},
             evidence_profile={"evidence": []},
-            available_operator_ids=["optimization.milp"],
+            registry=build_default_operator_registry(),
             request_name="test_source_contract",
             artifact_dir=Path("."),
             previous_model=None,

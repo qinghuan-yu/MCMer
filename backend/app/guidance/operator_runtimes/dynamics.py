@@ -55,7 +55,7 @@ def affine_ode_rk4(
     intervals = np.diff(time)
     midpoint_states = 0.5 * (observed[:-1] + observed[1:])
     derivatives = np.diff(observed, axis=0) / intervals[:, None]
-    include_offset = parameters.get("include_offset", True)
+    include_offset = parameters["include_offset"]
     if not isinstance(include_offset, bool):
         raise ValueError("include_offset must be a boolean")
     design = (
@@ -67,7 +67,7 @@ def affine_ode_rk4(
     if rank < min(design.shape):
         raise ValueError("affine ODE parameter design is rank deficient")
     condition_number = float(np.linalg.cond(design))
-    max_condition_number = float(parameters.get("max_condition_number", 1e10))
+    max_condition_number = float(parameters["max_condition_number"])
     if not np.isfinite(max_condition_number) or max_condition_number <= 1.0:
         raise ValueError("max_condition_number must be finite and greater than one")
     if not np.isfinite(condition_number) or condition_number > max_condition_number:
@@ -78,7 +78,7 @@ def affine_ode_rk4(
     dynamics_matrix = coefficients[:-1].T if include_offset else coefficients.T
     offset = coefficients[-1] if include_offset else np.zeros(dimension, dtype=float)
 
-    substeps = parameters.get("integration_substeps", 1)
+    substeps = parameters["integration_substeps"]
     if not isinstance(substeps, int) or isinstance(substeps, bool) or substeps < 1:
         raise ValueError("integration_substeps must be a positive integer")
     simulated = _rk4_affine_path(
@@ -100,8 +100,8 @@ def affine_ode_rk4(
     baseline = np.repeat(observed[[0]], len(observed), axis=0)
     baseline_residuals = observed - baseline
 
-    lower = np.asarray(parameters.get("lower_bounds", []), dtype=float)
-    upper = np.asarray(parameters.get("upper_bounds", []), dtype=float)
+    lower = np.asarray(parameters["lower_bounds"], dtype=float)
+    upper = np.asarray(parameters["upper_bounds"], dtype=float)
     if (
         lower.shape != (dimension,)
         or upper.shape != (dimension,)
@@ -119,11 +119,11 @@ def affine_ode_rk4(
         np.max(simulated - upper, initial=0.0),
         0.0,
     ))
-    boundary_tolerance = float(parameters.get("boundary_tolerance", 1e-8))
+    boundary_tolerance = float(parameters["boundary_tolerance"])
 
-    raw_vectors = parameters.get("conservation_vectors", [])
+    raw_vectors = parameters["conservation_vectors"]
     conservation_vectors = np.asarray(raw_vectors, dtype=float)
-    conservation_tolerance = float(parameters.get("conservation_tolerance", 1e-8))
+    conservation_tolerance = float(parameters["conservation_tolerance"])
     if raw_vectors:
         conservation_vectors = conservation_vectors.reshape(-1, dimension)
         observed_totals = observed @ conservation_vectors.T
@@ -142,7 +142,7 @@ def affine_ode_rk4(
 
     scale = max(float(np.max(np.abs(refined))), np.finfo(float).eps)
     step_change = float(np.max(np.abs(simulated - refined)) / scale)
-    step_threshold = float(parameters.get("step_sensitivity_threshold", 1e-3))
+    step_threshold = float(parameters["step_sensitivity_threshold"])
     if boundary_tolerance < 0.0 or conservation_tolerance < 0.0 or step_threshold < 0.0:
         raise ValueError("ODE validation tolerances must be non-negative")
     constraints_satisfied = (

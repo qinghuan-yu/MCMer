@@ -11,6 +11,7 @@ from typing import Any
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contracts import ProblemSpec
+from app.guidance.operators import OperatorRegistry
 from app.guidance.failure_contracts import (
     bounded_failure_summary,
     bounded_subproblem_objective,
@@ -28,7 +29,7 @@ from app.guidance.modeling_context import (
     MODEL_IR_ARCHITECTURE_CONTRACT,
     _compact_problem_spec_for_modeling,
 )
-from app.guidance.recovery import canonical_digest, load_source_preflight
+from app.guidance.recovery import RecoveryCheckpoint, canonical_digest, load_source_preflight
 from app.guidance.source_resolution import validate_source_preflight
 
 
@@ -37,7 +38,7 @@ class LLMModeler:
         self,
         llm: LLM,
         *,
-        available_operator_ids: list[str] | None = None,
+        registry: OperatorRegistry | None = None,
         architecture_timeout: int | float | None = None,
         indexed_core_timeout: int | float | None = None,
         indexed_constraints_timeout: int | float | None = None,
@@ -46,7 +47,8 @@ class LLMModeler:
         indexed_constraints_token_budget: ContractTokenBudget | None = None,
     ) -> None:
         self.llm = llm
-        self.available_operator_ids = sorted(set(available_operator_ids or []))
+        from app.guidance.operator_catalog import build_default_operator_registry
+        self.registry = registry if registry is not None else build_default_operator_registry()
         self.architecture_timeout = architecture_timeout
         self.indexed_core_timeout = indexed_core_timeout
         self.indexed_constraints_timeout = indexed_constraints_timeout
@@ -67,7 +69,7 @@ class LLMModeler:
             stage_duty="你是数学建模 ModelIR 架构构建器。依据 problem_spec 构建新的模型架构。",
             problem_spec=problem_spec,
             evidence_profile=evidence_profile or {"evidence": []},
-            available_operator_ids=self.available_operator_ids,
+            registry=self.registry,
             agent_name="GuidanceModeler",
             artifact_dir=work_dir,
             architecture_timeout=self.architecture_timeout,
@@ -101,7 +103,7 @@ class LLMModeler:
             ),
             problem_spec=problem_spec,
             evidence_profile=evidence_profile or {"evidence": []},
-            available_operator_ids=self.available_operator_ids,
+            registry=self.registry,
             agent_name="GuidanceModelReviser",
             artifact_dir=work_dir,
             previous_model_ir=previous_model_ir,
@@ -120,7 +122,7 @@ async def _request_subproblem_models(
     stage_duty: str,
     problem_spec: ProblemSpec,
     evidence_profile: dict,
-    available_operator_ids: list[str],
+    registry: OperatorRegistry,
     agent_name: str,
     artifact_dir: Path,
     previous_model_ir: ModelIR | None = None,
@@ -163,6 +165,12 @@ async def _request_subproblem_models(
         identifier for identifier, decision in decisions.items()
         if decision.status == "revision_required" and decision.required_revisions
     }
+    contract_checkpoint = RecoveryCheckpoint(artifact_dir, "model_operator_contract", "current")
+    if previous_model_ir is not None and contract_checkpoint.load({
+        "model_ir": previous_model_ir.model_dump(mode="json"),
+        "operator_contract_sha256": registry.contract_sha256(),
+    }) is None:
+        revision_targets.update(previous_by_id)
     try:
         source_preflight = load_source_preflight(artifact_dir, problem_spec)
         catalog_path = artifact_dir / "input_catalog.json"
@@ -261,7 +269,7 @@ async def _request_subproblem_models(
                 subproblem=subproblem,
                 slice_spec=slice_spec,
                 evidence_profile=evidence_profile,
-                available_operator_ids=available_operator_ids,
+                registry=registry,
                 request_name=request_name,
                 artifact_dir=artifact_dir,
                 previous_model=previous_by_id.get(target_id),
@@ -294,6 +302,10 @@ async def _request_subproblem_models(
         subproblems=[item.subproblems[0] for item in generated],
     )
     _validate_model_ir_contract(problem_spec, model_ir, evidence_profile)
+    contract_checkpoint.save({
+        "model_ir": model_ir.model_dump(mode="json"),
+        "operator_contract_sha256": registry.contract_sha256(),
+    }, {"validated": True})
     return model_ir
 
 
