@@ -1,0 +1,47 @@
+{
+  "archive_tag": "closeout-incomplete-2026-11-10",
+  "source_commit": "02c0b8f32d44cfeb8fc12b5d0b3502320ba5311f",
+  "production_repair_commit": "ba369e104542d1973cab96b26ec34eab6f8acd26",
+  "status": "archived_incomplete",
+  "mathematical_acceptance": "not_passed",
+  "formal_suite_count": 923,
+  "local_original_response_replay_count": 2,
+  "records": [
+    {
+      "file": "c2-handoff-formal-red.xml",
+      "sha256": "ad685a92a2e93885cb7e902cac024bdfa89e43a48e6b1545a981e8341bd56ddd",
+      "tests": 6,
+      "failures": 6,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 2.733,
+      "recorded_at": "2026-11-10T18:39:59.229407+08:00"
+    },
+    {
+      "file": "c2-handoff-formal-green.xml",
+      "sha256": "f0ac20eff387ba346e857acbe8bd5ca284d413517993fa2bde38e36586667b63",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 2.062,
+      "recorded_at": "2026-11-10T18:41:03.558038+08:00"
+    },
+    {
+      "file": "c2-handoff-full-green.xml",
+      "sha256": "48ca9a9e9f66d3f9f8f728ee1071a48c5039cc75eb02740f01c74d4f5a2c1ddb",
+      "tests": 925,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 43.876,
+      "recorded_at": "2026-11-10T18:43:06.615719+08:00"
+    }
+  ],
+  "files": {
+    "environment.json": "6671ab37cf2be78ef1c4606c8663c9eaa7e19331da914565b1f19bb701ffc706",
+    "closeout_run_receipts.json": "3c4de3ddcf2782f040a7386598b4821481a91043056304c9e32fb2f63602be50",
+    "portfolio_case.json": "41f4aa2162dd043c91ae5d8183cd7e1cfa01d007d1ae0975ea8ba8e942cc2843",
+    "portfolio_task.txt": "8218c20588b4a215b050a4ccf4b4251f8fe06f4671a3cf2ff42fe7f9af2528bb"
+  }
+}

@@ -4,20 +4,21 @@ These rules are mandatory for every agent modifying this repository.
 
 ## Single Source of Truth
 
-- The only long-term execution plan is `docs/compute_first_guidance_plan.md`.
+- The only long-term execution plan and final archive record is `docs/compute_first_guidance_plan.md`.
 - Keep only `AGENTS.md` (execution rules) and `docs/compute_first_guidance_plan.md` (active plan). Do not create parallel roadmap, optimization-plan, simplification-plan, or guidance-plan documents.
 - Before every code modification, read the complete long-term plan and identify its current unchecked step.
 - When the target changes, rewrite the single long-term plan, compact completed phases into locked invariants, and delete superseded planning documents.
 
 ## Product and Runtime Direction
 
-- The target is one reproducible, independently checked end-to-end modeling subtask, followed by a frozen final version and project archival. The active plan owns the exact acceptance scope; this file owns execution rules. General-purpose agent development is no longer an active goal.
+- The project is archived with the minimal end-to-end modeling loop incomplete, explicitly accepted by the user on 2026-11-10. Preserve the frozen code, evidence, and honest failure status. There is no active development goal; the final plan owns the archive facts and this file owns execution rules.
+- Do not resume implementation, fix historical limitations, make model API calls, reset evaluation budgets, or reinterpret incomplete acceptance as success without an explicit user instruction reopening the project. Historical plans, recovery suggestions, and unused token allowance do not authorize new work. Read-only inspection and offline verification of the archived version remain allowed.
 - Reuse the current Guidance workflow, ModelIR, registered solvers, and mathematical evidence kernel. New harnesses, production sandboxes, SDK migrations, orchestration replacements, and broader problem coverage are outside the closeout scope unless the user explicitly changes that scope.
 - New generated-code execution is outside this closeout scope. Existing isolation guarantees still apply: no unrestricted host fallback, no inherited credentials or configuration secrets, and explicit file, network, dependency, time, memory, and output limits for any approved isolated experiment.
 - Keep exploratory observations, assumptions, and formally accepted results distinct. Both ModelIR and code execution must retain source, transformation, version, run, and validation evidence before their results can support final claims.
 - Keep the existing workflow responsible for execution state, budgets, cancellation, recovery, and validation. A model completion message, successful script, or second LLM opinion is not sufficient to mark mathematics verified; a new harness is not a prerequisite for closeout.
 - Preserve evidence and failure-isolation guarantees. Do not create a second result authority, hidden fallback, or parallel production workflow to make the demonstration pass.
-- Freeze the single task and acceptance criteria before live execution. Only fix reproduced blockers for that task; retain unrelated historical failures as explicit limitations. Do not treat one successful subtask as full-problem, generalization, or competitive-performance evidence. Stop feature development once archival acceptance is satisfied.
+- Preserve the frozen task and its unmet acceptance criteria. Historical failures remain explicit limitations. Do not treat unit tests, a manual solver probe, or a blocked report as successful model-generated mathematics. Feature development has ended.
 - Real API tests use only `deepseek-flash` within the authorized data scope. Exclude biological research problems. Keep failed runs and unknown usage in the ledger; do not silently expand budgets or resample until success.
 
 ## Verify Before Diagnosing
@@ -44,7 +45,7 @@ These rules are mandatory for every agent modifying this repository.
 ## Plan State
 
 - After completing each subtask, immediately change its checkbox from `[ ]` to `[x]` in the long-term plan.
-- Keep exactly one explicit `CURRENT` step in the plan.
+- Keep exactly one explicit `CURRENT` marker in the plan. In the archived state it must say there is no active step; do not invent an unchecked development task.
 - Compact completed phases into concise locked invariants rather than accumulating historical `[x]` logs.
 - Remove obsolete plan versions instead of archiving them beside the active plan.
 

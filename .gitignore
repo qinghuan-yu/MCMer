@@ -45,6 +45,7 @@ backend/project/
 work_dir/
 
 # Local knowledge graph (Understand Anything)
+.codegraph/
 .understand-anything/
 .understand-anything-tool/
 .understand-anything-tool.zip

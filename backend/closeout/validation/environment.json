@@ -1,0 +1,16 @@
+{
+  "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "packages": {
+    "pytest": "9.0.3",
+    "pydantic": "2.13.4",
+    "litellm": "1.86.1",
+    "numpy": "2.4.6",
+    "pandas": "3.0.3",
+    "scipy": "1.17.1",
+    "openpyxl": "3.1.5",
+    "python-docx": "1.2.0",
+    "fastapi": "0.136.3",
+    "jsonschema": "4.26.0"
+  }
+}

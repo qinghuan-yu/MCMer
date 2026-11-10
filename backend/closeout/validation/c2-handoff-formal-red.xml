@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="6" time="2.733" timestamp="2026-11-10T18:39:59.229407+08:00" hostname="DESKTOP-T52SO62"><testcase classname="tests.test_guidance_contract_agents" name="test_indexed_core_draft_exposes_runtime_parameter_source_to_constraints" time="0.027"><failure message="AttributeError: 'ConstraintParameterSymbol' object has no attribute 'runtime_source'">def test_indexed_core_draft_exposes_runtime_parameter_source_to_constraints() -&gt; None:
+        from app.guidance.model_ir_drafts import (FormulationContext, IndexedLinearCoreDraft)
+    
+        core = IndexedLinearCoreDraft.model_validate({
+            "index_sets": [{"id": "period", "values": ["p1", "p2"]}],
+            "parameters": [{
+                "source_kind": "runtime_artifact",
+                "id": "demand",
+                "index_sets": ["period"],
+                "runtime_source": {
+                    "artifact_ref": "forecast_bundle",
+                    "field_path": ["future_predictions"],
+                },
+            }],
+        })
+    
+        parameter = core.promote_core().parameters[0]
+        assert parameter.runtime_source.artifact_ref == "forecast_bundle"
+        context = FormulationContext.from_core(core.promote_core())
+&gt;       assert context.parameters[0].runtime_source == parameter.runtime_source
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend\tests\test_guidance_contract_agents.py:885: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = ConstraintParameterSymbol(id='demand', index_sets=('period',), source_ref='artifact:forecast_bundle#/future_predictions')
+item = 'runtime_source'
+
+    def __getattr__(self, item: str) -&gt; Any:
+        private_attributes = object.__getattribute__(self, '__private_attributes__')
+        if item in private_attributes:
+            attribute = private_attributes[item]
+            if hasattr(attribute, '__get__'):
+                return attribute.__get__(self, type(self))  # type: ignore
+    
+            try:
+                # Note: self.__pydantic_private__ cannot be None if self.__private_attributes__ has items
+                return self.__pydantic_private__[item]  # type: ignore
+            except KeyError as exc:
+                raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc
+        else:
+            # `__pydantic_extra__` can fail to be set if the model is not yet fully initialized.
+            # See `BaseModel.__repr_args__` for more details
+            try:
+                pydantic_extra = object.__getattribute__(self, '__pydantic_extra__')
+            except AttributeError:
+                pydantic_extra = None
+    
+            if pydantic_extra and item in pydantic_extra:
+                return pydantic_extra[item]
+            else:
+                if hasattr(self.__class__, item):
+                    return super().__getattribute__(item)  # Raises AttributeError if appropriate
+                else:
+                    # this is the current error
+&gt;                   raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E                   AttributeError: 'ConstraintParameterSymbol' object has no attribute 'runtime_source'
+
+.venv\Lib\site-packages\pydantic\main.py:1042: AttributeError</failure></testcase><testcase classname="tests.test_guidance_contract_agents" name="test_formulation_context_preserves_materialized_fact_values[28-%-0.28]" time="0.001"><failure message="AttributeError: 'NoneType' object has no attribute 'field_path'">raw_value = 28, unit = '%', expected = 0.28
+
+    @pytest.mark.parametrize("raw_value,unit,expected", [(28, "%", 0.28), (10000, "元", 10000)])
+    def test_formulation_context_preserves_materialized_fact_values(raw_value, unit, expected):
+        from app.guidance.model_ir_drafts import FormulationContext, IndexedLinearCoreDraft
+    
+        core = IndexedLinearCoreDraft.model_validate({
+            "index_sets": [{"id": "asset", "values": ["A", "B"]}],
+            "parameters": [{"source_kind": "static", "id": "rate", "index_sets": [],
+                            "binding": {"kind": "fact", "fact_id": "F1"}}],
+        }).promote_core(locked_facts=[{"fact_id": "F1", "value": raw_value, "unit": unit}])
+        assert core.parameters[0].values[0].value == expected
+    
+&gt;       context = FormulationContext.from_core(core)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend\tests\test_guidance_contract_agents.py:900: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+backend\app\guidance\model_ir_drafts.py:411: in from_core
+    parameters=tuple(
+backend\app\guidance\model_ir_drafts.py:422: in &lt;genexpr&gt;
+    else _runtime_parameter_source_ref(item.runtime_source)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+source = None
+
+    def _runtime_parameter_source_ref(
+        source: RuntimeIndexedParameterSource,
+    ) -&gt; str:
+        pointer = "/".join(
+            item.replace("~", "~0").replace("/", "~1")
+&gt;           for item in source.field_path
+                        ^^^^^^^^^^^^^^^^^
+        )
+E       AttributeError: 'NoneType' object has no attribute 'field_path'
+
+backend\app\guidance\model_ir_drafts.py:390: AttributeError</failure></testcase><testcase classname="tests.test_guidance_contract_agents" name="test_formulation_context_preserves_materialized_fact_values[10000-\u5143-10000]" time="0.001"><failure message="AttributeError: 'NoneType' object has no attribute 'field_path'">raw_value = 10000, unit = '元', expected = 10000
+
+    @pytest.mark.parametrize("raw_value,unit,expected", [(28, "%", 0.28), (10000, "元", 10000)])
+    def test_formulation_context_preserves_materialized_fact_values(raw_value, unit, expected):
+        from app.guidance.model_ir_drafts import FormulationContext, IndexedLinearCoreDraft
+    
+        core = IndexedLinearCoreDraft.model_validate({
+            "index_sets": [{"id": "asset", "values": ["A", "B"]}],
+            "parameters": [{"source_kind": "static", "id": "rate", "index_sets": [],
+                            "binding": {"kind": "fact", "fact_id": "F1"}}],
+        }).promote_core(locked_facts=[{"fact_id": "F1", "value": raw_value, "unit": unit}])
+        assert core.parameters[0].values[0].value == expected
+    
+&gt;       context = FormulationContext.from_core(core)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend\tests\test_guidance_contract_agents.py:900: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+backend\app\guidance\model_ir_drafts.py:411: in from_core
+    parameters=tuple(
+backend\app\guidance\model_ir_drafts.py:422: in &lt;genexpr&gt;
+    else _runtime_parameter_source_ref(item.runtime_source)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+source = None
+
+    def _runtime_parameter_source_ref(
+        source: RuntimeIndexedParameterSource,
+    ) -&gt; str:
+        pointer = "/".join(
+            item.replace("~", "~0").replace("/", "~1")
+&gt;           for item in source.field_path
+                        ^^^^^^^^^^^^^^^^^
+        )
+E       AttributeError: 'NoneType' object has no attribute 'field_path'
+
+backend\app\guidance\model_ir_drafts.py:390: AttributeError</failure></testcase><testcase classname="tests.test_guidance_contract_agents" name="test_formulation_context_preserves_coordinate_sources_and_order" time="0.001"><failure message="AttributeError: 'NoneType' object has no attribute 'field_path'">def test_formulation_context_preserves_coordinate_sources_and_order():
+        from app.guidance.model_ir import IndexedLinearDataSpec
+        from app.guidance.model_ir_drafts import FormulationContext
+    
+        core = IndexedLinearDataSpec.model_validate({
+            "index_sets": [{"id": "asset", "values": ["B", "A"]}, {"id": "time", "values": [1, 2]}],
+            "parameters": [{"id": "rate", "index_sets": ["asset", "time"], "values": [
+                {"coordinates": [a, t], "value": v, "source_ref": f"inputs/rates.csv/rows/{i}/cells/0", "source_unit": "%"}
+                for i, (a, t, v) in enumerate([("B", 1, 0.28), ("B", 2, 0.15), ("A", 1, 0.23), ("A", 2, 0.25)])
+            ]}],
+        })
+    
+&gt;       context = FormulationContext.from_core(core)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend\tests\test_guidance_contract_agents.py:921: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+backend\app\guidance\model_ir_drafts.py:411: in from_core
+    parameters=tuple(
+backend\app\guidance\model_ir_drafts.py:422: in &lt;genexpr&gt;
+    else _runtime_parameter_source_ref(item.runtime_source)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+source = None
+
+    def _runtime_parameter_source_ref(
+        source: RuntimeIndexedParameterSource,
+    ) -&gt; str:
+        pointer = "/".join(
+            item.replace("~", "~0").replace("/", "~1")
+&gt;           for item in source.field_path
+                        ^^^^^^^^^^^^^^^^^
+        )
+E       AttributeError: 'NoneType' object has no attribute 'field_path'
+
+backend\app\guidance\model_ir_drafts.py:390: AttributeError</failure></testcase><testcase classname="tests.test_guidance_contract_agents" name="test_architecture_recovers_undeclared_outputs_before_indexed_stages" time="0.038"><failure message="assert 1 == 2&#10; +  where 1 = len([{'agent_name': 'Architecture', 'history': [{'content': 'Build an architecture.\n\nStrict JSON output rules:\n- Return...&quot;type&quot;: &quot;object&quot;}', 'role': 'system'}, {'content': '{}', 'role': 'user'}], 'max_attempts': 1, 'max_tokens': None, ...}])&#10; +    where [{'agent_name': 'Architecture', 'history': [{'content': 'Build an architecture.\n\nStrict JSON output rules:\n- Return...&quot;type&quot;: &quot;object&quot;}', 'role': 'system'}, {'content': '{}', 'role': 'user'}], 'max_attempts': 1, 'max_tokens': None, ...}] = &lt;test_guidance_contract_agents.StubLLM object at 0x0000025967530C20&gt;.calls">tmp_path = WindowsPath('C:/Users/QingYu/AppData/Local/Temp/pytest-of-QingYu/pytest-24/test_architecture_recovers_und0')
+
+    def test_architecture_recovers_undeclared_outputs_before_indexed_stages(tmp_path):
+        from app.guidance.contract_request import StructuredContractRequester
+        from app.guidance.contracts import ProblemSpec
+        from app.guidance.generation_validation import _validate_generation_draft_slice
+        from app.guidance.model_ir_drafts import ModelIRGenerationDraft
+    
+        valid = _operator_graph_draft()
+        sid = valid["subproblems"][0]["subproblem_id"]
+        invalid = json.loads(json.dumps(valid))
+        invalid["subproblems"][0]["operators"][0]["outputs"][0] = "undeclared_output"
+        spec = ProblemSpec(task_summary="Compute a result.", subproblems=[_subproblem(sid, objective="Compute.")])
+        llm = StubLLM([invalid, valid])
+        result = asyncio.run(StructuredContractRequester(
+            llm=llm, model_type=ModelIRGenerationDraft, system_prompt="Build an architecture.",
+            agent_name="Architecture", artifact_dir=tmp_path,
+            semantic_validator=lambda draft: _validate_generation_draft_slice(
+                draft, expected_id=sid, registry=build_default_operator_registry(), problem_spec=spec,
+            ),
+        ).request({}))
+    
+&gt;       assert len(llm.calls) == 2
+E       assert 1 == 2
+E        +  where 1 = len([{'agent_name': 'Architecture', 'history': [{'content': 'Build an architecture.\n\nStrict JSON output rules:\n- Return..."type": "object"}', 'role': 'system'}, {'content': '{}', 'role': 'user'}], 'max_attempts': 1, 'max_tokens': None, ...}])
+E        +    where [{'agent_name': 'Architecture', 'history': [{'content': 'Build an architecture.\n\nStrict JSON output rules:\n- Return..."type": "object"}', 'role': 'system'}, {'content': '{}', 'role': 'user'}], 'max_attempts': 1, 'max_tokens': None, ...}] = &lt;test_guidance_contract_agents.StubLLM object at 0x0000025967530C20&gt;.calls
+
+backend\tests\test_guidance_contract_agents.py:946: AssertionError</failure></testcase><testcase classname="tests.test_guidance_recovery" name="test_constraint_cache_rejects_legacy_catalog_and_changed_parameter_values" time="0.005"><failure message="AttributeError: 'NoneType' object has no attribute 'field_path'">tmp_path = WindowsPath('C:/Users/QingYu/AppData/Local/Temp/pytest-of-QingYu/pytest-24/test_constraint_cache_rejects_0')
+
+    def test_constraint_cache_rejects_legacy_catalog_and_changed_parameter_values(tmp_path):
+        from app.guidance.model_ir import IndexedLinearDataSpec
+        from app.guidance.model_ir_drafts import FormulationContext
+    
+        legacy = {"index_sets": [{"id": "asset", "values": ["A"]}], "parameters": [
+            {"id": "rate", "index_sets": [], "source_ref": "problem_spec.json#locked_facts/F1"},
+        ]}
+        llm = CountingLLM()
+        _request(tmp_path, llm, {"value": 7, "constraint_context": legacy})
+        core = IndexedLinearDataSpec.model_validate({
+            "index_sets": legacy["index_sets"], "parameters": [{"id": "rate", "values": [
+                {"value": 0.28, "source_ref": "problem_spec.json#locked_facts/F1"},
+            ]}],
+        })
+        for value in (0.28, 0.28, 0.29):
+            core.parameters[0].values[0].value = value
+&gt;           context = FormulationContext.from_core(core).model_dump(mode="json")
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend\tests\test_guidance_recovery.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+backend\app\guidance\model_ir_drafts.py:411: in from_core
+    parameters=tuple(
+backend\app\guidance\model_ir_drafts.py:422: in &lt;genexpr&gt;
+    else _runtime_parameter_source_ref(item.runtime_source)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+source = None
+
+    def _runtime_parameter_source_ref(
+        source: RuntimeIndexedParameterSource,
+    ) -&gt; str:
+        pointer = "/".join(
+            item.replace("~", "~0").replace("/", "~1")
+&gt;           for item in source.field_path
+                        ^^^^^^^^^^^^^^^^^
+        )
+E       AttributeError: 'NoneType' object has no attribute 'field_path'
+
+backend\app\guidance\model_ir_drafts.py:390: AttributeError</failure></testcase></testsuite></testsuites>
