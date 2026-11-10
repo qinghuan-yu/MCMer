@@ -934,7 +934,7 @@ def test_revision_reuse_requires_the_original_operator_contract(tmp_path, contra
     if contract_state == "missing":
         RecoveryCheckpoint(tmp_path, "model_operator_contract", "current").discard()
     elif contract_state == "changed":
-        registry.get("data.read_excel_table").version = "3.0.0"
+        registry.get("data.read_excel_table").version = "changed-contract-version"
     review = ModelIRReview(model_id=previous.model_id, subproblem_reviews=[{
         "subproblem_id": "problem1", "status": "blocked", "assumption_checks": [],
         "required_revisions": [], "blocking_issues": ["No available method."],

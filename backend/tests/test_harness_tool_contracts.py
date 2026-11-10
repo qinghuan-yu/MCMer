@@ -1,4 +1,4 @@
-"""H1 合同回归；H1.3 的表头能力仍以严格预期失败登记。"""
+"""H1 注册合同、表头及恢复边界的行为回归。"""
 
 from pathlib import Path
 
@@ -86,7 +86,6 @@ def test_reader_contract_rejects_invalid_parameter_type_before_execution():
     )
 
 
-@pytest.mark.xfail(strict=True, raises=ValueError, reason="H1.3: header_row is explicitly rejected until implemented; replay with --runxfail")
 def test_reader_obeys_explicit_second_row_header(tmp_path: Path):
     workbook = tmp_path / "book.xlsx"
     # 最小双层表头夹具，避免提交官方原题附件或依赖忽略目录。
@@ -204,7 +203,7 @@ def test_parameter_defaults_are_published_and_compiled_from_the_same_contract():
     normalized = plan.graph.nodes[0].parameters
     for name, field in definition.parameters_schema["properties"].items():
         assert normalized[name] == field["default"]
-    assert len(registry.definitions()) == 20
+    assert len(registry.definitions()) == 22
     for definition in registry.definitions():
         with pytest.raises(ValueError, match="undeclared_probe"):
             definition.parameter_model.model_validate({"undeclared_probe": True})

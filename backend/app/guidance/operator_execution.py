@@ -45,6 +45,7 @@ class OperatorExecutionManifest(ExecutionContract):
     execution_plan_sha256: str
     model_sha256: str
     source_files_sha256: dict[str, str | None]
+    input_files_sha256: dict[str, str | None]
     output_files_sha256: dict[str, str | None]
     executed_node_ids: list[str]
     reused_node_ids: list[str] = Field(default_factory=list)
@@ -74,6 +75,7 @@ class OperatorGraphExecutor:
         node_fingerprints: dict[str, str] = {}
         subproblems = {item.subproblem_id: item for item in model_ir.subproblems}
         source_files = model_source_snapshots(work_dir, model_ir)
+        read_files: dict[str, str | None] = {}
         failures_by_subproblem: dict[str, OperatorExecutionFailure] = {}
         failures_by_node: dict[str, OperatorExecutionFailure] = {}
         failed_node_ids: set[str] = set()
@@ -110,7 +112,12 @@ class OperatorGraphExecutor:
                     name: _resolve_input(reference, values)
                     for name, reference in node.inputs.items()
                 }
+                input_files = file_snapshots(
+                    work_dir, [resolved_inputs[name] for name in definition.file_inputs],
+                )
+                read_files.update(input_files)
                 context = {
+                    "input_files": input_files,
                     "operator_contract_sha256": execution_plan.operator_contract_sha256,
                     "node": node.model_dump(mode="json"),
                     "registration": definition.model_dump(mode="json"), "inputs": resolved_inputs,
@@ -213,6 +220,7 @@ class OperatorGraphExecutor:
             execution_plan_sha256=hashlib.sha256(plan_payload.encode("utf-8")).hexdigest(),
             model_sha256=canonical_digest(model_ir),
             source_files_sha256=source_files,
+            input_files_sha256=read_files,
             output_files_sha256=file_snapshots(work_dir, [
                 name for name in generated_files if name not in {"execution_manifest.json", "execution_plan.json"}
             ] + [figure["path"] for figure in figures]),
@@ -280,6 +288,7 @@ class OperatorGraphExecutor:
             execution_plan_sha256="",
             model_sha256=canonical_digest(model_ir),
             source_files_sha256=model_source_snapshots(work_dir, model_ir),
+            input_files_sha256={},
             output_files_sha256=file_snapshots(work_dir, [name for name in generated_files if name != "execution_manifest.json"]),
             executed_node_ids=[],
             generated_files=generated_files,

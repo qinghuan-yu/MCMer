@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, StringConstraints, model_validator
 
@@ -16,6 +16,8 @@ BasisNumber = Number | Literal["$candidate"]
 
 class OperatorParameters(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    file_inputs: ClassVar[tuple[str, ...]] = ()
+    contract_version: ClassVar[str] = "2.0.0"
 
     def input_names(self, declared: set[str]) -> set[str]:
         return declared
@@ -62,14 +64,35 @@ class ConstantParameters(OperatorParameters):
 
 
 class ExcelParameters(OperatorParameters):
-    """读取首行表头的 Excel 工作表；支持选列、改名、前向填充与矩阵投影，不生成词特征。"""
+    """读取 XLSX/XLSM；header_row 是工作表零基行号，cell_range 是包含表头的 A1 矩形。保留行序、内部空行与文本 NA；日期转 ISO，空单元格转 null。公式保留表达式，不计算。变换顺序：区域、空尾行策略、行数限制、选列、改名、填充、矩阵投影；不生成词特征。"""
+    file_inputs: ClassVar[tuple[str, ...]] = ("source",)
+    contract_version: ClassVar[str] = "3.0.0"
     sheet: StrictInt | StrictStr = 0
+    header_row: Annotated[int, Field(strict=True, ge=0)] = 0
+    cell_range: Annotated[str, StringConstraints(pattern=r"^[A-Z]+[1-9]\d*:[A-Z]+[1-9]\d*$")] | None = None
+    trim_trailing_empty_rows: StrictBool = True
     row_limit: Annotated[int, Field(strict=True, gt=0)] | None = None
     columns: list[StrictStr] = Field(default=[])
     rename: dict[str, StrictStr] = Field(default={})
     forward_fill: list[StrictStr] = Field(default=[])
     matrix_columns: list[StrictStr] = Field(default=[])
     matrix_name: StrictStr = "matrix"
+
+
+class FileInspectionParameters(OperatorParameters):
+    """检查工作区内指定文件的类型、大小和 SHA256；XLSX/XLSM 额外提供工作表尺寸与有界原始单元格预览。尺寸可含格式化空行；不猜表头、不计算公式、不清洗。其他格式只报告元数据。"""
+    file_inputs: ClassVar[tuple[str, ...]] = ("source",)
+    contract_version: ClassVar[str] = "1.0.0"
+    preview_rows: Annotated[int, Field(strict=True, ge=1, le=50)] = 8
+    preview_columns: Annotated[int, Field(strict=True, ge=1, le=50)] = 16
+    preview_sheets: Annotated[int, Field(strict=True, ge=1, le=10)] = 4
+    cell_text_limit: Annotated[int, Field(strict=True, ge=20, le=2000)] = 500
+
+
+class TableProfileParameters(OperatorParameters):
+    """摘要现有等长列的表格：类型、缺失、重复行、数值范围及文本长度；可检查指定列的顺序。不排序、填充、删行或判断领域异常，不授予数学验证状态。"""
+    contract_version: ClassVar[str] = "1.0.0"
+    order_by: StrictStr | None = None
 
 
 class MomentsParameters(OperatorParameters):

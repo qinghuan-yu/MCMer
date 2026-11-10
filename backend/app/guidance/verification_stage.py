@@ -57,6 +57,8 @@ class ResultVerificationStage:
             execution_issues.append("execution model snapshot does not match the current approved model")
         if manifest.source_files_sha256 != model_source_snapshots(root, approved.approved_model_ir):
             execution_issues.append("execution source files changed after calculation")
+        if manifest.input_files_sha256 != file_snapshots(root, manifest.input_files_sha256):
+            execution_issues.append("execution input files changed after calculation")
         required_outputs = {
             "parameter_registry.json", "result_registry.json", "figure_registry.json", "notebook.ipynb",
             *generated_figure_paths(figure_registry), *manifest.output_files_sha256,

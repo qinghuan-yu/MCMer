@@ -78,6 +78,22 @@ def build_default_operator_registry() -> OperatorRegistry:
             output_contracts.mapping_output_validator("design"),
         ),
         (
+            "data.inspect_file",
+            {"source": _port("artifact")},
+            {"inspection": _port("artifact")},
+            params.FileInspectionParameters,
+            artifact_io.inspect_file,
+            output_contracts.mapping_output_validator("inspection"),
+        ),
+        (
+            "data.profile_table",
+            {"table": _port("table")},
+            {"profile": _port("artifact")},
+            params.TableProfileParameters,
+            artifact_io.profile_table,
+            output_contracts.mapping_output_validator("profile"),
+        ),
+        (
             "data.read_excel_table",
             {"source": _port("artifact")},
             {"table": _port("table")},
@@ -202,7 +218,7 @@ def build_default_operator_registry() -> OperatorRegistry:
         registry.register(
             OperatorDefinition(
                 operator_id=operator_id,
-                version="2.0.0",
+                version=parameter_model.contract_version,
                 parameter_model=parameter_model,
                 system_managed=parameter_model is params.MilpParameters,
                 inputs=inputs,

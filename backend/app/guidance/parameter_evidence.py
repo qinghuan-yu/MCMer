@@ -21,7 +21,9 @@ def _number(value: Any, unit: str = "", *, require_unit_suffix: bool = False) ->
     text = str(value).strip()
     if unit:
         match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(.*)", text)
-        if match is None or (match[2] and match[2] != unit) or (require_unit_suffix and match[2] != unit):
+        if match is None:
+            raise ValueError(f"source has no numeric value: {text!r}; a symbolic or textual value cannot be materialized as a static number")
+        if (match[2] and match[2] != unit) or (require_unit_suffix and match[2] != unit):
             raise ValueError(f"source unit disagrees with declared unit {unit!r}")
         text = match[1]
     percent = text.endswith("%") or unit == "%"

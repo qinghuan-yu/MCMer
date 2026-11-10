@@ -37,6 +37,8 @@ def test_catalog_exposes_only_problem_independent_operator_ids() -> None:
         "artifact.extract_scalar",
         "artifact.extract_vector",
         "data.read_excel_table",
+        "data.inspect_file",
+        "data.profile_table",
         "data.scalar_constant",
         "decision.mcda_weighted_ranking",
         "design.periodic_key_moments",

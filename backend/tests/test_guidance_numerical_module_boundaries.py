@@ -14,6 +14,8 @@ OPERATOR_OWNERS = {
     "artifact.extract_scalar": "artifact_io",
     "artifact.extract_vector": "artifact_io",
     "data.read_excel_table": "artifact_io",
+    "data.inspect_file": "artifact_io",
+    "data.profile_table": "artifact_io",
     "data.scalar_constant": "artifact_io",
     "decision.mcda_weighted_ranking": "decision",
     "design.periodic_key_moments": "diagnostics",
@@ -43,7 +45,11 @@ def test_registered_operator_is_owned_by_its_numerical_domain(
     assert runtime is not None
     assert runtime.executor is not None
     assert runtime.executor.__module__ == f"app.guidance.operator_runtimes.{owner}"
-    assert runtime.definition.version == "2.0.0"
+    assert runtime.definition.version == (
+        "3.0.0" if operator_id == "data.read_excel_table"
+        else "1.0.0" if operator_id in {"data.inspect_file", "data.profile_table"}
+        else "2.0.0"
+    )
     assert runtime.definition.deterministic is True
     assert runtime.definition.validator_id == f"{operator_id}.validator.v1"
 

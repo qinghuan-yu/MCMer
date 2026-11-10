@@ -104,7 +104,7 @@ def test_compound_unit_containing_percent_keeps_its_original_scale():
     ({"row_stop": 3}, "bounds"),
     ({"column_stop": 4}, "bounds"),
     ({"row_stop": 1}, "cells for"),
-    ({"column_start": 0, "column_stop": 2}, "unit"),
+    ({"column_start": 0, "column_stop": 2}, "no numeric value"),
     ({"unit": "USD"}, "unit"),
 ])
 def test_invalid_table_binding_is_rejected_instead_of_guessing(overrides, message):

@@ -43,6 +43,11 @@ class OperatorDefinition(OperatorContract):
     def parameters_schema(self) -> dict:
         return self.parameter_model.model_json_schema()
 
+    @computed_field
+    @property
+    def file_inputs(self) -> list[str]:
+        return list(self.parameter_model.file_inputs)
+
     def validate_call(
         self, *, inputs: dict, parameters: dict, outputs: list[str] | None = None,
     ) -> dict:
