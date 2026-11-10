@@ -41,7 +41,7 @@ from app.guidance.model_ir import (
     _build_fact_bindings,
     _require_unique_source_fact_ids,
 )
-from app.guidance.static_bindings import FactValueBinding, StaticParameterBinding, materialize_static_parameter
+from app.guidance.static_bindings import StaticParameterBinding, materialize_static_parameter
 
 
 class CandidateModelDraft(CandidateModel):
@@ -374,54 +374,26 @@ class ConstraintIndexSetSymbol(IRModel):
     values: tuple[IndexValue, ...] = Field(min_length=1, max_length=1000)
 
 
-class ConstraintParameterSymbol(IRModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
-
-    id: str = Field(min_length=1, max_length=100)
-    index_sets: tuple[str, ...] = Field(default_factory=tuple, max_length=4)
-    source_ref: str = Field(min_length=1, max_length=300)
-
-
-def _runtime_parameter_source_ref(
-    source: RuntimeIndexedParameterSource,
-) -> str:
-    pointer = "/".join(
-        item.replace("~", "~0").replace("/", "~1")
-        for item in source.field_path
-    )
-    return f"artifact:{source.artifact_ref}#/{pointer}"
-
-
 class FormulationContext(IRModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
     index_sets: tuple[ConstraintIndexSetSymbol, ...] = Field(min_length=1, max_length=20)
-    parameters: tuple[ConstraintParameterSymbol, ...] = Field(
+    parameters: tuple[IndexedParameterSpec, ...] = Field(
         default_factory=tuple,
         max_length=100,
     )
 
     @classmethod
-    def from_core(cls, core: IndexedLinearCoreDraft) -> FormulationContext:
+    def from_core(cls, core: IndexedLinearDataSpec) -> FormulationContext:
+        core = IndexedLinearDataSpec.model_validate(core)
         return cls(
             index_sets=tuple(
                 ConstraintIndexSetSymbol(id=item.id, values=tuple(item.values))
                 for item in core.index_sets
             ),
             parameters=tuple(
-                ConstraintParameterSymbol(
-                    id=item.id,
-                    index_sets=tuple(item.index_sets),
-                    source_ref=(
-                        (
-                            f"problem_spec.json#locked_facts/{item.binding.fact_id}"
-                            if isinstance(item.binding, FactValueBinding)
-                            else item.binding.source_ref
-                        )
-                        if isinstance(item, StaticIndexedParameterDraft)
-                        else _runtime_parameter_source_ref(item.runtime_source)
-                    ),
-                )
+                # 快照与执行数据隔离，保留原值、坐标、来源和运行时引用。
+                item.model_copy(deep=True)
                 for item in core.parameters
             ),
         )

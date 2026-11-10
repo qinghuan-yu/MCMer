@@ -30,7 +30,7 @@ def _model_payload(*, indexed: bool, graph_method: str | None, families: list[st
             "kind": "operator_graph",
             "component_id": "numerical_graph",
             "variables": [{
-                "id": "result", "role": "derived", "symbol": "r", "unit": "1",
+                "id": "method_result", "role": "derived", "symbol": "r", "unit": "1",
             }],
             "operators": [{
                 "node_id": "numerical_method", "operator_id": graph_method,

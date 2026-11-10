@@ -20,6 +20,7 @@ from app.guidance.model_ir import (
     ModelIR,
     OperatorGraphExecutionComponent,
     SolvableModelIR,
+    declared_artifact_ids,
 )
 from app.guidance.model_ir_drafts import (
     FormulationContext,
@@ -110,9 +111,18 @@ def _validate_generation_draft_slice(
     })
     if unsupported:
         raise ValueError(f"operator_id is not available: {unsupported!r}")
+    declared_outputs = declared_artifact_ids(
+        variables=subproblem.variables, final_answers=subproblem.final_answers,
+    )
     for invocation in subproblem.operators:
         definition = registry.get(invocation.operator_id)
         definition.validate_call(inputs=invocation.inputs, parameters=invocation.parameters, outputs=invocation.outputs)
+        undeclared = set(invocation.outputs) - declared_outputs
+        if undeclared:
+            raise ValueError(
+                f"operator output is not declared by Model IR: {sorted(undeclared)!r}; "
+                "outputs must use declared artifact aliases, not registered port names"
+            )
     operator_ids = {item.operator_id for item in subproblem.operators}
     if "indexed_linear_model" in components:
         operator_ids.add("optimization.milp")

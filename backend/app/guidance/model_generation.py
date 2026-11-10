@@ -117,6 +117,8 @@ async def _request_single_subproblem_model(
             "可解结果只能在实际算子节点的 source_fact_ids 登记本阶段使用的事实；"
             "事实可被后续参数和约束重复引用，覆盖登记不会消耗事实。"
             "禁止输出 fact_bindings，最终路径由系统组装。"
+            "算子 outputs 按端口顺序填写已声明的工件别名，不能直接抄端口名；"
+            "中间工件须在架构 variables 中声明，参数阶段不能补救未声明的输出。"
         ),
         payload=payload,
         agent_name=request_name,
@@ -198,7 +200,7 @@ async def _request_single_subproblem_model(
             "indexed_core",
             ((parameter.id, parameter.source_fact_ids) for parameter in materialized_core.parameters),
         )
-        constraint_context = FormulationContext.from_core(core)
+        constraint_context = FormulationContext.from_core(materialized_core)
 
         def validate_formulation(formulation: IndexedLinearFormulationDraft) -> None:
             _validate_indexed_constraint_stage(
@@ -228,7 +230,11 @@ async def _request_single_subproblem_model(
                 "实际发生量受已知需求或活动限制，不能靠虚构超需求活动或无对象活动降低闲置费用。"
                 "目标数组表示目标项族而非展开后的标量项，重复期必须用for_each与binder，"
                 "固定value只用于最多四个首期、末期等边界值。"
-                "constraint_context 是已验证的数据目录；parameter_id和已有index set id"
+                "constraint_context 是实际执行参数的已验证快照；values/dense_values 已完成来源读取和单位转换，"
+                "百分数已转换为比例（例如28%对应0.28），不得再次乘0.01或除100。"
+                "source_unit 仅记录原单元格单位，不是要求再次转换；按快照数值构造数学关系。"
+                "runtime_source 表示尚待上游执行的工件引用，不得捏造尚未生成的数值。"
+                "parameter_id和已有index set id"
                 "必须逐字选自该目录，禁止另造或改写参数；variable_id必须引用本次variables中的声明。"
                 "constraints 数组表示约束族而非展开后的逐期约束，最多输出 50 个约束族；"
                 "使用 for_each 与 binder 表达所有重复约束，禁止逐个枚举周、时段或场景；"

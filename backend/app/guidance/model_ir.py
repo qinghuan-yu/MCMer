@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -261,7 +262,10 @@ class OperatorInvocation(IRModel):
     node_id: str = Field(min_length=1, max_length=100)
     operator_id: str = Field(min_length=1, max_length=160)
     inputs: dict[str, str] = Field(default_factory=dict)
-    outputs: list[str] = Field(min_length=1, max_length=20)
+    outputs: list[str] = Field(
+        min_length=1, max_length=20,
+        description="Declared artifact aliases in port order, not the operator's registered port names.",
+    )
     parameters: dict[str, Any] = Field(default_factory=dict)
     random_seed: int | None = None
     source_fact_ids: list[str] = Field(default_factory=list, max_length=100)
@@ -380,6 +384,25 @@ class FinalAnswerSpec(IRModel):
             "is declared in this subproblem's data. Preserve source IDs; never invent identifiers."
         ),
     )
+
+
+def declared_artifact_ids(
+    *,
+    variables: Sequence[VariableSpec],
+    final_answers: Sequence[FinalAnswerSpec],
+    indexed_parameters: Sequence[IndexedParameterSpec] = (),
+) -> set[str]:
+    """生成与编译共用工件声明语义；运行时引用只在参数合同形成后加入。"""
+    artifacts = {variable.id for variable in variables}
+    for answer in final_answers:
+        artifacts.add(answer.value_ref)
+        artifacts.update(answer.evidence_ids)
+    artifacts.update(
+        parameter.runtime_source.artifact_ref
+        for parameter in indexed_parameters
+        if parameter.runtime_source is not None
+    )
+    return artifacts
 
 
 class FactBindingSpec(IRModel):

@@ -21,6 +21,7 @@ from app.guidance.model_ir import (
     OperatorGraphExecutionComponent,
     OperatorInvocation,
     SolvableModelIR,
+    declared_artifact_ids,
 )
 from app.guidance.operators import OperatorDefinition, OperatorPort, OperatorRegistry
 
@@ -295,10 +296,10 @@ class ModelIRCompiler:
         variables = {item.id: item for item in variables}
         data = {item.id: item for item in subproblem.data}
         invocations = {item.node_id: item for item in invocation_list}
-        declared_artifacts = _referenced_artifacts(
-            subproblem,
+        declared_artifacts = declared_artifact_ids(
             variables=list(variables.values()),
-            indexed_component=indexed_component,
+            final_answers=subproblem.final_answers,
+            indexed_parameters=indexed_component.model.parameters if indexed_component is not None else (),
         )
         satisfied_preconditions = {
             *subproblem.validation.identifiability_checks,
@@ -514,25 +515,6 @@ def _artifact_producers(
         for invocation in invocations
         for artifact in invocation.outputs
     }
-
-
-def _referenced_artifacts(
-    subproblem: SolvableModelIR,
-    *,
-    variables: list,
-    indexed_component: IndexedLinearExecutionComponent | None,
-) -> set[str]:
-    artifacts = {variable.id for variable in variables}
-    for answer in subproblem.final_answers:
-        artifacts.add(answer.value_ref)
-        artifacts.update(answer.evidence_ids)
-    if indexed_component is not None:
-        artifacts.update(
-            parameter.runtime_source.artifact_ref
-            for parameter in indexed_component.model.parameters
-            if parameter.runtime_source is not None
-        )
-    return artifacts
 
 
 def _node_dependencies(

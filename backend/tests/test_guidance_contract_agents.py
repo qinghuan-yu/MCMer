@@ -881,10 +881,72 @@ def test_indexed_core_draft_exposes_runtime_parameter_source_to_constraints() ->
 
     parameter = core.promote_core().parameters[0]
     assert parameter.runtime_source.artifact_ref == "forecast_bundle"
+    context = FormulationContext.from_core(core.promote_core())
+    assert context.parameters[0].runtime_source == parameter.runtime_source
+    assert context.parameters[0].values == []
+
+
+@pytest.mark.parametrize("raw_value,unit,expected", [(28, "%", 0.28), (10000, "元", 10000)])
+def test_formulation_context_preserves_materialized_fact_values(raw_value, unit, expected):
+    from app.guidance.model_ir_drafts import FormulationContext, IndexedLinearCoreDraft
+
+    core = IndexedLinearCoreDraft.model_validate({
+        "index_sets": [{"id": "asset", "values": ["A", "B"]}],
+        "parameters": [{"source_kind": "static", "id": "rate", "index_sets": [],
+                        "binding": {"kind": "fact", "fact_id": "F1"}}],
+    }).promote_core(locked_facts=[{"fact_id": "F1", "value": raw_value, "unit": unit}])
+    assert core.parameters[0].values[0].value == expected
+
     context = FormulationContext.from_core(core)
-    assert context.parameters[0].source_ref == (
-        "artifact:forecast_bundle#/future_predictions"
-    )
+
+    assert context.parameters[0].model_dump() == core.parameters[0].model_dump()
+    assert context.parameters[0].source_fact_ids == ["F1"]
+    # 修改传给生成器的快照不能回写实际执行数据。
+    context.parameters[0].values[0].value = -1
+    assert core.parameters[0].values[0].value == expected
+
+
+def test_formulation_context_preserves_coordinate_sources_and_order():
+    from app.guidance.model_ir import IndexedLinearDataSpec
+    from app.guidance.model_ir_drafts import FormulationContext
+
+    core = IndexedLinearDataSpec.model_validate({
+        "index_sets": [{"id": "asset", "values": ["B", "A"]}, {"id": "time", "values": [1, 2]}],
+        "parameters": [{"id": "rate", "index_sets": ["asset", "time"], "values": [
+            {"coordinates": [a, t], "value": v, "source_ref": f"inputs/rates.csv/rows/{i}/cells/0", "source_unit": "%"}
+            for i, (a, t, v) in enumerate([("B", 1, 0.28), ("B", 2, 0.15), ("A", 1, 0.23), ("A", 2, 0.25)])
+        ]}],
+    })
+
+    context = FormulationContext.from_core(core)
+
+    assert context.model_dump(mode="json") == core.model_dump(mode="json")
+
+
+def test_architecture_recovers_undeclared_outputs_before_indexed_stages(tmp_path):
+    from app.guidance.contract_request import StructuredContractRequester
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.generation_validation import _validate_generation_draft_slice
+    from app.guidance.model_ir_drafts import ModelIRGenerationDraft
+
+    valid = _operator_graph_draft()
+    sid = valid["subproblems"][0]["subproblem_id"]
+    invalid = json.loads(json.dumps(valid))
+    invalid["subproblems"][0]["operators"][0]["outputs"][0] = "undeclared_output"
+    spec = ProblemSpec(task_summary="Compute a result.", subproblems=[_subproblem(sid, objective="Compute.")])
+    llm = StubLLM([invalid, valid])
+    result = asyncio.run(StructuredContractRequester(
+        llm=llm, model_type=ModelIRGenerationDraft, system_prompt="Build an architecture.",
+        agent_name="Architecture", artifact_dir=tmp_path,
+        semantic_validator=lambda draft: _validate_generation_draft_slice(
+            draft, expected_id=sid, registry=build_default_operator_registry(), problem_spec=spec,
+        ),
+    ).request({}))
+
+    assert len(llm.calls) == 2
+    assert "undeclared_output" in llm.calls[1]["history"][1]["content"]
+    assert result.model_dump() == ModelIRGenerationDraft.model_validate(valid).model_dump()
+    assert invalid["subproblems"][0]["operators"][0]["outputs"] == ["undeclared_output"]
 
 
 def test_indexed_draft_allows_system_managed_candidate_node_refs() -> None:
@@ -1176,17 +1238,11 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
     constraint_payload = json.loads(llm.calls[-1]["history"][1]["content"])
     assert "indexed_core" not in constraint_payload
     constraint_context = constraint_payload["constraint_context"]
-    assert "dense_values" not in json.dumps(constraint_context)
     assert "objective" not in constraint_context
-    assert len(json.dumps(constraint_context)) < len(json.dumps(core))
     assert constraint_context["index_sets"] == core["index_sets"]
     assert constraint_context["parameters"] == [
-        {
-            "id": parameter["id"],
-            "index_sets": parameter["index_sets"],
-            "source_ref": parameter["binding"]["source_ref"],
-        }
-        for parameter in core["parameters"]
+        parameter.model_dump(mode="json")
+        for parameter in indexed_component.model.parameters
     ]
     assert "variables" not in constraint_context
 
@@ -1238,7 +1294,7 @@ def test_indexed_constraints_reject_symbols_missing_from_validated_core() -> Non
         }],
     })
 
-    context = FormulationContext.from_core(core)
+    context = FormulationContext.from_core(core.promote_core())
     with pytest.raises(ValidationError, match="Instance is frozen"):
         context.index_sets = ()
     with pytest.raises(ValidationError, match="Instance is frozen"):

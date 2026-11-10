@@ -87,6 +87,27 @@ def test_contract_checkpoint_cannot_hide_changed_nonprompt_dependencies(tmp_path
     assert llm.calls == 2
 
 
+def test_constraint_cache_rejects_legacy_catalog_and_changed_parameter_values(tmp_path):
+    from app.guidance.model_ir import IndexedLinearDataSpec
+    from app.guidance.model_ir_drafts import FormulationContext
+
+    legacy = {"index_sets": [{"id": "asset", "values": ["A"]}], "parameters": [
+        {"id": "rate", "index_sets": [], "source_ref": "problem_spec.json#locked_facts/F1"},
+    ]}
+    llm = CountingLLM()
+    _request(tmp_path, llm, {"value": 7, "constraint_context": legacy})
+    core = IndexedLinearDataSpec.model_validate({
+        "index_sets": legacy["index_sets"], "parameters": [{"id": "rate", "values": [
+            {"value": 0.28, "source_ref": "problem_spec.json#locked_facts/F1"},
+        ]}],
+    })
+    for value in (0.28, 0.28, 0.29):
+        core.parameters[0].values[0].value = value
+        context = FormulationContext.from_core(core).model_dump(mode="json")
+        _request(tmp_path, llm, {"value": 7, "constraint_context": context})
+    assert llm.calls == 3
+
+
 def _scalar_model(value=2):
     subproblems = []
     for sid, nodes in [("chain", [("source", {}, value), ("dependent", {"value": "source_value"}, 0)]),
