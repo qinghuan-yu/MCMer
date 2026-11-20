@@ -34,6 +34,8 @@ def _case(root):
     for field in ("fact_bindings", "equations", "constraints"):
         sub.pop(field)
     sub.update(subproblem_id="training", execution_components=["indexed_linear_model"], variables=[], operators=[])
+    sub["data"][0]["source_ref"] = "inputs/training.docx#table-1"
+    sub["final_answers"][0]["evidence_ids"] = ["question.table.1"]
     for candidate in sub["candidate_models"]:
         candidate["operator_node_ids"] = []
     core = {

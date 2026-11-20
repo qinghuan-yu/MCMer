@@ -44,6 +44,10 @@ from app.guidance.model_ir import (
 from app.guidance.static_bindings import StaticParameterBinding, materialize_static_parameter
 
 
+INDEXED_SOLVER_NODE_ID = "solve_indexed_model"
+INDEXED_SOLUTION_OUTPUT = "solution"
+
+
 class CandidateModelDraft(CandidateModel):
     operator_node_ids: list[str] = Field(default_factory=list, max_length=MAX_CANDIDATE_GRAPH_NODE_REFS)
 
@@ -147,8 +151,8 @@ class ModelIRGenerationDraft(IRModel):
                     kind="indexed_linear",
                     component_id="indexed_linear_model",
                     model=indexed_linear_model,
-                    solver_node_id="solve_indexed_model",
-                    outputs=["solution"],
+                    solver_node_id=INDEXED_SOLVER_NODE_ID,
+                    outputs=[INDEXED_SOLUTION_OUTPUT],
                 ))
             payload = subproblem.model_dump(
                 mode="python",
@@ -175,16 +179,15 @@ class ModelIRGenerationDraft(IRModel):
             raise ValueError(
                 "indexed execution requires the indexed_linear_model component"
             )
-        node_id = "solve_indexed_model"
         normalized = subproblem.model_copy(update={
             "candidate_models": [
                 item.model_copy(update={
-                    "operator_node_ids": [*item.operator_node_ids, node_id],
+                    "operator_node_ids": [*item.operator_node_ids, INDEXED_SOLVER_NODE_ID],
                 })
                 for item in subproblem.candidate_models
             ],
             "final_answers": [
-                item.model_copy(update={"value_ref": "solution"})
+                item.model_copy(update={"value_ref": INDEXED_SOLUTION_OUTPUT})
                 for item in subproblem.final_answers
             ],
         })

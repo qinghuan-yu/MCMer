@@ -7,14 +7,13 @@ from collections import Counter
 import hashlib
 from pathlib import Path
 
-from app.artifacts.evidence_profile import EvidenceProfile
+from app.artifacts.evidence_profile import EvidenceItem, EvidenceProfile
 from app.artifacts.input_catalog import InputCatalog
 from app.guidance.contracts import ProblemSpec
 from app.guidance.indexed_linear import validate_indexed_linear_core
 from app.guidance.model_ir import (
     IndexedLinearExecutionComponent,
     ModelIR,
-    OperatorGraphExecutionComponent,
     SolvableModelIR,
 )
 from app.guidance.recovery import canonical_digest, workspace_file
@@ -32,6 +31,46 @@ MISSING_MARKERS = (
 )
 
 
+class InvalidAnswerEvidence(ValueError):
+    def __init__(self, invalid: dict[str, list[str]], available: set[str]):
+        self.invalid = invalid
+        self.available = sorted(available)
+        super().__init__(
+            f"final_answers.evidence_ids contains unknown or ambiguous references: {invalid!r}. "
+            f"Use planned execution node IDs or registered source IDs declared by this subproblem: {self.available!r}."
+        )
+
+
+def _ambiguous_evidence_ids(model_ir: ModelIR, profile: EvidenceProfile) -> set[str]:
+    counts = Counter(item.evidence_id for item in profile.evidence)
+    node_ids = {node for sub in model_ir.subproblems if isinstance(sub, SolvableModelIR) for node in sub.execution_node_ids}
+    return {identifier for identifier, count in counts.items() if count > 1 or identifier in node_ids}
+
+
+def _declared_result_sources(sub: SolvableModelIR, profile: EvidenceProfile, ambiguous: set[str]) -> list[EvidenceItem]:
+    declared = {data.source_ref for data in sub.data}
+    return [item for item in profile.evidence if item.source_ref in declared and item.evidence_id not in ambiguous]
+
+
+def validate_planned_answer_evidence(model_ir: ModelIR, evidence_profile: dict) -> None:
+    """提交时只检查声明的引用。执行后仍须查验实际节点、来源字节和登记快照。"""
+    profile = EvidenceProfile.model_validate(evidence_profile)
+    ambiguous = _ambiguous_evidence_ids(model_ir, profile)
+    for sub in model_ir.subproblems:
+        if not isinstance(sub, SolvableModelIR):
+            continue
+        available = set(sub.execution_node_ids) - ambiguous
+        available.update(item.evidence_id for item in _declared_result_sources(sub, profile, ambiguous)
+                         if item.source_ref.split("#", 1)[0] == item.source_file)
+        invalid = {}
+        for answer in sub.final_answers:
+            unknown = set(answer.evidence_ids) - available
+            if unknown:
+                invalid[answer.id] = sorted(unknown)
+        if invalid:
+            raise InvalidAnswerEvidence(invalid, available)
+
+
 def registered_result_source_ids(
     root: Path, model_ir: ModelIR, *, referenced_ids: dict[str, set[str]],
 ) -> tuple[dict[str, set[str]], list[str]]:
@@ -43,13 +82,7 @@ def registered_result_source_ids(
         profile = EvidenceProfile.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         return {}, [f"invalid result source registration: {exc}"]
-    counts = Counter(item.evidence_id for item in profile.evidence)
-    node_ids = {
-        node_id for subproblem in model_ir.subproblems if isinstance(subproblem, SolvableModelIR)
-        for component in subproblem.execution_components
-        for node_id in ([node.node_id for node in component.operators]
-                        if isinstance(component, OperatorGraphExecutionComponent) else [component.solver_node_id])
-    }
+    ambiguous = _ambiguous_evidence_ids(model_ir, profile)
     registered: dict[str, set[str]] = {}
     issues: list[str] = []
     for subproblem in model_ir.subproblems:
@@ -59,14 +92,9 @@ def registered_result_source_ids(
         requested = {
             identifier for answer in subproblem.final_answers for identifier in answer.evidence_ids
         } & referenced_ids.get(subproblem.subproblem_id, set())
-        declared = {item.source_ref for item in subproblem.data}
-        for item in profile.evidence:
+        issues.extend(f"ambiguous source/node evidence ID: {identifier}" for identifier in sorted(ambiguous & requested))
+        for item in _declared_result_sources(subproblem, profile, ambiguous):
             if item.evidence_id not in requested:
-                continue
-            if counts[item.evidence_id] != 1 or item.evidence_id in node_ids:
-                issues.append(f"ambiguous source/node evidence ID: {item.evidence_id}")
-                continue
-            if item.source_ref not in declared:
                 continue
             try:
                 if item.source_ref.split("#", 1)[0] != item.source_file:

@@ -78,12 +78,26 @@ def check_solution(solution, x_key, y_key):
             "constraint_slacks": [float(Fraction(35, 2) - x - 7*y), float(Fraction(7, 2) - x)]}
 
 
-def check_answer_table(markdown, result, keys):
+def check_answer_table(markdown, result, keys, registered_results):
     lines = markdown.splitlines()
     heading = "## 最终答案与应填表格"
     if lines.count(heading) != 1:
         raise ValueError("missing or ambiguous final answer table")
     expected = {"objective_value": result["value"]["objective_value"], **result["value"]["decision_values"]}
+    expected_rows = {key: [] for key in keys}
+    for registered in registered_results:
+        if registered["subproblem_id"] != result["subproblem_id"]:
+            continue
+        value = registered["value"]
+        if isinstance(value, dict) and "objective_value" in value and isinstance(value.get("decision_values"), dict):
+            fields = {"objective_value": value["objective_value"], **value["decision_values"]}
+        else:
+            fields = {registered["id"]: value}
+        for key in expected_rows.keys() & fields.keys():
+            if number(fields[key]) != number(expected[key]):
+                raise ValueError(f"final answer table has conflicting registered values for {key}")
+            expected_rows[key].append([registered["subproblem_id"], key, str(fields[key]), registered["status"],
+                                       f"`result_registry.json#{registered['id']}`"])
     rows = []
     for line in lines[lines.index(heading) + 1:]:
         if line.startswith("#"):
@@ -92,8 +106,8 @@ def check_answer_table(markdown, result, keys):
             rows.append([cell.strip() for cell in line[1:-1].split("|")])
     for key in keys:
         matches = [row for row in rows if row[:2] == [result["subproblem_id"], key]]
-        if matches != [[result["subproblem_id"], key, str(expected[key]), result["status"],
-                        f"`result_registry.json#{result['id']}`"]]:
+        evidence_ids = {row[-1] for row in expected_rows[key]}
+        if len(evidence_ids) != len(expected_rows[key]) or sorted(matches) != sorted(expected_rows[key]):
             raise ValueError(f"final answer table contains a missing, contradictory or unbound value for {key}")
 
 
@@ -129,13 +143,14 @@ def audit_run(root: Path, result_id: str, x_key: str, y_key: str):
         if verification.status != "verified" or ResultVerificationStage.assess(root / "execution_manifest.json", root) != verification:
             raise ValueError("current evidence does not support published verification")
         receipt.update(publication_status=audit["publication_status"], guidance_sha256=digest)
-        matches = [r for r in read("result_registry.json")["verified_results"] if r["id"] == result_id]
+        registered = read("result_registry.json")["verified_results"]
+        matches = [r for r in registered if r["id"] == result_id]
         if len(matches) != 1:
             raise ValueError("result ID must identify exactly one verified result")
         result, = matches
         solution = result["value"]
         reference = check_solution(solution, x_key, y_key)
-        check_answer_table(guidance.decode("utf-8"), result, ("objective_value", x_key, y_key))
+        check_answer_table(guidance.decode("utf-8"), result, ("objective_value", x_key, y_key), registered)
         receipt.update(passed=True, decisions={"x": solution["decision_values"][x_key], "y": solution["decision_values"][y_key]},
                        objective=solution["objective_value"], independent=reference)
     except OSError as error:

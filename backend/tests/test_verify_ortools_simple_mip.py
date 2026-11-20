@@ -10,7 +10,7 @@ from app.artifacts.evidence_profile import build_evidence_profile
 from app.guidance import workflow
 from app.services.source_ingest import ingest_question_source
 from math_tool_fixtures import scripted_model_reply
-from scripts.verify_ortools_simple_mip import audit_run, check_solution
+from scripts.verify_ortools_simple_mip import audit_run, check_answer_table, check_solution
 from test_scipy_milp_guidance import _proposal
 
 
@@ -71,6 +71,8 @@ def test_mismatched_decision_keys_or_registered_objective(solution):
 
 
 class OfflineExample:
+    answer_ids = ("optimum",)
+
     def __init__(self, **settings):
         self.__dict__.update(settings)
 
@@ -97,7 +99,10 @@ class OfflineExample:
                                                           ("x_limit", [term("x", 1)]))]}
             else:
                 reply = _proposal(context["locked_facts"])
-                reply["subproblems"][0]["objective"] = "最大化 x + 10y"
+                sub = reply["subproblems"][0]
+                sub["objective"] = "最大化 x + 10y"
+                answer, = sub["final_answers"]
+                sub["final_answers"] = [{**answer, "id": key} for key in self.answer_ids]
         elif agent_name == "GuidanceModelReviewer_integer_optimum":
             base = "/execution_components/0/model"
             reply = {"subproblem_id": "integer_optimum", "status": "approved", "mathematical_checks": [
@@ -109,13 +114,16 @@ class OfflineExample:
         return scripted_model_reply(reply, kwargs)
 
 
-def test_independent_audit_of_published_offline_run_and_tampering(tmp_path, monkeypatch):
+@pytest.mark.parametrize("answer_ids", [("optimum",), ("optimum", "coordinates", "objective", "feasibility")],
+                         ids=["one_answer", "four_answers"])
+def test_independent_audit_of_published_offline_run_and_tampering(tmp_path, monkeypatch, answer_ids):
     source = tmp_path / "inputs/question/question.txt"
     source.parent.mkdir(parents=True)
     shutil.copyfile(QUESTION, source)
     task = {"task_id": tmp_path.name, "task_type": "guidance", "workflow_mode": "standard", "work_dir": str(tmp_path)}
     task.update(ingest_question_source(str(source), task))
     build_evidence_profile(tmp_path)
+    monkeypatch.setattr(OfflineExample, "answer_ids", answer_ids)
     monkeypatch.setattr(workflow, "LLM", OfflineExample)
 
     async def run():
@@ -132,24 +140,38 @@ def test_independent_audit_of_published_offline_run_and_tampering(tmp_path, monk
     save("run_summary.json", {"status": "completed", "pipeline_result": terminal})
     def audit():
         return audit_run(tmp_path, "optimum", "x", "y")
+    markdown = tmp_path / "guidance.md"
+    original_bytes = markdown.read_bytes()
+    original = original_bytes.decode("utf-8")
+    x_rows = [line for line in original.splitlines() if "| x | 3.0 |" in line]
+    assert len(x_rows) == len(answer_ids)
+    assert {line.split("result_registry.json#")[1].split("`")[0] for line in x_rows} == set(answer_ids)
     receipt = audit()
     assert receipt["passed"], receipt
     assert receipt["decisions"] == {"x": 3, "y": 2} and receipt["objective"] == 23
+    for another_id in answer_ids[1:]:
+        assert audit_run(tmp_path, another_id, "x", "y")["passed"]
     save("run_summary.json", {"status": "blocked", "pipeline_result": terminal})
     assert not audit()["passed"]
     save("run_summary.json", {"status": "completed", "pipeline_result": terminal})
 
-    markdown = tmp_path / "guidance.md"
-    original_bytes = markdown.read_bytes()
-    original = original_bytes.decode("utf-8")
     report = json.loads((tmp_path / "guidance_audit_report.json").read_bytes())
-    valid_row = next(line for line in original.splitlines() if "| x | 3.0 |" in line)
-    for changed in (valid_row.replace("3.0", "13.0"), valid_row + "\n" + valid_row.replace("3.0", "13.0"),
-                    valid_row.replace("#optimum", "#another_result"), ""):
-        markdown.write_text(original.replace(valid_row, changed), encoding="utf-8")
-        save("guidance_audit_report.json", {**report, "guidance_sha256": hashlib.sha256(markdown.read_bytes()).hexdigest()})
-        failed = audit()
-        assert not failed["passed"] and "answer table" in failed["failures"][0], failed
+    for valid_row in x_rows:
+        for changed in (valid_row.replace("3.0", "13.0"), valid_row + "\n" + valid_row,
+                        valid_row.replace("result_registry.json#", "result_registry.json#unregistered-"), ""):
+            markdown.write_text(original.replace(valid_row, changed), encoding="utf-8")
+            save("guidance_audit_report.json", {**report, "guidance_sha256": hashlib.sha256(markdown.read_bytes()).hexdigest()})
+            failed = audit()
+            assert not failed["passed"] and "answer table" in failed["failures"][0], failed
+    if len(answer_ids) > 1:
+        registered = json.loads((tmp_path / "result_registry.json").read_bytes())["verified_results"]
+        first = next(r for r in registered if r["id"] == "optimum")
+        another = next(r for r in registered if r["id"] == "coordinates")
+        another["value"]["decision_values"]["x"] = 13.0
+        row = next(line for line in x_rows if "#coordinates`" in line)
+        contradictory = original.replace(row, row.replace("3.0", "13.0"))
+        with pytest.raises(ValueError, match="conflicting registered values for x"):
+            check_answer_table(contradictory, first, ("objective_value", "x", "y"), registered)
     markdown.write_bytes(original_bytes)
     save("guidance_audit_report.json", report)
     assert audit()["passed"]

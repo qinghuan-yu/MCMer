@@ -171,6 +171,8 @@ def _prepare_indexed_draft(payload: dict) -> tuple[dict, dict, dict]:
     subproblem.pop("fact_bindings")
     subproblem["variables"] = []
     subproblem["operators"] = []
+    for answer in subproblem["final_answers"]:
+        answer["evidence_ids"] = ["solve_indexed_model"]
     return subproblem, component["model"], component
 
 

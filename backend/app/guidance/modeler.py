@@ -11,6 +11,7 @@ from typing import Any
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contracts import ProblemSpec
+from app.guidance.evidence_consistency import InvalidAnswerEvidence, validate_planned_answer_evidence
 from app.guidance.operators import OperatorRegistry
 from app.guidance.failure_contracts import (
     bounded_failure_summary,
@@ -208,11 +209,17 @@ async def _request_subproblem_models(
             and target_id not in revision_targets
             and not changed_dependencies
         ):
-            generated_by_id[target_id] = ModelIR(
+            prior_slice = ModelIR(
                 model_id=previous_model_ir.model_id,
                 subproblems=[previous_by_id[target_id]],
             )
-            continue
+            try:
+                validate_planned_answer_evidence(prior_slice, evidence_profile)
+            except InvalidAnswerEvidence:
+                revision_targets.add(target_id)
+            else:
+                generated_by_id[target_id] = prior_slice
+                continue
         slice_spec = {
             **compact_spec,
             "subproblems": [subproblem],

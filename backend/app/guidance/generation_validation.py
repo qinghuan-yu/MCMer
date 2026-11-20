@@ -7,7 +7,7 @@ from typing import Any
 
 from app.guidance.contracts import ProblemSpec
 from app.guidance.operators import OperatorRegistry
-from app.guidance.evidence_consistency import validate_model_evidence_consistency
+from app.guidance.evidence_consistency import validate_model_evidence_consistency, validate_planned_answer_evidence
 from app.guidance.fact_coverage import FactCoverage, FactScope
 from app.guidance.indexed_linear import (
     validate_indexed_linear_data,
@@ -242,6 +242,7 @@ def _validate_model_ir_slice(
         )
     validate_model_evidence_consistency(problem_spec, model_ir, evidence_profile)
     validate_model_fact_coverage(problem_spec, model_ir)
+    validate_planned_answer_evidence(model_ir, evidence_profile)
     supported = {item.operator_id for item in registry.definitions()}
     unsupported = sorted({
         operator_id

@@ -142,3 +142,54 @@ def test_non_finite_bound_cannot_enter_tool_history_or_model(bad_bound):
     result = ws.execute("edit_model", {"variables": [{"id": "x", "domain": "integer", "lower_bound": bad_bound}]})
     assert not result["ok"] and "finite" in result["error"]
     assert ws.execute("inspect_model", {})["draft"]["variables"] == []
+
+
+def test_indexed_answer_evidence_returns_actionable_refs_and_preserves_model_until_repaired():
+    ws, architecture, data = make_workspace()
+    form = _formulation()
+    form["variables"][0]["source_fact_ids"] = ["variable_names", "integrality"]
+    form["objective"]["source_fact_ids"] = ["goal"]
+    form["constraints"][0]["source_fact_ids"] = ["relation"]
+    answer = architecture["subproblems"][0]["final_answers"][0]
+    answer["evidence_ids"] = ["milp_solution", "goal"]
+    assert ws.execute("edit_model", {"architecture": architecture, **data, **form})["ok"]
+    before = ws.execute("inspect_model", {})
+    denied = ws.execute("submit_model", {})
+    assert not denied["ok"] and ws.result is None
+    assert denied["invalid_evidence_ids"] == {"optimum": ["goal", "milp_solution"]}
+    assert denied["available_evidence_ids"] == ["solve_indexed_model"]
+    assert ws.execute("inspect_model", {}) == before
+    answer["evidence_ids"] = denied["available_evidence_ids"]
+    assert ws.execute("edit_model", {"architecture": architecture})["ok"]
+    assert ws.execute("submit_model", {})["ok"]
+    assert ws.result.subproblems[0].final_answers[0].evidence_ids == ["solve_indexed_model"]
+
+
+def test_graph_nodes_and_unique_declared_source_ids_are_available_to_each_answer():
+    from app.guidance.math_workspace import MathWorkspace
+    from test_guidance_contract_agents import _operator_graph_draft, _subproblem
+
+    architecture = _operator_graph_draft()
+    sub = architecture["subproblems"][0]
+    answer = sub["final_answers"][0]
+    declared = sub["data"][0]["source_ref"]
+    def entry(evidence_id, source=declared):
+        return {"evidence_id": evidence_id, "source_ref": source, "source_file": source, "kind": "uploaded_file",
+                "sha256": "0" * 64, "size_bytes": 1}
+    source = entry("source.workbook")
+    duplicate = entry("duplicate_id")
+    collision = entry("rk18")
+    profile = {"evidence": [source, entry("not_declared", "data/other"), collision, duplicate, duplicate]}
+    spec = ProblemSpec(task_summary="Estimate the grouped model.", subproblems=[_subproblem(sub["subproblem_id"])])
+    ws = MathWorkspace(problem_spec=spec, subproblem_id=sub["subproblem_id"], evidence_profile=profile,
+                       registry=build_default_operator_registry())
+    unknown = ["duplicate_id", "not_declared", "result_K_18", "rk18"]
+    answer["evidence_ids"] = [*unknown, "figk"]
+    assert ws.execute("edit_model", {"architecture": architecture})["ok"]
+    denied = ws.execute("submit_model", {})
+    assert not denied["ok"] and denied["invalid_evidence_ids"] == {answer["id"]: unknown}
+    expected = {"source.workbook", *(op["node_id"] for op in sub["operators"])} - {"rk18"}
+    assert set(denied["available_evidence_ids"]) == expected
+    answer["evidence_ids"] = ["fitk", "figk", "source.workbook"]
+    assert ws.execute("edit_model", {"architecture": architecture})["ok"]
+    assert ws.execute("submit_model", {})["ok"]

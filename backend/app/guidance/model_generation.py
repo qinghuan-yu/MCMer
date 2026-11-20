@@ -15,6 +15,7 @@ from app.guidance.fact_coverage import FactScope
 from app.guidance.generation_validation import _validate_model_ir_slice
 from app.guidance.math_workspace import MathWorkspace
 from app.guidance.model_ir import ModelIR
+from app.guidance.model_ir_drafts import INDEXED_SOLUTION_OUTPUT, INDEXED_SOLVER_NODE_ID
 from app.guidance.model_review_contracts import ModelIRReview
 from app.guidance.modeling_context import _compact_previous_model_summary, _subproblem_review_payload
 from app.guidance.operators import OperatorRegistry
@@ -40,6 +41,7 @@ async def _request_single_subproblem_model(
         **slice_spec, "target_subproblem_id": target, "locked_facts": scope.payload(),
         "required_fact_ids": list(scope.fact_ids), "evidence_profile": evidence_profile,
         "available_operators": registry.model_catalog(),
+        "indexed_solver_answer": {"value_ref": INDEXED_SOLUTION_OUTPUT, "evidence_ids": [INDEXED_SOLVER_NODE_ID]},
         "operator_contract_sha256": registry.contract_sha256(),
     }
     if previous_model is not None:

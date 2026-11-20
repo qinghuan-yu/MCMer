@@ -474,6 +474,18 @@ class SolvableModelIR(IRModel):
     validation: ValidationPlan
     final_answers: list[FinalAnswerSpec] = Field(min_length=1, max_length=30)
 
+    @property
+    def execution_node_ids(self) -> list[str]:
+        return [
+            node_id
+            for component in self.execution_components
+            for node_id in (
+                [operator.node_id for operator in component.operators]
+                if isinstance(component, OperatorGraphExecutionComponent)
+                else [component.solver_node_id]
+            )
+        ]
+
     @model_validator(mode="after")
     def require_baseline_and_recommended_models(self) -> SolvableModelIR:
         assumption_ids = [assumption.id for assumption in self.assumptions]
@@ -489,15 +501,7 @@ class SolvableModelIR(IRModel):
         component_kinds = [component.kind for component in self.execution_components]
         if len(component_kinds) != len(set(component_kinds)):
             raise ValueError("execution component kinds must be unique")
-        node_ids = [
-            node_id
-            for component in self.execution_components
-            for node_id in (
-                [operator.node_id for operator in component.operators]
-                if isinstance(component, OperatorGraphExecutionComponent)
-                else [component.solver_node_id]
-            )
-        ]
+        node_ids = self.execution_node_ids
         if len(node_ids) != len(set(node_ids)):
             raise ValueError("execution node ids must be unique across components")
         unknown_nodes = sorted({

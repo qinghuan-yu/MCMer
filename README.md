@@ -10,13 +10,15 @@ MCMer 是一个面向数学建模场景的实验性全栈系统，保留来源�
 
 重做后的首次真实验收使用 Google OR-Tools 的整数规划例题。DeepSeek Flash 从题面建模，通过数学审核后，求解器算出唯一最优解 x=3、y=2，目标值 23。独立枚举全部 12 个可行点得到相同结果。四项答案引用了执行清单里不存在的 `milp_solution`，因此最终任务和报告均为 `blocked`，正式发布 0 项。实测共 10 次请求、148090 tokens、161.687 秒。用十条原响应离线复现了同一份阻断报告。[公开题目](https://github.com/google/or-tools/blob/stable/ortools/linear_solver/samples/simple_mip_program.py) · [实测回执与独立复核](backend/tests/fixtures/ortools_simple_mip/live_receipt.json)
 
+修复后的工作台会在建模开始时提供索引求解器的输出名与证据节点名，并在提交时列出每条答案的无效引用。离线重放本轮原始动作，四项错误引用均在提交时被拦截。另一个离线用例按反馈改正引用后通过正式发布。修复版尚待真实模型复测。[端到端回归](backend/tests/test_workbench_guidance_controls.py)
+
 重做前的 SciPy 整数规划例题保留为基线。独立穷举得到两个最优解 (1, 2) 和 (2, 2)，两者均使 y 达到最大值 2。脚本提供模型回复时，默认流程求解和导出通过。旧版真实模型在首个子题误用文本参数，纠正输出被截断，任务随即阻断。实测共 5 次请求、75502 tokens，正式数值结果为 0。五条原响应离线回放产生相同的阻断报告。[题面](backend/tests/fixtures/scipy_milp/question.txt) · [实测回执](backend/tests/fixtures/scipy_milp/live_receipt.json)
 
 在 `backend` 目录运行：
 
 ```powershell
 $env:LITELLM_LOCAL_MODEL_COST_MAP='True'
-..\.venv\Scripts\python.exe -X utf8 -m pytest tests/test_guidance_modeling_harness.py tests/test_portfolio_harness_loop.py tests/test_scipy_milp_guidance.py -q -p no:cacheprovider
+..\.venv\Scripts\python.exe -X utf8 -m pytest tests/test_workbench_guidance_controls.py tests/test_portfolio_harness_loop.py tests/test_scipy_milp_guidance.py tests/test_verify_ortools_simple_mip.py -q -p no:cacheprovider
 ```
 
 可对已发布的四资产运行单独复核。在同一目录运行以下命令，将路径和结果 ID 替换为该次运行的值。变量名与示例不同，可用 `--amount-keys`、`--fee-keys` 按 S1 到 S4 指定，并指定银行余额、最大损失与全存银行收益的变量名；完整选项见 `--help`。核验器只读工作区，以退出码和 JSON 返回结论。

@@ -58,7 +58,7 @@ def _architecture_payload(*, execution_components, model_families, variables=Non
                 "item": "Evidence-bound result",
                 "value_ref": "result",
                 "status": "evidence_verified",
-                "evidence_ids": ["fact.input"],
+                "evidence_ids": ["estimate"] if "operator_graph" in execution_components else ["solve_indexed_model"],
             }],
         }],
     }

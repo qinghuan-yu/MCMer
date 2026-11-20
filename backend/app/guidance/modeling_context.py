@@ -26,6 +26,7 @@ architecture 包含 model_id 和一个 subproblems 条目。可解条目声明 e
 有限索引优化使用 indexed_linear_model，系统生成 optimization.milp；operator_graph 才声明 variables 和已注册的 operators。
 架构中的 variables 是图工件；决策变量在 edit_model 的顶层 variables 登记。混合模型可将图输出作为索引参数的 runtime_source。
 为基线和推荐路线注明 selection_metric 与 applicability_boundary。纯索引候选的 operator_node_ids 留空。最终答案引用实际输出和证据节点。
+引用索引求解结果时，从 indexed_solver_answer 读取输出名和证据节点名。图计算结果引用其生产节点。提交反馈会逐项列出无效引用和可用名称。
 只使用 available_operators 中的算子，inspect_operators 可查询合同。不要写 free-text equations、Python、solve.py 或预猜 fact_bindings 路径。
 已知事实与额外假设分别记录；假设需要替代情景和敏感性检查。题意歧义引用 problem_spec.json#uncertainties/<uncertainty_id>。
 若确实缺少输入、关系或可执行能力，提交 blocked 架构并登记 blocking_reason、missing_inputs、recovery_action、expected_outputs。

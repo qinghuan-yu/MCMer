@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import Field, TypeAdapter, ValidationError
 
 from app.guidance.contracts import ProblemSpec
+from app.guidance.evidence_consistency import InvalidAnswerEvidence
 from app.guidance.fact_coverage import FactCoverage, FactScope
 from app.guidance.generation_validation import (
     _validate_generation_draft_slice, _validate_indexed_constraint_stage, _validate_indexed_core_stage,
@@ -138,6 +139,9 @@ class MathWorkspace:
                 return {"ok": True, "model_id": model.model_id, "subproblem_id": self.subproblem_id,
                         "execution_status": model.subproblems[0].execution_status}
             raise ValueError(f"unknown modeling tool: {name!r}")
+        except InvalidAnswerEvidence as exc:
+            return {"ok": False, "error": str(exc), "invalid_evidence_ids": exc.invalid,
+                    "available_evidence_ids": exc.available}
         except ValidationError as exc:
             issues = exc.errors(include_url=False, include_input=False)
             detail = "; ".join(f"{'.'.join(map(str, item['loc']))}: {item['msg']}" for item in issues[:6])
