@@ -4,6 +4,11 @@
 
 CURRENT：没有待实施步骤。本轮真实额度已关闭。
 
+## 分支整理（2026-11-20）
+
+- [x] R12 本地和 GitHub 均保留三个分支。`main` 是默认分支，`main-before-modeling-workbench-20261120` 保留原主分支 `dfdc0e4`，`claude/agent-tool-data-accuracy-74b24e` 保留仍有未提交修改的工作区。整理时没有开放的 PR。
+- `Optimize-architecture`（含本地领先的一次提交）、`guider`、`modeling-core-refactor`、`math-agent-harness` 和 `deepseek-modeling-workbench` 的提交均已进入 `main`，旧分支已清理。`agent` 的五个未合并提交保存在 `03e9a33`。已逐项核对原分支提交仍可从保留分支或标签访问。[agent 归档标签](https://github.com/qinghuan-yu/MCMer/tree/archive/agent-figure-references)
+
 ## 发布后的修复与验收
 
 - [x] R9a 登记结论和报告引用实际执行节点，模型拟议描述保留明确标记。R6 工件离线重渲染得到原始界与对偶界 23、间隙 0、可行基线目标 0。原始报告保留，相关 98 项测试通过。
@@ -98,8 +103,7 @@ R10 单独授权使用 Anscombe 第一组公开数据进行一次直线拟合实
 
 ## 版本与证据位置
 
-- 封档分支：`math-agent-harness`。
-- 封档标签：`closeout-incomplete-2026-11-10`；标签所指提交为最终版本，避免在提交内自引用未知提交号。
+- 2026-11-10 的封档版本可通过标签 [closeout-incomplete-2026-11-10](https://github.com/qinghuan-yu/MCMer/tree/closeout-incomplete-2026-11-10) 访问，指向原 `math-agent-harness` 分支的提交 `047b228`。
 - 最后业务修复提交：`ba369e104542d1973cab96b26ec34eab6f8acd26`。
 - 两轮审计基线：`02c0b8f32d44cfeb8fc12b5d0b3502320ba5311f`。
 - 冻结任务及验收清单：`backend/closeout/portfolio_task.txt`、`portfolio_case.json`。
