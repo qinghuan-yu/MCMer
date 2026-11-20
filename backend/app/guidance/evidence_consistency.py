@@ -17,6 +17,7 @@ from app.guidance.model_ir import (
     SolvableModelIR,
 )
 from app.guidance.recovery import canonical_digest, workspace_file
+from app.guidance.output_references import split_output_reference
 
 
 MISSING_MARKERS = (
@@ -39,6 +40,10 @@ class InvalidAnswerEvidence(ValueError):
             f"final_answers.evidence_ids contains unknown or ambiguous references: {invalid!r}. "
             f"Use planned execution node IDs or registered source IDs declared by this subproblem: {self.available!r}."
         )
+
+
+class InvalidAnswerValue(ValueError):
+    pass
 
 
 def _ambiguous_evidence_ids(model_ir: ModelIR, profile: EvidenceProfile) -> set[str]:
@@ -69,6 +74,12 @@ def validate_planned_answer_evidence(model_ir: ModelIR, evidence_profile: dict) 
                 invalid[answer.id] = sorted(unknown)
         if invalid:
             raise InvalidAnswerEvidence(invalid, available)
+        outputs = sub.output_producers
+        for answer in sub.final_answers:
+            try:
+                split_output_reference(answer.value_ref, outputs)
+            except ValueError as exc:
+                raise InvalidAnswerValue(f"{answer.id}: {exc}; available outputs: {sorted(outputs)}") from exc
 
 
 def registered_result_source_ids(

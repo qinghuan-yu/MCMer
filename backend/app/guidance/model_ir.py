@@ -390,12 +390,16 @@ def declared_artifact_ids(
     *,
     variables: Sequence[VariableSpec],
     final_answers: Sequence[FinalAnswerSpec],
+    operator_outputs: Sequence[str] = (),
     indexed_parameters: Sequence[IndexedParameterSpec] = (),
 ) -> set[str]:
     """生成与编译共用工件声明语义；运行时引用只在参数合同形成后加入。"""
     artifacts = {variable.id for variable in variables}
     for answer in final_answers:
         artifacts.add(answer.value_ref)
+        matches = [output for output in operator_outputs if answer.value_ref.startswith(output + ".")]
+        if matches and answer.value_ref not in operator_outputs:
+            artifacts.add(max(matches, key=len))
         artifacts.update(answer.evidence_ids)
     artifacts.update(
         parameter.runtime_source.artifact_ref
@@ -485,6 +489,17 @@ class SolvableModelIR(IRModel):
                 else [component.solver_node_id]
             )
         ]
+
+    @property
+    def output_producers(self) -> dict[str, str]:
+        producers = {}
+        for component in self.execution_components:
+            if isinstance(component, OperatorGraphExecutionComponent):
+                for operator in component.operators:
+                    producers.update(dict.fromkeys(operator.outputs, operator.node_id))
+            else:
+                producers.update(dict.fromkeys(component.outputs, component.solver_node_id))
+        return producers
 
     @model_validator(mode="after")
     def require_baseline_and_recommended_models(self) -> SolvableModelIR:

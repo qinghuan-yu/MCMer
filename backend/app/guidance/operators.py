@@ -18,7 +18,7 @@ class OperatorContract(BaseModel):
 
 
 class OperatorPort(OperatorContract):
-    value_kind: Literal["scalar", "vector", "matrix", "table", "artifact"]
+    value_kind: Literal["scalar", "vector", "matrix", "table", "artifact", "mapping"]
     unit: str = Field(min_length=1, max_length=80)
 
 

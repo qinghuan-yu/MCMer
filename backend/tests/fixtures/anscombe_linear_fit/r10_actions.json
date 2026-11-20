@@ -1,0 +1,1117 @@
+[
+  {
+    "agent": "GuidanceDecomposerStructure",
+    "submission": {
+      "schema_version": "1.0",
+      "task_summary": "基于附件 observations.xlsx 的 observations 工作表，使用全部 11 对观测，对带截距的一元线性回归模型 y1 = intercept + slope × x1 进行普通最小二乘拟合，并以一份结果给出 intercept 与 slope 的数值（至少四位小数）及相应拟合说明。",
+      "subproblems": [
+        {
+          "id": "sp1",
+          "title": "Anscombe 第一组带截距普通最小二乘直线拟合",
+          "objective": "使用全部观测估计模型 y1 = intercept + slope × x1 的截距 intercept 和斜率 slope，并给出保留至少四位小数的数值结果及拟合说明。",
+          "description": "读取 observations.xlsx 中 observations 工作表的 x1 与 y1 两列，将 x1 作为自变量、y1 作为响应变量，按普通最小二乘法拟合带截距的一元线性直线。完成数据读取、模型建立、参数估计、结果验算和结果报告，并以一份结果同时给出截距和斜率。",
+          "brief_description": "对 11 对观测做带截距一元线性普通最小二乘拟合，输出 intercept 与 slope。",
+          "goals": [
+            "读取 observations.xlsx 的 observations 工作表，确认列名 x1、y1 并使用全部观测。",
+            "建立带截距的一元线性回归模型 y1 = intercept + slope × x1，明确普通最小二乘目标。",
+            "利用普通最小二乘方法估计截距 intercept 和斜率 slope。",
+            "检查观测数、设计矩阵与参数可估性，验算拟合结果或残差性质。",
+            "整理并报告 intercept 和 slope 的数值，均保留至少四位小数，并说明结果用于描述该组观测。"
+          ],
+          "inputs": [
+            "附件 observations.xlsx 的工作表 observations，列 x1 和 y1，共 11 对观测。",
+            "题面给定模型形式 y1 = intercept + slope × x1，其中 x1 为自变量、y1 为响应变量，模型带截距。"
+          ],
+          "outputs": [
+            "截距 intercept 的数值，保留至少四位小数。",
+            "斜率 slope 的数值，保留至少四位小数。",
+            "使用的观测范围与模型形式说明。",
+            "普通最小二乘拟合的参数估计结果及简要验算说明。"
+          ],
+          "constraints": [
+            "必须使用全部观测。",
+            "模型必须带截距。",
+            "x1 为自变量，y1 为响应变量。",
+            "以一份结果同时给出 intercept 和 slope。",
+            "intercept 和 slope 的数值均保留至少四位小数。",
+            "结果用于描述该组观测。"
+          ],
+          "assumptions": [
+            "observations 工作表中的 x1、y1 两列均为数值型且与模型变量一一对应。",
+            "第一行是列名，其余行为参与拟合的观测。",
+            "普通最小二乘采用最小化残差平方和的通常定义。"
+          ],
+          "candidate_directions": [
+            "使用一元线性回归普通最小二乘闭式公式估计 intercept 和 slope。",
+            "使用矩阵形式最小二乘求解带截距设计矩阵的回归系数。",
+            "拟合后通过残差平方和、拟合值或相关统计量进行结果验算。"
+          ],
+          "problem_type": "一元线性回归/普通最小二乘参数估计",
+          "depends_on_subproblem_ids": [],
+          "request_quote": "请使用全部观测，按普通最小二乘拟合带截距的直线 y1 = intercept + slope × x1。以一份结果给出截距 intercept 和斜率 slope 的数值，保留至少四位小数。结果用于描述这组观测。"
+        }
+      ],
+      "data_sources": [
+        {
+          "id": "ds_observations_xlsx",
+          "description": "附件 observations.xlsx 的 observations 工作表，列名为 x1、y1，记录 Anscombe 第一组的 11 对观测。",
+          "source_ref": "data/observations.xlsx"
+        }
+      ],
+      "source_requirements": [
+        {
+          "reference": "data/observations.xlsx",
+          "status": "available",
+          "matched_files": [
+            "data/observations.xlsx"
+          ],
+          "note": "已提供上传工作簿；工作表 observations 含 x1、y1 两列及 11 行观测。"
+        }
+      ]
+    }
+  },
+  {
+    "agent": "GuidanceDecomposerFacts",
+    "submission": {
+      "locked_facts": [
+        {
+          "fact_id": "lf_dataset_observations_schema",
+          "statement": "数据集级事实：附件 observations.xlsx 的 observations 工作表包含列 x1 与 y1，首行为列名，共 11 对观测；原始单元格完整保存在 EvidenceProfile/InputCatalog 登记的该 source_ref 中。",
+          "source_refs": [
+            "data/observations.xlsx",
+            "inputs/question/question.txt#paragraph-1"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "dataset.observations_xlsx.observations.schema_and_count",
+          "value": "x1,y1; n=11",
+          "unit": "dataset"
+        },
+        {
+          "fact_id": "lf_observations_count_11",
+          "statement": "observations 工作表共有 11 对参与建模的观测。",
+          "source_refs": [
+            "data/observations.xlsx",
+            "inputs/question/question.txt#paragraph-1"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "observations.count",
+          "value": 11,
+          "unit": "pairs"
+        },
+        {
+          "fact_id": "lf_all_observations_used",
+          "statement": "拟合必须使用 observations 工作表中的全部观测，不得剔除或抽样。",
+          "source_refs": [
+            "inputs/question/question.txt#paragraph-2",
+            "inputs/question/question.txt#paragraph-1"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "fit.sample_scope",
+          "value": "all observations",
+          "unit": ""
+        },
+        {
+          "fact_id": "lf_model_equation",
+          "statement": "拟合模型为带截距的一元线性直线 y1 = intercept + slope × x1。",
+          "source_refs": [
+            "inputs/question/question.txt#paragraph-2"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "model.equation",
+          "value": "y1 = intercept + slope * x1",
+          "unit": ""
+        },
+        {
+          "fact_id": "lf_variable_roles",
+          "statement": "x1 是自变量，y1 是响应变量。",
+          "source_refs": [
+            "inputs/question/question.txt#paragraph-1"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "variables.roles",
+          "value": "x1=independent; y1=response",
+          "unit": ""
+        },
+        {
+          "fact_id": "lf_model_has_intercept",
+          "statement": "模型必须带截距项，截距参数名为 intercept。",
+          "source_refs": [
+            "inputs/question/question.txt#paragraph-2"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "model.has_intercept",
+          "value": true,
+          "unit": "boolean"
+        },
+        {
+          "fact_id": "lf_estimation_ols",
+          "statement": "参数估计方法为普通最小二乘（OLS）。",
+          "source_refs": [
+            "inputs/question/question.txt#paragraph-2"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "estimation.method",
+          "value": "ordinary least squares",
+          "unit": ""
+        },
+        {
+          "fact_id": "lf_output_combined",
+          "statement": "最终须以一份结果同时给出截距 intercept 和斜率 slope 的数值。",
+          "source_refs": [
+            "inputs/question/question.txt#paragraph-2"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "output.combined_intercept_slope",
+          "value": true,
+          "unit": "boolean"
+        },
+        {
+          "fact_id": "lf_min_decimal_places",
+          "statement": "intercept 和 slope 的数值均保留至少四位小数。",
+          "source_refs": [
+            "inputs/question/question.txt#paragraph-2"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "output.decimal_places.minimum",
+          "value": 4,
+          "unit": "decimal places"
+        },
+        {
+          "fact_id": "lf_result_usage",
+          "statement": "拟合结果用于描述这组观测。",
+          "source_refs": [
+            "inputs/question/question.txt#paragraph-2"
+          ],
+          "subproblem_ids": [
+            "sp1"
+          ],
+          "semantic_key": "result.usage",
+          "value": "describe observations",
+          "unit": ""
+        }
+      ],
+      "uncertainties": []
+    }
+  },
+  {
+    "agent": "GuidanceModeler",
+    "actions": [
+      [
+        "inspect_model",
+        {
+          "schema": "architecture"
+        }
+      ],
+      [
+        "inspect_model",
+        {
+          "schema": "parameters"
+        }
+      ],
+      [
+        "inspect_operators",
+        {
+          "operator_ids": [
+            "data.inspect_file",
+            "data.read_excel_table",
+            "artifact.extract_vector",
+            "regression.basis_least_squares",
+            "diagnostics.leave_one_out",
+            "plot.xy_evidence"
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "agent": "GuidanceModeler",
+    "actions": [
+      [
+        "edit_model",
+        {
+          "architecture": {
+            "schema_version": "1.0",
+            "model_id": "anscombe1_ols_linear",
+            "subproblems": [
+              {
+                "execution_status": "solvable",
+                "subproblem_id": "sp1",
+                "objective": "Estimate intercept and slope in y1 = intercept + slope*x1 by ordinary least squares using all 11 observations, with a descriptive fit to this dataset.",
+                "execution_components": [
+                  "operator_graph"
+                ],
+                "variables": [
+                  {
+                    "id": "x1",
+                    "role": "observed",
+                    "symbol": "x1",
+                    "unit": "unspecified",
+                    "shape": [
+                      "n"
+                    ]
+                  },
+                  {
+                    "id": "y1",
+                    "role": "observed",
+                    "symbol": "y1",
+                    "unit": "unspecified",
+                    "shape": [
+                      "n"
+                    ]
+                  },
+                  {
+                    "id": "intercept",
+                    "role": "unknown_parameter",
+                    "symbol": "beta_0",
+                    "unit": "unspecified"
+                  },
+                  {
+                    "id": "slope",
+                    "role": "unknown_parameter",
+                    "symbol": "beta_1",
+                    "unit": "unspecified"
+                  },
+                  {
+                    "id": "fit",
+                    "role": "derived",
+                    "symbol": "OLS_fit",
+                    "unit": "unspecified"
+                  },
+                  {
+                    "id": "loo_diagnostic",
+                    "role": "derived",
+                    "symbol": "LOO_diagnostic",
+                    "unit": "unspecified"
+                  }
+                ],
+                "data": [
+                  {
+                    "id": "data_obs",
+                    "source_ref": "data/observations.xlsx",
+                    "fields": {
+                      "x1": "x1 (independent variable, numeric)",
+                      "y1": "y1 (response variable, numeric)"
+                    },
+                    "unit_overrides": {}
+                  }
+                ],
+                "operators": [
+                  {
+                    "node_id": "inspect_workbook",
+                    "operator_id": "data.inspect_file",
+                    "inputs": {
+                      "source": "data/observations.xlsx"
+                    },
+                    "outputs": [
+                      "inspection"
+                    ],
+                    "parameters": {
+                      "preview_rows": 12,
+                      "preview_columns": 2,
+                      "preview_sheets": 1
+                    },
+                    "source_fact_ids": [
+                      "lf_dataset_observations_schema",
+                      "lf_observations_count_11"
+                    ]
+                  },
+                  {
+                    "node_id": "read_observations",
+                    "operator_id": "data.read_excel_table",
+                    "inputs": {
+                      "source": "data/observations.xlsx"
+                    },
+                    "outputs": [
+                      "observations_table"
+                    ],
+                    "parameters": {
+                      "sheet": "observations",
+                      "header_row": 0,
+                      "cell_range": "A1:B12",
+                      "columns": [
+                        "x1",
+                        "y1"
+                      ],
+                      "trim_trailing_empty_rows": true
+                    },
+                    "source_fact_ids": [
+                      "lf_dataset_observations_schema",
+                      "lf_observations_count_11",
+                      "lf_all_observations_used",
+                      "lf_variable_roles"
+                    ]
+                  },
+                  {
+                    "node_id": "extract_x1",
+                    "operator_id": "artifact.extract_vector",
+                    "inputs": {
+                      "artifact": "observations_table"
+                    },
+                    "outputs": [
+                      "x1"
+                    ],
+                    "parameters": {
+                      "path": "x1"
+                    },
+                    "source_fact_ids": [
+                      "lf_variable_roles"
+                    ]
+                  },
+                  {
+                    "node_id": "extract_y1",
+                    "operator_id": "artifact.extract_vector",
+                    "inputs": {
+                      "artifact": "observations_table"
+                    },
+                    "outputs": [
+                      "y1"
+                    ],
+                    "parameters": {
+                      "path": "y1"
+                    },
+                    "source_fact_ids": [
+                      "lf_variable_roles"
+                    ]
+                  },
+                  {
+                    "node_id": "fit_ols",
+                    "operator_id": "regression.basis_least_squares",
+                    "inputs": {
+                      "x": "x1",
+                      "y": "y1"
+                    },
+                    "outputs": [
+                      "fit"
+                    ],
+                    "parameters": {
+                      "basis": [
+                        {
+                          "kind": "constant"
+                        },
+                        {
+                          "kind": "identity"
+                        }
+                      ]
+                    },
+                    "source_fact_ids": [
+                      "lf_model_equation",
+                      "lf_model_has_intercept",
+                      "lf_estimation_ols",
+                      "lf_all_observations_used",
+                      "lf_output_combined",
+                      "lf_min_decimal_places",
+                      "lf_result_usage"
+                    ]
+                  },
+                  {
+                    "node_id": "loo_diag",
+                    "operator_id": "diagnostics.leave_one_out",
+                    "inputs": {
+                      "x": "x1",
+                      "y": "y1"
+                    },
+                    "outputs": [
+                      "loo_diagnostic"
+                    ],
+                    "parameters": {
+                      "zero_intercept": false
+                    },
+                    "source_fact_ids": [
+                      "lf_estimation_ols",
+                      "lf_all_observations_used"
+                    ]
+                  }
+                ],
+                "assumptions": [
+                  {
+                    "id": "asm_numeric_complete",
+                    "statement": "The observations worksheet has x1 and y1 as numeric complete columns for all 11 data rows after the header row.",
+                    "basis": "standard_modeling_convention",
+                    "source_refs": [
+                      "data/observations.xlsx#observations",
+                      "inputs/question/question.txt#paragraph-1"
+                    ],
+                    "affected_model_elements": [
+                      "read_observations",
+                      "x1",
+                      "y1",
+                      "fit_ols"
+                    ],
+                    "alternative_scenarios": [
+                      "If non-numeric or missing entries are found, perform documented data-quality review before fitting."
+                    ],
+                    "sensitivity_checks": [
+                      "Verify row count equals 11 and profile missing counts are zero before fitting."
+                    ]
+                  },
+                  {
+                    "id": "asm_ols_rss",
+                    "statement": "Ordinary least squares minimizes the sum of squared residuals over the full 11-observation sample with a constant and identity basis, without regularization or robust loss.",
+                    "basis": "standard_modeling_convention",
+                    "source_refs": [
+                      "inputs/question/question.txt#paragraph-2",
+                      "lf_estimation_ols"
+                    ],
+                    "affected_model_elements": [
+                      "fit_ols",
+                      "intercept",
+                      "slope"
+                    ],
+                    "alternative_scenarios": [
+                      "A robust or regularized regression would be an alternative if influential outliers or shrinkage were desired."
+                    ],
+                    "sensitivity_checks": [
+                      "Compute leave-one-out intercept and slope estimates and compare their stability."
+                    ]
+                  },
+                  {
+                    "id": "asm_descriptive_scope",
+                    "statement": "The fitted line is descriptive for this observation set and is not intended as a causal or out-of-sample predictive model.",
+                    "basis": "standard_modeling_convention",
+                    "source_refs": [
+                      "lf_result_usage",
+                      "inputs/question/question.txt#paragraph-2"
+                    ],
+                    "affected_model_elements": [
+                      "fit_ols",
+                      "final_intercept",
+                      "final_slope"
+                    ],
+                    "alternative_scenarios": [
+                      "For prediction, use a separate train/test or rolling validation design."
+                    ],
+                    "sensitivity_checks": [
+                      "Report the observed x1 range together with the descriptive interpretation."
+                    ]
+                  }
+                ],
+                "candidate_models": [
+                  {
+                    "id": "cm_ols_baseline",
+                    "role": "baseline",
+                    "operator_node_ids": [
+                      "fit_ols"
+                    ],
+                    "selection_metric": "OLS residual sum of squares (minimized)",
+                    "applicability_boundary": "Full-rank constant+identity OLS with all 11 complete observations; coefficients are descriptive for this dataset."
+                  },
+                  {
+                    "id": "cm_ols_loo_recommended",
+                    "role": "recommended",
+                    "operator_node_ids": [
+                      "fit_ols",
+                      "loo_diag"
+                    ],
+                    "selection_metric": "OLS residual sum of squares plus leave-one-out intercept/slope stability",
+                    "applicability_boundary": "Same OLS specification; leave-one-out is a diagnostic only and does not alter the reported full-sample coefficients."
+                  }
+                ],
+                "validation": {
+                  "model_families": [
+                    "regression"
+                  ],
+                  "identifiability_checks": [
+                    "n=11 exceeds the two parameters; the design matrix [1, x1] must have full column rank, requiring x1 not to be constant."
+                  ],
+                  "evidence_checks": [
+                    "Confirm workbook SHA256 and observations sheet dimensions from inspect_workbook.",
+                    "Confirm read_observations uses header x1,y1 and exactly 11 data rows with no missing numeric values.",
+                    "Confirm named_coefficients contains both intercept and slope."
+                  ],
+                  "robustness_checks": [
+                    "Report leave-one-out intercept and slope stability from loo_diag.",
+                    "Report OLS residual sum of squares and R-squared diagnostics from fit_ols as descriptive checks."
+                  ]
+                },
+                "final_answers": [
+                  {
+                    "id": "final_intercept",
+                    "item": "intercept (at least four decimal places)",
+                    "value_ref": "fit.named_coefficients.intercept",
+                    "status": "candidate_design",
+                    "evidence_ids": [
+                      "fit_ols"
+                    ]
+                  },
+                  {
+                    "id": "final_slope",
+                    "item": "slope (at least four decimal places)",
+                    "value_ref": "fit.named_coefficients.slope",
+                    "status": "candidate_design",
+                    "evidence_ids": [
+                      "fit_ols"
+                    ]
+                  },
+                  {
+                    "id": "final_combined_ols",
+                    "item": "Combined OLS result: intercept and slope",
+                    "value_ref": "fit.named_coefficients",
+                    "status": "candidate_design",
+                    "evidence_ids": [
+                      "fit_ols"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "agent": "GuidanceModeler",
+    "actions": [
+      [
+        "edit_model",
+        {
+          "architecture": {
+            "schema_version": "1.0",
+            "model_id": "anscombe1_ols_linear",
+            "subproblems": [
+              {
+                "execution_status": "solvable",
+                "subproblem_id": "sp1",
+                "objective": "Estimate intercept and slope in y1 = intercept + slope*x1 by ordinary least squares using all 11 observations, with a descriptive fit to this dataset.",
+                "execution_components": [
+                  "operator_graph"
+                ],
+                "variables": [
+                  {
+                    "id": "inspection",
+                    "role": "derived",
+                    "symbol": "file_inspection",
+                    "unit": "unspecified"
+                  },
+                  {
+                    "id": "observations_table",
+                    "role": "derived",
+                    "symbol": "observations_table",
+                    "unit": "unspecified",
+                    "shape": [
+                      "n",
+                      "2"
+                    ]
+                  },
+                  {
+                    "id": "x1",
+                    "role": "observed",
+                    "symbol": "x1",
+                    "unit": "unspecified",
+                    "shape": [
+                      "n"
+                    ]
+                  },
+                  {
+                    "id": "y1",
+                    "role": "observed",
+                    "symbol": "y1",
+                    "unit": "unspecified",
+                    "shape": [
+                      "n"
+                    ]
+                  },
+                  {
+                    "id": "intercept",
+                    "role": "unknown_parameter",
+                    "symbol": "beta_0",
+                    "unit": "unspecified"
+                  },
+                  {
+                    "id": "slope",
+                    "role": "unknown_parameter",
+                    "symbol": "beta_1",
+                    "unit": "unspecified"
+                  },
+                  {
+                    "id": "fit",
+                    "role": "derived",
+                    "symbol": "OLS_fit",
+                    "unit": "unspecified"
+                  },
+                  {
+                    "id": "loo_diagnostic",
+                    "role": "derived",
+                    "symbol": "LOO_diagnostic",
+                    "unit": "unspecified"
+                  }
+                ],
+                "data": [
+                  {
+                    "id": "data_obs",
+                    "source_ref": "data/observations.xlsx",
+                    "fields": {
+                      "x1": "x1 (independent variable, numeric)",
+                      "y1": "y1 (response variable, numeric)"
+                    },
+                    "unit_overrides": {}
+                  }
+                ],
+                "operators": [
+                  {
+                    "node_id": "inspect_workbook",
+                    "operator_id": "data.inspect_file",
+                    "inputs": {
+                      "source": "data/observations.xlsx"
+                    },
+                    "outputs": [
+                      "inspection"
+                    ],
+                    "parameters": {
+                      "preview_rows": 12,
+                      "preview_columns": 2,
+                      "preview_sheets": 1
+                    },
+                    "source_fact_ids": [
+                      "lf_dataset_observations_schema",
+                      "lf_observations_count_11"
+                    ]
+                  },
+                  {
+                    "node_id": "read_observations",
+                    "operator_id": "data.read_excel_table",
+                    "inputs": {
+                      "source": "data/observations.xlsx"
+                    },
+                    "outputs": [
+                      "observations_table"
+                    ],
+                    "parameters": {
+                      "sheet": "observations",
+                      "header_row": 0,
+                      "cell_range": "A1:B12",
+                      "columns": [
+                        "x1",
+                        "y1"
+                      ],
+                      "trim_trailing_empty_rows": true
+                    },
+                    "source_fact_ids": [
+                      "lf_dataset_observations_schema",
+                      "lf_observations_count_11",
+                      "lf_all_observations_used",
+                      "lf_variable_roles"
+                    ]
+                  },
+                  {
+                    "node_id": "extract_x1",
+                    "operator_id": "artifact.extract_vector",
+                    "inputs": {
+                      "artifact": "observations_table"
+                    },
+                    "outputs": [
+                      "x1"
+                    ],
+                    "parameters": {
+                      "path": "x1"
+                    },
+                    "source_fact_ids": [
+                      "lf_variable_roles"
+                    ]
+                  },
+                  {
+                    "node_id": "extract_y1",
+                    "operator_id": "artifact.extract_vector",
+                    "inputs": {
+                      "artifact": "observations_table"
+                    },
+                    "outputs": [
+                      "y1"
+                    ],
+                    "parameters": {
+                      "path": "y1"
+                    },
+                    "source_fact_ids": [
+                      "lf_variable_roles"
+                    ]
+                  },
+                  {
+                    "node_id": "fit_ols",
+                    "operator_id": "regression.basis_least_squares",
+                    "inputs": {
+                      "x": "x1",
+                      "y": "y1"
+                    },
+                    "outputs": [
+                      "fit"
+                    ],
+                    "parameters": {
+                      "basis": [
+                        {
+                          "kind": "constant"
+                        },
+                        {
+                          "kind": "identity"
+                        }
+                      ]
+                    },
+                    "source_fact_ids": [
+                      "lf_model_equation",
+                      "lf_model_has_intercept",
+                      "lf_estimation_ols",
+                      "lf_all_observations_used",
+                      "lf_output_combined",
+                      "lf_min_decimal_places",
+                      "lf_result_usage"
+                    ]
+                  },
+                  {
+                    "node_id": "loo_diag",
+                    "operator_id": "diagnostics.leave_one_out",
+                    "inputs": {
+                      "x": "x1",
+                      "y": "y1"
+                    },
+                    "outputs": [
+                      "loo_diagnostic"
+                    ],
+                    "parameters": {
+                      "zero_intercept": false
+                    },
+                    "source_fact_ids": [
+                      "lf_estimation_ols",
+                      "lf_all_observations_used"
+                    ]
+                  }
+                ],
+                "assumptions": [
+                  {
+                    "id": "asm_numeric_complete",
+                    "statement": "The observations worksheet has x1 and y1 as numeric complete columns for all 11 data rows after the header row.",
+                    "basis": "standard_modeling_convention",
+                    "source_refs": [
+                      "data/observations.xlsx#observations",
+                      "inputs/question/question.txt#paragraph-1"
+                    ],
+                    "affected_model_elements": [
+                      "read_observations",
+                      "x1",
+                      "y1",
+                      "fit_ols"
+                    ],
+                    "alternative_scenarios": [
+                      "If non-numeric or missing entries are found, perform documented data-quality review before fitting."
+                    ],
+                    "sensitivity_checks": [
+                      "Verify row count equals 11 and profile missing counts are zero before fitting."
+                    ]
+                  },
+                  {
+                    "id": "asm_ols_rss",
+                    "statement": "Ordinary least squares minimizes the sum of squared residuals over the full 11-observation sample with a constant and identity basis, without regularization or robust loss.",
+                    "basis": "standard_modeling_convention",
+                    "source_refs": [
+                      "inputs/question/question.txt#paragraph-2",
+                      "lf_estimation_ols"
+                    ],
+                    "affected_model_elements": [
+                      "fit_ols",
+                      "intercept",
+                      "slope"
+                    ],
+                    "alternative_scenarios": [
+                      "A robust or regularized regression would be an alternative if influential outliers or shrinkage were desired."
+                    ],
+                    "sensitivity_checks": [
+                      "Compute leave-one-out intercept and slope estimates and compare their stability."
+                    ]
+                  },
+                  {
+                    "id": "asm_descriptive_scope",
+                    "statement": "The fitted line is descriptive for this observation set and is not intended as a causal or out-of-sample predictive model.",
+                    "basis": "standard_modeling_convention",
+                    "source_refs": [
+                      "lf_result_usage",
+                      "inputs/question/question.txt#paragraph-2"
+                    ],
+                    "affected_model_elements": [
+                      "fit_ols",
+                      "final_intercept",
+                      "final_slope"
+                    ],
+                    "alternative_scenarios": [
+                      "For prediction, use a separate train/test or rolling validation design."
+                    ],
+                    "sensitivity_checks": [
+                      "Report the observed x1 range together with the descriptive interpretation."
+                    ]
+                  }
+                ],
+                "candidate_models": [
+                  {
+                    "id": "cm_ols_baseline",
+                    "role": "baseline",
+                    "operator_node_ids": [
+                      "fit_ols"
+                    ],
+                    "selection_metric": "OLS residual sum of squares (minimized)",
+                    "applicability_boundary": "Full-rank constant+identity OLS with all 11 complete observations; coefficients are descriptive for this dataset."
+                  },
+                  {
+                    "id": "cm_ols_loo_recommended",
+                    "role": "recommended",
+                    "operator_node_ids": [
+                      "fit_ols",
+                      "loo_diag"
+                    ],
+                    "selection_metric": "OLS residual sum of squares plus leave-one-out intercept/slope stability",
+                    "applicability_boundary": "Same OLS specification; leave-one-out is a diagnostic only and does not alter the reported full-sample coefficients."
+                  }
+                ],
+                "validation": {
+                  "model_families": [
+                    "regression"
+                  ],
+                  "identifiability_checks": [
+                    "n=11 exceeds the two parameters; the design matrix [1, x1] must have full column rank, requiring x1 not to be constant."
+                  ],
+                  "evidence_checks": [
+                    "Confirm workbook SHA256 and observations sheet dimensions from inspect_workbook.",
+                    "Confirm read_observations uses header x1,y1 and exactly 11 data rows with no missing numeric values.",
+                    "Confirm named_coefficients contains both intercept and slope."
+                  ],
+                  "robustness_checks": [
+                    "Report leave-one-out intercept and slope stability from loo_diag.",
+                    "Report OLS residual sum of squares and R-squared diagnostics from fit_ols as descriptive checks."
+                  ]
+                },
+                "final_answers": [
+                  {
+                    "id": "final_intercept",
+                    "item": "intercept (at least four decimal places)",
+                    "value_ref": "fit.named_coefficients.intercept",
+                    "status": "candidate_design",
+                    "evidence_ids": [
+                      "fit_ols"
+                    ]
+                  },
+                  {
+                    "id": "final_slope",
+                    "item": "slope (at least four decimal places)",
+                    "value_ref": "fit.named_coefficients.slope",
+                    "status": "candidate_design",
+                    "evidence_ids": [
+                      "fit_ols"
+                    ]
+                  },
+                  {
+                    "id": "final_combined_ols",
+                    "item": "Combined OLS result: intercept and slope",
+                    "value_ref": "fit.named_coefficients",
+                    "status": "candidate_design",
+                    "evidence_ids": [
+                      "fit_ols"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "agent": "GuidanceModeler",
+    "actions": [
+      [
+        "inspect_model",
+        {
+          "schema": "architecture"
+        }
+      ],
+      [
+        "inspect_model",
+        {}
+      ]
+    ]
+  },
+  {
+    "agent": "GuidanceModeler",
+    "actions": [
+      [
+        "submit_model",
+        {}
+      ]
+    ]
+  },
+  {
+    "agent": "GuidanceModelReviewer_sp1",
+    "submission": {
+      "subproblem_id": "sp1",
+      "status": "approved",
+      "assessment_status": "reviewed",
+      "assumption_checks": [
+        {
+          "assumption_id": "asm_numeric_complete",
+          "status": "accepted",
+          "rationale": "The source defines x1 and y1 as the worksheet columns, and the registered workbook evidence shows numeric sample cells in sheet observations with max_row 12 and columns x1,y1. The read/extract/fit elements depend on this numeric-complete interpretation, so it is appropriate to accept for the default data path.",
+          "alternative_scenario_coverage": "The stated fallback for nonnumeric or missing entries is a pre-fit data-quality review; no separate review operator is implemented, so if violations existed the fit would need to be gated rather than run blindly. The registered profile and sample values support the default branch.",
+          "sensitivity_check_coverage": "inspect_workbook and read_observations cover the sheet, headers, and A1:B12 range; validation evidence_checks require exactly 11 data rows and no missing numeric values. There is no dedicated missing-count operator, but the declared check is aligned with the reader and inspection outputs."
+        },
+        {
+          "assumption_id": "asm_ols_rss",
+          "status": "accepted",
+          "rationale": "fit_ols uses regression.basis_least_squares with basis constant+identity, no regularization, and no robust loss on x1,y1, which is the ordinary least squares model minimizing residual sum of squares over all observations. The intercept and identity coefficients correspond to intercept and slope.",
+          "alternative_scenario_coverage": "Robust or regularized regression is declared only as a contextual alternative. It is not selected and would require a different operator/loss; the required task explicitly asks for ordinary least squares, so the default OLS branch is correct.",
+          "sensitivity_check_coverage": "loo_diag with zero_intercept false computes leave-one-out intercept and slope estimates for stability checking. It is diagnostic only and does not replace the full-sample fit_ols coefficients that should be reported."
+        },
+        {
+          "assumption_id": "asm_descriptive_scope",
+          "status": "accepted",
+          "rationale": "The problem statement says the result is used to describe this observation set. The model objective and this assumption both keep the interpretation descriptive for the full Anscombe first-group sample, not causal or out-of-sample predictive.",
+          "alternative_scenario_coverage": "A prediction or train/test alternative is declared but not implemented, and it is not required by the descriptive task. Using this line for prediction would be a separate modeling objective with different validation.",
+          "sensitivity_check_coverage": "The model encodes descriptive scope but does not contain an explicit x1-range reporting operator or final-answer range item. The range could be derived from the extracted x1 vector at reporting time; as a mathematical formulation, the descriptive assumption itself is supported by lf_result_usage."
+        }
+      ],
+      "blocking_issues": [],
+      "required_revisions": [],
+      "revision_checks": [],
+      "source_conflicts": [],
+      "mathematical_checks": [
+        {
+          "requirement_id": "lf_dataset_observations_schema",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/0",
+            "/execution_components/0/operators/1",
+            "/execution_components/0/operators/1/parameters/sheet",
+            "/execution_components/0/operators/1/parameters/columns",
+            "/execution_components/0/operators/1/parameters/cell_range"
+          ],
+          "rationale": "inspect_workbook targets data/observations.xlsx; read_observations selects sheet observations, columns x1 and y1, with cell range A1:B12. This matches the required worksheet schema and first-row column-name convention."
+        },
+        {
+          "requirement_id": "lf_observations_count_11",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/1/parameters/cell_range",
+            "/execution_components/0/operators/1/parameters/header_row",
+            "/execution_components/0/operators/0/parameters/preview_rows"
+          ],
+          "rationale": "The read range A1:B12 with the first row used as column names yields 11 data rows. The inspection preview rows setting is 12, and the registered workbook profile has max_row 12, consistent with one header plus 11 observations."
+        },
+        {
+          "requirement_id": "lf_all_observations_used",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/1",
+            "/execution_components/0/operators/4",
+            "/execution_components/0/operators/5"
+          ],
+          "rationale": "read_observations reads the full A1:B12 table; extract_x1 and extract_y1 pass the complete x1,y1 vectors to fit_ols, and loo_diag also uses the full vectors. No row filter, exclusion, or sampling parameter appears in the operator graph; leave-one-out is a diagnostic and does not replace the full-sample reported fit."
+        },
+        {
+          "requirement_id": "lf_model_equation",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/4/parameters/basis",
+            "/execution_components/0/operators/4/inputs/x",
+            "/execution_components/0/operators/4/inputs/y"
+          ],
+          "rationale": "fit_ols is applied with x=x1 and y=y1 and a basis containing a constant component and an identity component on x1. Thus the computational model is a single straight line y1 = intercept + slope*x1, with the constant coefficient as intercept and the identity coefficient as slope."
+        },
+        {
+          "requirement_id": "lf_variable_roles",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/1/parameters/columns",
+            "/execution_components/0/operators/2",
+            "/execution_components/0/operators/3",
+            "/execution_components/0/operators/4/inputs/x",
+            "/execution_components/0/operators/4/inputs/y"
+          ],
+          "rationale": "The reader identifies columns x1 and y1; extract_x1 supplies x1 to the fit as the x input, while extract_y1 supplies y1 as the y input. This makes x1 the independent variable and y1 the response variable correctly."
+        },
+        {
+          "requirement_id": "lf_model_has_intercept",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/4/parameters/basis"
+          ],
+          "rationale": "The fit_ols basis explicitly includes a constant component before the identity x1 component. fit_ols has no zero-intercept option, and the leave-one-out diagnostic also uses zero_intercept false, so the fitted line has an intercept parameter."
+        },
+        {
+          "requirement_id": "lf_estimation_ols",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/4",
+            "/execution_components/0/operators/4/parameters/basis",
+            "/execution_components/0/operators/5"
+          ],
+          "rationale": "regression.basis_least_squares with constant+identity basis and no regularization or robust loss is ordinary least squares for the specified linear model. It receives the full x1,y1 vectors, and the LOO diagnostic also uses an intercept-containing least-squares model without changing the full-sample reported coefficients."
+        },
+        {
+          "requirement_id": "lf_output_combined",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/4"
+          ],
+          "rationale": "fit_ols produces one fit object whose named coefficients correspond to the constant and identity basis terms. The combined final answer references fit.named_coefficients for both intercept and slope together, satisfying the requirement for one combined result."
+        },
+        {
+          "requirement_id": "lf_min_decimal_places",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/4"
+          ],
+          "rationale": "fit_ols returns full-precision coefficient values for intercept and slope; the reporting layer specifies at least four decimal places without requiring rounding inside the OLS computation. No full-precision loss or conflicting rounding constraint is introduced."
+        },
+        {
+          "requirement_id": "lf_result_usage",
+          "status": "passed",
+          "model_paths": [
+            "/assumptions/2",
+            "/execution_components/0/operators/4"
+          ],
+          "rationale": "The model objective is a descriptive fit to this observation set, and asm_descriptive_scope states the fitted line is descriptive rather than causal or out-of-sample predictive. The full-sample OLS coefficients from fit_ols are therefore used for the required descriptive purpose."
+        },
+        {
+          "requirement_id": "$objective",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/4",
+            "/execution_components/0/operators/4/parameters/basis",
+            "/execution_components/0/operators/4/inputs/x",
+            "/execution_components/0/operators/4/inputs/y",
+            "/assumptions/1",
+            "/assumptions/2"
+          ],
+          "rationale": "The objective asks for intercept and slope in y1 = intercept + slope*x1 by OLS using all 11 observations and a descriptive interpretation. This is implemented by fit_ols with x1 as predictor, y1 as response, constant+identity basis, full-sample least squares, no regularization, and descriptive scope encoded in the assumptions."
+        },
+        {
+          "requirement_id": "$formulation",
+          "status": "passed",
+          "model_paths": [
+            "/execution_components/0/operators/1",
+            "/execution_components/0/operators/2",
+            "/execution_components/0/operators/3",
+            "/execution_components/0/operators/4",
+            "/execution_components/0/operators/5",
+            "/assumptions/0",
+            "/assumptions/1"
+          ],
+          "rationale": "The formulation domain is the full A1:B12 observations table with header x1,y1; decision parameters are the intercept and identity-basis coefficient for slope; total sample size is 11, exceeding the two parameters; full column rank requires nonconstant x1, which the registered sample x1 values already demonstrate by containing distinct values such as 10,8,13,9. The OLS objective, all-observation scope, and intercept basis are explicit. The LOO diagnostic does not alter the reported full-sample coefficients, and no mandatory constraint or output relation is omitted for the core task."
+        }
+      ]
+    }
+  }
+]

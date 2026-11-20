@@ -19,6 +19,7 @@ from app.guidance.model_ir import (
 )
 from app.guidance.model_ir_compiler import CompilationResult, ExecutionPlan
 from app.guidance.operators import OperatorRegistry
+from app.guidance.output_references import artifact_field, split_output_reference, supporting_output_ref
 from app.guidance.recovery import (
     RecoveryCheckpoint, canonical_digest, file_snapshots, generated_figure_paths,
     invalidate_stage_outputs, model_source_snapshots,
@@ -47,6 +48,7 @@ class OperatorExecutionManifest(ExecutionContract):
     source_files_sha256: dict[str, str | None]
     input_files_sha256: dict[str, str | None]
     output_files_sha256: dict[str, str | None]
+    output_value_sha256: dict[str, str] = Field(default_factory=dict)
     executed_node_ids: list[str]
     reused_node_ids: list[str] = Field(default_factory=list)
     generated_files: list[str]
@@ -68,8 +70,9 @@ class OperatorGraphExecutor:
             raise ValueError("a compiled execution plan is required")
         work_dir.mkdir(parents=True, exist_ok=True)
         invalidate_stage_outputs(work_dir, "result_verification")
-        values: dict[str, object] = {}
-        artifact_nodes: dict[str, str] = {}
+        values_by_subproblem: dict[str, dict[str, object]] = {}
+        nodes_by_subproblem: dict[str, dict[str, str]] = {}
+        projected_digests: dict[tuple[str, str], str] = {}
         executed: list[str] = []
         reused: list[str] = []
         node_fingerprints: dict[str, str] = {}
@@ -81,6 +84,8 @@ class OperatorGraphExecutor:
         failed_node_ids: set[str] = set()
 
         for node in execution_plan.graph.nodes:
+            values = values_by_subproblem.setdefault(node.subproblem_id, {})
+            artifact_nodes = nodes_by_subproblem.setdefault(node.subproblem_id, {})
             failed_dependencies = [
                 dep for dep in node.dependencies if dep in failed_node_ids
             ]
@@ -150,6 +155,8 @@ class OperatorGraphExecutor:
                 for artifact, port_name in zip(node.outputs, output_ports):
                     values[artifact] = raw_outputs[port_name]
                     artifact_nodes[artifact] = node.node_id
+                    if any(a.value_ref.startswith(artifact + ".") for a in subproblems[node.subproblem_id].final_answers):
+                        projected_digests[node.subproblem_id, artifact] = canonical_digest(raw_outputs[port_name])
                 executed.append(node.node_id)
             except Exception as error:
                 failure = OperatorExecutionFailure(
@@ -166,26 +173,27 @@ class OperatorGraphExecutor:
         first_failure = next(iter(failures_by_subproblem.values()), None)
         parameter_registry = _parameter_registry(
             model_ir,
-            values,
-            artifact_nodes,
+            values_by_subproblem,
+            nodes_by_subproblem,
             failed_subproblem_ids=set(failures_by_subproblem),
         )
         result_registry = _result_registry(
             model_ir,
-            values,
-            artifact_nodes,
+            values_by_subproblem,
+            nodes_by_subproblem,
             failures_by_subproblem=failures_by_subproblem,
         )
         has_verified = bool(result_registry["verified_results"])
-        publishable_node_ids = {
-            node.node_id for node in execution_plan.graph.nodes
-            if node.subproblem_id not in failures_by_subproblem
-        }
+        output_value_sha256 = {}
+        for row in result_registry["verified_results"]:
+            if "support_ref" in row:
+                sid = row["subproblem_id"]
+                output, _ = split_output_reference(row["value_ref"], nodes_by_subproblem[sid])
+                output_value_sha256[row["support_ref"]] = projected_digests[sid, output]
         figures = [
             value
-            for artifact, value in values.items()
-            if artifact_nodes.get(artifact) in publishable_node_ids
-            and isinstance(value, dict)
+            for sid, outputs in values_by_subproblem.items() if sid not in failures_by_subproblem
+            for value in outputs.values() if isinstance(value, dict)
             and {"path", "role", "linked_result_ids"} <= set(value)
         ]
         figure_registry = {
@@ -224,6 +232,7 @@ class OperatorGraphExecutor:
             output_files_sha256=file_snapshots(work_dir, [
                 name for name in generated_files if name not in {"execution_manifest.json", "execution_plan.json"}
             ] + [figure["path"] for figure in figures]),
+            output_value_sha256=output_value_sha256,
             executed_node_ids=list(executed),
             reused_node_ids=reused,
             generated_files=generated_files,
@@ -310,8 +319,8 @@ def _resolve_input(reference: str, values: dict[str, object]) -> object:
 
 def _parameter_registry(
     model_ir: ModelIR,
-    values: dict[str, object],
-    artifact_nodes: dict[str, str],
+    values_by_subproblem: dict[str, dict[str, object]],
+    nodes_by_subproblem: dict[str, dict[str, str]],
     *,
     failed_subproblem_ids: set[str] | None = None,
 ) -> dict:
@@ -323,6 +332,8 @@ def _parameter_registry(
             or subproblem.subproblem_id in blocked_subproblems
         ):
             continue
+        values = values_by_subproblem.get(subproblem.subproblem_id, {})
+        artifact_nodes = nodes_by_subproblem.get(subproblem.subproblem_id, {})
         for component in subproblem.execution_components:
             if not isinstance(component, OperatorGraphExecutionComponent):
                 continue
@@ -345,8 +356,8 @@ def _parameter_registry(
 
 def _result_registry(
     model_ir: ModelIR,
-    values: dict[str, object],
-    artifact_nodes: dict[str, str],
+    values_by_subproblem: dict[str, dict[str, object]],
+    nodes_by_subproblem: dict[str, dict[str, str]],
     *,
     failures_by_subproblem: dict[str, OperatorExecutionFailure] | None = None,
 ) -> dict:
@@ -354,14 +365,7 @@ def _result_registry(
     verified: list[dict] = []
     blocked: list[dict] = []
     claims: list[dict] = []
-    variables = {
-        variable.id: variable
-        for subproblem in model_ir.subproblems
-        if isinstance(subproblem, SolvableModelIR)
-        for component in subproblem.execution_components
-        if isinstance(component, OperatorGraphExecutionComponent)
-        for variable in component.variables
-    }
+    supporting_outputs: dict[str, dict[str, dict]] = {}
     for subproblem in model_ir.subproblems:
         if isinstance(subproblem, BlockedModelIR):
             blocked.append({
@@ -400,28 +404,47 @@ def _result_registry(
         assumption_statements = [
             assumption.statement for assumption in subproblem.assumptions
         ]
+        sid = subproblem.subproblem_id
+        values = values_by_subproblem.get(sid, {})
+        artifact_nodes = nodes_by_subproblem.get(sid, {})
+        variables = {item.id: item for component in subproblem.execution_components
+                     if isinstance(component, OperatorGraphExecutionComponent) for item in component.variables}
+        whole_answers = {answer.value_ref: answer.id for answer in subproblem.final_answers if answer.value_ref in values}
         for answer in subproblem.final_answers:
-            if answer.value_ref not in values:
+            try:
+                output, path = split_output_reference(answer.value_ref, values)
+                source_node = artifact_nodes[output]
+                value = artifact_field(values[output], path) if path else values[output]
+            except (ValueError, KeyError) as exc:
                 blocked.append({
                     "id": answer.id,
                     "subproblem_id": subproblem.subproblem_id,
-                    "reason": f"missing runtime value: {answer.value_ref}",
+                    "reason": f"missing runtime value: {answer.value_ref} ({exc})",
                 })
                 continue
             variable = variables.get(answer.value_ref)
+            projection = {}
+            if path:
+                if output in whole_answers:
+                    reference = f"result_registry.json#{whole_answers[output]}"
+                else:
+                    reference = supporting_output_ref(sid, output)
+                    supporting_outputs.setdefault(sid, {})[output] = {"source_node": source_node, "value": values[output]}
+                projection = {"value_ref": answer.value_ref, "support_ref": reference}
             verified.append({
                 "id": answer.id,
                 "subproblem_id": subproblem.subproblem_id,
-                "value": values[answer.value_ref],
+                "value": value,
                 "unit": variable.unit if variable is not None else "unspecified",
-                "source_node": artifact_nodes[answer.value_ref],
+                "source_node": source_node,
                 "evidence_ids": answer.evidence_ids,
                 "status": answer.status,
+                **projection,
             })
             claims.append(ClaimRecord(
                 id=answer.id,
                 status=answer.status,
-                claim_text=registered_output_statement(answer.id, artifact_nodes[answer.value_ref]),
+                claim_text=registered_output_statement(answer.id, source_node),
                 evidence_ids=[answer.id],
                 assumptions=assumption_statements,
                 risk=(
@@ -449,6 +472,7 @@ def _result_registry(
         })
     return {
         "verified_results": verified,
+        **({"supporting_outputs": supporting_outputs} if supporting_outputs else {}),
         "blocked_results": blocked,
         "summary": {
             "coverage_status": "complete" if not blocked else ("partial" if verified else "blocked"),

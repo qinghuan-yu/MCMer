@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import Any, Literal
@@ -98,6 +99,8 @@ class ModelIRCompiler:
             if isinstance(raw_facts, Sequence):
                 locked_facts = raw_facts
 
+        node_counts = Counter(node for sub in model_ir.subproblems if isinstance(sub, SolvableModelIR)
+                              for node in sub.execution_node_ids)
         for subproblem in model_ir.subproblems:
             if isinstance(subproblem, BlockedModelIR):
                 blocked.append(BlockedCompilation(
@@ -111,6 +114,12 @@ class ModelIRCompiler:
                 locked_facts=locked_facts,
                 evidence_profile=evidence_profile,
             )
+            for node_id in subproblem.execution_node_ids:
+                if node_counts[node_id] > 1:
+                    sub_diagnostics.append(CompilationDiagnostic(
+                        code="ambiguous_node", subproblem_id=subproblem.subproblem_id, node_id=node_id,
+                        message=f"execution node ID is not unique in the execution manifest: {node_id}",
+                    ))
             diagnostics.extend(sub_diagnostics)
             nodes.extend(sub_nodes)
             if sub_diagnostics:
@@ -196,6 +205,32 @@ class ModelIRCompiler:
             definition = self.registry.get(invocation.operator_id)
             if definition is not None:
                 definitions[invocation.node_id] = definition
+
+        # Resolve local output names once, before both type checking and dependency sorting.
+        output_ports: dict[str, OperatorPort] = {}
+        qualified_aliases: dict[str, str] = {}
+        for invocation in invocation_list:
+            definition = definitions.get(invocation.node_id)
+            if definition is None:
+                continue
+            for alias, (name, port) in zip(invocation.outputs, definition.outputs.items()):
+                if alias in output_ports:
+                    diagnostics.append(CompilationDiagnostic(
+                        code="ambiguous_artifact", subproblem_id=subproblem.subproblem_id, node_id=invocation.node_id,
+                        message=f"multiple operator outputs produce the alias {alias!r}",
+                    ))
+                output_ports[alias] = port
+                for field in {name, alias}:
+                    key = f"{invocation.node_id}.{field}"
+                    if key in qualified_aliases and qualified_aliases[key] != alias:
+                        diagnostics.append(CompilationDiagnostic(
+                            code="ambiguous_artifact", subproblem_id=subproblem.subproblem_id, node_id=invocation.node_id,
+                            message=f"qualified reference {key!r} names different outputs",
+                        ))
+                    qualified_aliases[key] = alias
+        invocation_list = [node.model_copy(update={"inputs": {
+            port: qualified_aliases.get(ref, ref) for port, ref in node.inputs.items()
+        }}) for node in invocation_list]
 
         diagnostics.extend(self._data_reference_diagnostics(subproblem))
         compiled_indexed_model: dict | None = None
@@ -299,6 +334,7 @@ class ModelIRCompiler:
         declared_artifacts = declared_artifact_ids(
             variables=list(variables.values()),
             final_answers=subproblem.final_answers,
+            operator_outputs=[name for invocation in invocation_list for name in invocation.outputs],
             indexed_parameters=indexed_component.model.parameters if indexed_component is not None else (),
         )
         satisfied_preconditions = {
@@ -328,11 +364,24 @@ class ModelIRCompiler:
                     invocation.inputs[port_name],
                     variables=variables,
                     data=data,
-                    invocations=invocations,
-                    definitions=definitions,
+                    output_ports=output_ports,
                 )
                 expected = definition.inputs[port_name]
-                if actual is not None and not _ports_match(actual, expected):
+                reference = invocation.inputs[port_name]
+                owner, separator, field = reference.partition(".")
+                if actual is None:
+                    owner_port = output_ports.get(owner)
+                    dynamic_field = separator and owner_port and owner_port.value_kind in {"artifact", "table"}
+                    source_field = separator and owner in data and field in data[owner].fields
+                    file_reference = port_name in definition.file_inputs and owner not in invocations and owner not in output_ports
+                    if dynamic_field or source_field or file_reference:
+                        continue
+                    code = "unknown_operator_output" if owner in invocations else "unknown_input_reference"
+                    diagnostics.append(CompilationDiagnostic(
+                        code=code, subproblem_id=subproblem.subproblem_id, node_id=invocation.node_id,
+                        message=f"input {port_name!r} refers to an undeclared value or field: {reference!r}",
+                    ))
+                elif not _ports_match(actual, expected):
                     diagnostics.append(CompilationDiagnostic(
                         code="input_type_mismatch",
                         subproblem_id=subproblem.subproblem_id,
@@ -364,7 +413,7 @@ class ModelIRCompiler:
                 variable = variables.get(artifact)
                 if variable is not None:
                     actual = OperatorPort(
-                        value_kind=_value_kind(variable.shape),
+                        value_kind=expected.value_kind if expected.value_kind in {"table", "artifact"} else _value_kind(variable.shape),
                         unit=variable.unit,
                     )
                     if not _ports_match(actual, expected):
@@ -462,7 +511,10 @@ class ModelIRCompiler:
 
 
 def _ports_match(actual: OperatorPort, expected: OperatorPort) -> bool:
-    return actual.value_kind == expected.value_kind and actual.unit == expected.unit
+    compatible = actual.value_kind == expected.value_kind or (
+        expected.value_kind == "mapping" and actual.value_kind in {"artifact", "table"}
+    )
+    return compatible and actual.unit == expected.unit
 
 
 def _value_kind(shape: list[str]) -> Literal["scalar", "vector", "matrix", "table", "artifact"]:
@@ -480,27 +532,16 @@ def _reference_port(
     *,
     variables: dict,
     data: dict,
-    invocations: dict,
-    definitions: dict[str, OperatorDefinition],
+    output_ports: dict[str, OperatorPort],
 ) -> OperatorPort | None:
+    if reference in output_ports:
+        return output_ports[reference]
     owner, separator, field = reference.partition(".")
     if separator and owner in data:
         variable = variables.get(field)
         if variable is None:
             return None
         return OperatorPort(value_kind=_value_kind(variable.shape), unit=variable.unit)
-    if separator and owner in invocations:
-        definition = definitions.get(owner)
-        if definition is None:
-            return None
-        if field in definition.outputs:
-            return definition.outputs[field]
-        invocation = invocations[owner]
-        if field in invocation.outputs:
-            index = invocation.outputs.index(field)
-            ports = list(definition.outputs.values())
-            return ports[index] if index < len(ports) else None
-        return None
     variable = variables.get(reference)
     if variable is None:
         return None

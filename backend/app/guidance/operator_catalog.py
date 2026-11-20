@@ -31,7 +31,7 @@ def build_default_operator_registry() -> OperatorRegistry:
     registrations = [
         (
             "artifact.extract_mapping",
-            {"artifact": _port("artifact")},
+            {"artifact": _port("mapping")},
             {"value": _port("artifact")},
             params.MappingParameters,
             artifact_io.extract_mapping,
@@ -39,7 +39,7 @@ def build_default_operator_registry() -> OperatorRegistry:
         ),
         (
             "artifact.extract_matrix",
-            {"artifact": _port("artifact")},
+            {"artifact": _port("mapping")},
             {"value": _port("matrix")},
             params.PathParameters,
             artifact_io.extract_matrix,
@@ -47,7 +47,7 @@ def build_default_operator_registry() -> OperatorRegistry:
         ),
         (
             "artifact.extract_scalar",
-            {"artifact": _port("artifact")},
+            {"artifact": _port("mapping")},
             {"value": _port("scalar")},
             params.ScalarParameters,
             artifact_io.extract_scalar,
@@ -55,7 +55,7 @@ def build_default_operator_registry() -> OperatorRegistry:
         ),
         (
             "artifact.extract_vector",
-            {"artifact": _port("artifact")},
+            {"artifact": _port("mapping")},
             {"value": _port("vector")},
             params.VectorParameters,
             artifact_io.extract_vector,

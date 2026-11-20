@@ -70,6 +70,8 @@ if (!(Test-Path backend/.env.dev)) { Copy-Item backend/.env.example backend/.env
 
 如果求解器给出了候选值，先看 `result_registry.json` 的 `verified_results` 是否登记该答案，再核对报告中的数值。阻断任务也会出具审计回执，`publication_status` 表明该报告公布的是已验证答案还是阻断原因。
 
+要复查“两种方法比较过吗”，可在 `verification_report.json` 中查看 `model_adequate.numerical_validation.baseline_comparisons`。每条实际比较记录给出指标、基线值、模型值及其结果引用。只有候选名称、缺少针对该候选的比较证据时，记录为 `not_assessed`。
+
 ## 离线复现
 
 从完成上述本地依赖安装的仓库根目录运行以下命令。测试使用脚本提供模型回复，实际执行官方工具循环、求解器、验证和报告导出，无需配置 API Key。
@@ -78,7 +80,7 @@ if (!(Test-Path backend/.env.dev)) { Copy-Item backend/.env.example backend/.env
 .\.venv\Scripts\python.exe -m pip install pytest pytest-asyncio jsonschema
 Set-Location backend
 $env:LITELLM_LOCAL_MODEL_COST_MAP = 'True'
-..\.venv\Scripts\python.exe -X utf8 -m pytest -q -p no:cacheprovider tests/test_scipy_milp_guidance.py tests/test_workbench_guidance_controls.py tests/test_portfolio_harness_loop.py tests/test_anscombe_linear_fit.py
+..\.venv\Scripts\python.exe -X utf8 -m pytest -q -p no:cacheprovider tests/test_scipy_milp_guidance.py tests/test_workbench_guidance_controls.py tests/test_portfolio_harness_loop.py tests/test_anscombe_linear_fit.py tests/test_anscombe_recorded_actions.py
 ```
 
 SciPy 例题用穷举核对最优解，`(1, 2)` 和 `(2, 2)` 都使目标 y 达到 2。成对测试先去掉资源上限，验证求解前会报告缺少哪项输入，再补上上限或更正证据引用，检查工作台能否发布正确答案。四资产例题把求解结果与独立枚举的 81 种收费情形进行比较。[整数规划测试](backend/tests/test_scipy_milp_guidance.py) · [修订与阻断测试](backend/tests/test_workbench_guidance_controls.py) · [四资产测试](backend/tests/test_portfolio_harness_loop.py)
@@ -90,6 +92,12 @@ SciPy 例题用穷举核对最优解，`(1, 2)` 和 `(2, 2)` 都使目标 y 达�
 同一题的首次实测也算出目标值 23，但四项答案引用了执行清单中不存在的证据名，最终为 `blocked`，正式发布 0 项。这次失败促使工作台在模型提交时反馈无效引用。修复后的全套离线回归为 **988 项通过，0 项跳过**，其中 2 项历史响应回放依赖本机留存材料。[首次实测回执](backend/tests/fixtures/ortools_simple_mip/live_receipt.json) · [验收与历史记录](docs/compute_first_guidance_plan.md)
 
 原始示例报告保留了当时的文字，其中将连续松弛称为最优性依据。该次执行记录实际给出了整数求解器的原始界和对偶界，二者都是 23，相对间隙为 0。当前报告根据执行记录展示这些值，并将模型拟议的方法标明来源。独立穷举属于验收时的外部核算。
+
+**Anscombe 第一组公开数据的一元线性回归。** 在版本 `4315ee0`，DeepSeek Flash 为 11 对观测提交了带截距的最小二乘模型，并通过数学审核。编译时，工作台把表和拟合结果误判为矩阵和标量，求解未执行，报告为 `blocked`。这轮耗用 8 次请求、129,718 tokens、167.281 秒。原版本随后离线重放了全部 8 条响应，重现了相同的报告。[题面](backend/tests/fixtures/anscombe_linear_fit/question.txt) · [原始工作簿](backend/tests/fixtures/anscombe_linear_fit/observations.xlsx) · [实测回执](backend/tests/fixtures/anscombe_linear_fit/live_receipt.json)
+
+修复结构化输出后，用同一批模型动作走默认流程，再从原始已审核模型直接复算，两条离线路径都发布了相同的报告。拟合直线为 **y₁ = 3.0000909091 + 0.5000909091 x₁**，11 行拟合值和两个系数均经独立核对。报告中的截距、斜率及两者汇总共享同一份拟合证据。修复后的建模上下文有所变化，8 个历史请求中有 3 个与新请求完全一致。该修复的验收使用离线重算。[实际导出报告](backend/tests/fixtures/anscombe_linear_fit/offline_verified_guidance.md) · [双路径验收回执](backend/tests/fixtures/anscombe_linear_fit/offline_repair_receipt.json)
+
+本次发布前，后端离线回归 **1045 项通过，0 项跳过**，其中两项使用本地历史回放材料，前端构建通过。公开题的端到端证据目前覆盖一个真实跑通的整数规划例题，以及一个用原始模型离线修复后跑通的回归例题。其他题型的算子测试不能据此推算整题成功率。
 
 ## 项目与许可证
 

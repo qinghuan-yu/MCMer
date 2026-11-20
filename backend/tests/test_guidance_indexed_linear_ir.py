@@ -148,6 +148,62 @@ def _component_payload() -> dict:
     return _payload()
 
 
+def test_new_indexed_subproblems_get_independent_solver_evidence_before_review(tmp_path, monkeypatch):
+    import asyncio
+    import json
+    from app.guidance import modeler
+    from app.guidance.contracts import ProblemSpec
+    from app.guidance.model_ir_drafts import INDEXED_SOLVER_NODE_ID
+    from app.guidance.operator_execution import OperatorGraphExecutor
+    from source_preflight_fixtures import write_source_preflight
+
+    first, = _payload()["subproblems"]
+    first["subproblem_id"] = "first"
+    first["validation"]["model_families"] = ["mixed_integer_linear_optimization"]
+    first["execution_components"][0]["solver_node_id"] = INDEXED_SOLVER_NODE_ID
+    unit_term = {"coefficient": {"kind": "constant", "value": 1}, "variable": {"variable_id": "x"}}
+    first["execution_components"][0]["model"] = {
+        "index_sets": [], "parameters": [], "variables": [{"id": "x", "domain": "integer", "lower_bound": 0}],
+        "objective": {"sense": "minimize", "terms": [unit_term]},
+        "constraints": [{"id": "minimum", "relation": "greater_equal", "terms": [unit_term],
+                         "rhs": {"kind": "constant", "value": 18}}],
+    }
+    for candidate in first["candidate_models"]:
+        candidate["operator_node_ids"] = [INDEXED_SOLVER_NODE_ID]
+    first["final_answers"][0].update(id="first_solution", evidence_ids=[INDEXED_SOLVER_NODE_ID])
+    second = deepcopy(first)
+    second["subproblem_id"] = "second"
+    second["final_answers"][0]["id"] = "second_solution"
+    second["execution_components"][0]["model"]["constraints"][0]["rhs"]["value"] = 54
+    slices = {sub["subproblem_id"]: ModelIR.model_validate({"model_id": sub["subproblem_id"], "subproblems": [sub]})
+              for sub in (first, second)}
+    async def submit_slice(**kwargs):
+        return slices[kwargs["subproblem"]["id"]]
+
+    monkeypatch.setattr(modeler, "_request_single_subproblem_model", submit_slice)
+    spec = ProblemSpec(task_summary="Solve two independent indexed decisions.", subproblems=[
+        {"id": sid, "required_uncertainty_ids": [], "required_fact_ids": [], "depends_on_subproblem_ids": []}
+        for sid in slices])
+    write_source_preflight(tmp_path, spec)
+    registry = build_default_operator_registry()
+    merged = asyncio.run(modeler.LLMModeler(None, registry=registry).model(problem_spec=spec, task={}, work_dir=tmp_path))
+    compiler = ModelIRCompiler(registry=registry)
+    historical = ModelIR(model_id="historical", subproblems=[entry.subproblems[0] for entry in slices.values()])
+    assert compiler.compile(historical).status == "blocked"
+    ids = [sub.execution_components[0].solver_node_id for sub in merged.subproblems]
+    assert len(set(ids)) == 2
+    for sid, sub in zip(ids, merged.subproblems):
+        assert all(c.operator_node_ids == [sid] for c in sub.candidate_models)
+        assert sub.final_answers[0].evidence_ids == [sid]
+        assert sub.execution_components[0].model == slices[sub.subproblem_id].subproblems[0].execution_components[0].model
+    plan = compiler.compile_to_file(merged, output_path=tmp_path / "execution_plan.json")
+    assert plan.status == "compiled", plan.diagnostics
+    manifest = OperatorGraphExecutor(registry=registry).execute(execution_plan=plan.execution_plan, model_ir=merged, work_dir=tmp_path)
+    assert manifest.status == "passed" and manifest.executed_node_ids == ids
+    results = json.loads((tmp_path / "result_registry.json").read_bytes())["verified_results"]
+    assert [(r["source_node"], r["value"]["objective_value"]) for r in results] == [(ids[0], 18), (ids[1], 54)]
+
+
 def _indexed_model(payload: dict) -> dict:
     return next(
         component["model"]

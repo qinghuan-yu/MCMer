@@ -113,6 +113,7 @@ def _validate_generation_draft_slice(
         raise ValueError(f"operator_id is not available: {unsupported!r}")
     declared_outputs = declared_artifact_ids(
         variables=subproblem.variables, final_answers=subproblem.final_answers,
+        operator_outputs=[output for invocation in subproblem.operators for output in invocation.outputs],
     )
     for invocation in subproblem.operators:
         definition = registry.get(invocation.operator_id)

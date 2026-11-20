@@ -11,7 +11,7 @@ from typing import Any
 from app.core.llm.llm import LLM
 from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contracts import ProblemSpec
-from app.guidance.evidence_consistency import InvalidAnswerEvidence, validate_planned_answer_evidence
+from app.guidance.evidence_consistency import InvalidAnswerEvidence, InvalidAnswerValue, validate_planned_answer_evidence
 from app.guidance.operators import OperatorRegistry
 from app.guidance.failure_contracts import (
     bounded_failure_summary,
@@ -22,8 +22,11 @@ from app.guidance.generation_validation import _validate_model_ir_contract
 from app.guidance.model_generation import _request_single_subproblem_model
 from app.guidance.model_ir import (
     BlockedModelIR,
+    IndexedLinearExecutionComponent,
     ModelIR,
+    OperatorGraphExecutionComponent,
 )
+from app.guidance.model_ir_drafts import INDEXED_SOLVER_NODE_ID
 from app.guidance.model_review_contracts import ModelIRReview
 from app.guidance.model_review_validation import unresolved_source_subproblem_ids
 from app.guidance.modeling_context import (
@@ -215,7 +218,7 @@ async def _request_subproblem_models(
             )
             try:
                 validate_planned_answer_evidence(prior_slice, evidence_profile)
-            except InvalidAnswerEvidence:
+            except (InvalidAnswerEvidence, InvalidAnswerValue):
                 revision_targets.add(target_id)
             else:
                 generated_by_id[target_id] = prior_slice
@@ -287,6 +290,8 @@ async def _request_subproblem_models(
                 indexed_core_token_budget=indexed_core_token_budget,
                 indexed_constraints_token_budget=indexed_constraints_token_budget,
             )
+            if total > 1:
+                generated_by_id[target_id] = _scope_generated_solver(generated_by_id[target_id])
         except (RuntimeError, ValueError) as exc:
             generated_by_id[target_id] = _write_subproblem_modeling_failure(
                 artifact_dir=artifact_dir,
@@ -313,6 +318,35 @@ async def _request_subproblem_models(
         "operator_contract_sha256": registry.contract_sha256(),
     }, {"validated": True})
     return model_ir
+
+
+def _scope_generated_solver(model: ModelIR) -> ModelIR:
+    """Assign the system-owned solver a distinct evidence ID before joint review."""
+    subproblem, = model.subproblems
+    if isinstance(subproblem, BlockedModelIR):
+        return model
+    indexed = next((component for component in subproblem.execution_components
+                    if isinstance(component, IndexedLinearExecutionComponent)), None)
+    if indexed is None or indexed.solver_node_id != INDEXED_SOLVER_NODE_ID:
+        return model
+    subproblem = subproblem.model_copy(deep=True)
+    suffix = hashlib.sha256(subproblem.subproblem_id.encode("utf-8")).hexdigest()[:12]
+    label = safe_artifact_component(subproblem.subproblem_id).replace(".", "_")[:50]
+    solver_id = f"solve_{label}_{suffix}"
+    for component in subproblem.execution_components:
+        if isinstance(component, IndexedLinearExecutionComponent):
+            component.solver_node_id = solver_id
+        elif isinstance(component, OperatorGraphExecutionComponent):
+            for operator in component.operators:
+                for name, ref in operator.inputs.items():
+                    if ref.startswith(INDEXED_SOLVER_NODE_ID + "."):
+                        operator.inputs[name] = solver_id + ref[len(INDEXED_SOLVER_NODE_ID):]
+    for candidate in subproblem.candidate_models:
+        candidate.operator_node_ids = [solver_id if node == INDEXED_SOLVER_NODE_ID else node
+                                       for node in candidate.operator_node_ids]
+    for answer in subproblem.final_answers:
+        answer.evidence_ids = [solver_id if node == INDEXED_SOLVER_NODE_ID else node for node in answer.evidence_ids]
+    return ModelIR(model_id=model.model_id, subproblems=[subproblem.model_dump()])
 
 
 def _dependency_order(subproblems: list[dict]) -> list[dict]:

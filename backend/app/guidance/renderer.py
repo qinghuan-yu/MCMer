@@ -390,6 +390,9 @@ def render_verified_guidance(
                 fields = {"objective_value": value["objective_value"], **value["decision_values"]}
             elif isinstance(value, dict) and isinstance(value.get("named_coefficients"), dict) and value["named_coefficients"]:
                 fields = value["named_coefficients"]
+            elif result.get("support_ref") and isinstance(result.get("value_ref"), str) and "." in result["value_ref"]:
+                field = result["value_ref"].rsplit(".", 1)[-1]
+                fields = value if field == "named_coefficients" and isinstance(value, dict) else {field: value}
             else:
                 fields = {result["id"]: value}
             for name, number in fields.items():

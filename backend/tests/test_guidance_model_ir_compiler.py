@@ -157,6 +157,75 @@ def test_compiler_keeps_solvable_graph_when_another_subproblem_is_blocked() -> N
     assert [item.subproblem_id for item in result.blocked_subproblems] == ["problem2"]
 
 
+def _table_projection_model(reference="worksheet"):
+    from app.guidance.model_ir import ModelIR
+
+    payload = _model_ir().model_dump(mode="json")
+    graph = payload["subproblems"][0]["execution_components"][0]
+    graph["variables"] = [
+        {"id": "worksheet", "symbol": "T", "role": "derived", "unit": "unspecified", "shape": ["row", "2"]},
+        {"id": "inspection", "symbol": "I", "role": "derived", "unit": "unspecified", "shape": []},
+        {"id": "theta", "symbol": "v", "role": "derived", "unit": "unspecified", "shape": ["row"]},
+    ]
+    graph["operators"] = [
+        {"node_id": "fit", "operator_id": "artifact.extract_vector", "inputs": {"artifact": reference},
+         "parameters": {"path": "distance"}, "outputs": ["theta"]},
+        {"node_id": "z_read", "operator_id": "data.read_excel_table", "inputs": {"source": "data/observations.csv"},
+         "parameters": {"columns": ["distance"]}, "outputs": ["worksheet"]},
+        {"node_id": "inspect", "operator_id": "data.inspect_file", "inputs": {"source": "data/observations.csv"},
+         "outputs": ["inspection"]},
+    ]
+    return ModelIR.model_validate(payload)
+
+
+@pytest.mark.parametrize("reference", ["worksheet", "z_read.table", "z_read.worksheet"])
+def test_compiler_binds_structured_inputs_to_the_registered_producer(reference):
+    from app.guidance.model_ir_compiler import ModelIRCompiler
+    from app.guidance.operator_catalog import build_default_operator_registry
+
+    result = ModelIRCompiler(registry=build_default_operator_registry()).compile(_table_projection_model(reference))
+    assert result.status == "compiled", result.diagnostics
+    nodes = result.execution_plan.graph.nodes
+    aliases = [n.node_id for n in nodes]
+    consumer = next(n for n in nodes if n.node_id == "fit")
+    assert aliases.index("z_read") < aliases.index("fit")
+    assert consumer.dependencies == ["z_read"] and consumer.inputs == {"artifact": "worksheet"}
+
+
+@pytest.mark.parametrize("defect", ["numeric_input", "numeric_output", "structured_unit", "ambiguous_output",
+                                     "unknown_output", "unknown_input", "numeric_field", "duplicate_node_across_subproblems"])
+def test_compiler_rejects_invalid_or_ambiguous_ports_in_a_structured_graph(defect):
+    from app.guidance.model_ir_compiler import ModelIRCompiler
+    from app.guidance.operator_catalog import build_default_operator_registry
+
+    model = _table_projection_model()
+    graph = _operator_graph(model.subproblems[0])
+    if defect == "numeric_input":
+        graph.operators[0].inputs["artifact"] = "observations.distance"
+        graph.variables.append(graph.variables[-1].model_copy(update={"id": "distance"}))
+    elif defect == "numeric_output":
+        graph.variables[-1].shape = []
+    elif defect == "structured_unit":
+        graph.variables[0].unit = "seconds"
+    elif defect == "ambiguous_output":
+        graph.operators[-1].outputs = ["worksheet"]
+    elif defect == "unknown_output":
+        graph.operators[0].inputs["artifact"] = "z_read.missing"
+    elif defect == "unknown_input":
+        graph.operators[0].inputs["artifact"] = "unbound_name"
+    elif defect == "numeric_field":
+        graph.operators[-1].inputs["source"] = "theta.not_a_field"
+    else:
+        model.subproblems.append(model.subproblems[0].model_copy(update={"subproblem_id": "p2"}, deep=True))
+    result = ModelIRCompiler(registry=build_default_operator_registry()).compile(model)
+    assert result.execution_plan is None
+    expected = {"numeric_input": "input_type_mismatch", "numeric_output": "output_type_mismatch",
+                "structured_unit": "output_type_mismatch", "ambiguous_output": "ambiguous_artifact",
+                "unknown_output": "unknown_operator_output", "unknown_input": "unknown_input_reference",
+                "numeric_field": "unknown_input_reference", "duplicate_node_across_subproblems": "ambiguous_node"}
+    assert expected[defect] in {d.code for d in result.diagnostics}
+
+
 def test_compiler_orders_direct_artifact_references_after_their_producer() -> None:
     from app.guidance.model_ir import ModelIR
     from app.guidance.model_ir_compiler import ModelIRCompiler

@@ -18,6 +18,8 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter, range_boundaries
 
+from app.guidance.output_references import artifact_field
+
 
 def valid_scalar_output(*, outputs: dict) -> list[str]:
     if set(outputs) != {"value"}:
@@ -50,46 +52,30 @@ def valid_matrix_output(*, outputs: dict) -> list[str]:
         return ["output matrix must contain finite values"]
     return []
 
-def _path_value(artifact: object, path: str) -> object:
-    value = artifact
-    for part in path.split("."):
-        if isinstance(value, dict) and part in value:
-            value = value[part]
-            continue
-        if isinstance(value, list) and part.isdecimal():
-            index = int(part)
-            if index < len(value):
-                value = value[index]
-                continue
-        if not part:
-            raise ValueError(f"artifact path does not exist: {path}")
-        raise ValueError(f"artifact path does not exist: {path}")
-    return value
-
 def extract_mapping(*, inputs: dict, parameters: dict, random_seed, work_dir: Path) -> dict:
     del random_seed, work_dir
     fields = parameters["fields"]
     if fields is not None:
         value = {
-            str(name): _path_value(inputs["artifact"], str(path))
+            str(name): artifact_field(inputs["artifact"], str(path))
             for name, path in fields.items()
         }
     else:
-        value = _path_value(inputs["artifact"], parameters["path"])
+        value = artifact_field(inputs["artifact"], parameters["path"])
     if not isinstance(value, dict):
         raise ValueError("selected artifact value is not a mapping")
     return {"value": value}
 
 def extract_matrix(*, inputs: dict, parameters: dict, random_seed, work_dir: Path) -> dict:
     del random_seed, work_dir
-    value = _path_value(inputs["artifact"], parameters["path"])
+    value = artifact_field(inputs["artifact"], parameters["path"])
     if not isinstance(value, list):
         raise ValueError("selected artifact value is not a matrix")
     return {"value": value}
 
 def extract_scalar(*, inputs: dict, parameters: dict, random_seed, work_dir: Path) -> dict:
     del random_seed, work_dir
-    value = _path_value(inputs["artifact"], parameters["path"])
+    value = artifact_field(inputs["artifact"], parameters["path"])
     indices = parameters["indices"]
     if indices is not None:
         if not isinstance(value, list):
@@ -109,7 +95,7 @@ def extract_scalar(*, inputs: dict, parameters: dict, random_seed, work_dir: Pat
 
 def extract_vector(*, inputs: dict, parameters: dict, random_seed, work_dir: Path) -> dict:
     del random_seed, work_dir
-    value = _path_value(inputs["artifact"], parameters["path"])
+    value = artifact_field(inputs["artifact"], parameters["path"])
     if not isinstance(value, list):
         raise ValueError("selected artifact value is not a vector")
     indices = parameters["indices"]

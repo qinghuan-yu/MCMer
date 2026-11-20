@@ -10,6 +10,7 @@ from app.guidance.contracts import VerificationReport
 from app.guidance.model_review_contracts import ApprovedModelIR
 from app.guidance.recovery import file_snapshots
 from app.guidance.renderer import render_verified_guidance
+from app.guidance.guidance_rendering.data import _cell, _join_claim_items
 from app.guidance.guidance_rendering.sections import _append_fact_traceability, _verification_layer_rows
 from app.guidance.verification_stage import ResultVerificationStage
 from app.guidance.stage_io import (
@@ -82,6 +83,8 @@ class GuidanceStage:
             expected_fact_appendix=_append_fact_traceability("", problem_spec=problem_spec,
                 model=approved.get("approved_model_ir", {})).strip(),
             verification_rows=_verification_layer_rows(report.model_dump(mode="json")),
+            assumption_number_context=_assumption_number_context(
+                problem_spec, approved.get("approved_model_ir", {}), results) if report.status != "blocked" else None,
         )
         if audit["status"] == "BLOCK" and report.status != "blocked":
             issues = [f"{item['type']} ({item['location']})" for item in audit["blocks"]]
@@ -102,6 +105,29 @@ class GuidanceStage:
             json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         return output_path
+
+
+def _assumption_number_context(problem_spec, model, results) -> dict[str, tuple[str, set[int | float]]]:
+    """Source-backed numbers permitted inside the exact approved assumption cell of each answer."""
+    facts = {fact["fact_id"]: fact for fact in (problem_spec or {}).get("locked_facts", [])}
+    registered = {(result.get("subproblem_id"), result.get("id")) for result in results.get("verified_results", [])}
+    context = {}
+    for sub in model.get("subproblems", []):
+        assumptions = sub.get("assumptions", [])
+        refs = {ref for a in assumptions for ref in a["source_refs"]}
+        values = set()
+        for binding in sub.get("fact_bindings", []):
+            fact = facts.get(binding["fact_id"])
+            if not fact or not binding["model_paths"] or type(fact.get("value")) not in (float, int):
+                continue
+            if fact["fact_id"] in refs or refs.intersection(fact["source_refs"]):
+                values.add(fact["value"])
+        if values:
+            cell = _cell(_join_claim_items([a["statement"] for a in assumptions]))
+            for answer in sub.get("final_answers", []):
+                if (sub["subproblem_id"], answer["id"]) in registered:
+                    context[_cell(answer["id"])] = cell, values
+    return context
 
 def _required_guidance_sections(guidance: str, results: dict) -> list[str]:
     if (

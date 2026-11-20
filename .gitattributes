@@ -6,5 +6,7 @@ backend/tests/fixtures/ortools_simple_mip/question.txt text eol=lf
 backend/tests/fixtures/ortools_simple_mip/case.json text eol=lf
 backend/tests/fixtures/anscombe_linear_fit/question.txt text eol=lf
 backend/tests/fixtures/anscombe_linear_fit/case.json text eol=lf
+backend/tests/fixtures/anscombe_linear_fit/r10_actions.json text eol=lf
+backend/tests/fixtures/anscombe_linear_fit/offline_verified_guidance.md -text whitespace=cr-at-eol
 # Keep the verified Markdown download byte-identical to its publication receipt.
 backend/tests/fixtures/ortools_simple_mip/verified_guidance.md -text whitespace=cr-at-eol

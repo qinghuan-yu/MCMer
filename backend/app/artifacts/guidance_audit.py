@@ -19,6 +19,7 @@ def build_guidance_audit_report(
     artifact_root: Path | None = None,
     expected_fact_appendix: str = "",
     verification_rows: list[str] | None = None,
+    assumption_number_context: dict[str, tuple[str, set[int | float]]] | None = None,
 ) -> dict[str, object]:
     """Audit whether a guidance document is traceable enough to trust."""
     text = guidance_markdown or ""
@@ -63,7 +64,7 @@ def build_guidance_audit_report(
             else:
                 blocks.append({"type": "verification_summary_mismatch", "location": "可信度摘要",
                                "severity": "high", "fix": "Render the recorded verification layers."})
-        _check_registered_numbers(numeric_text, results, parameters, blocks)
+        _check_registered_numbers(numeric_text, results, parameters, blocks, assumption_number_context)
         _check_figure_interpretation_context(text, context, figures, blocks)
         _check_figure_coverage(text, figures, artifact_root, blocks)
 

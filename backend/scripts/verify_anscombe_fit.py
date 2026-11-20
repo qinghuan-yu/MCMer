@@ -36,9 +36,33 @@ def reference_fit(pairs):
     return {"intercept": mean_y - slope * mean_x, "slope": slope}
 
 
-def check_fitted_observations(results, pairs, reference):
-    fits = [item["value"] for item in results if isinstance(item["value"], dict)
-            and {"x", "observed", "predicted"} <= item["value"].keys()]
+def check_fitted_observations(results, pairs, reference, *, supporting_outputs=None):
+    evidence = [item["value"] for item in results]
+    by_id = {(item.get("subproblem_id"), item.get("id")): item for item in results}
+    for item in results:
+        ref = item.get("support_ref")
+        if not ref:
+            continue
+        artifact, *fields = item["value_ref"].split(".")
+        owner = item["subproblem_id"]
+        escaped = [part.replace("~", "~0").replace("/", "~1") for part in (owner, artifact)]
+        if ref == "result_registry.json#/supporting_outputs/" + "/".join(escaped):
+            source = (supporting_outputs or {}).get(owner, {}).get(artifact)
+        elif ref.startswith("result_registry.json#"):
+            source = by_id.get((owner, ref.removeprefix("result_registry.json#")))
+        else:
+            source = None
+        if source is None or source.get("source_node") != item["source_node"]:
+            raise ValueError("missing or unrelated supporting output for the published field")
+        selected = source["value"]
+        for field in fields:
+            if not isinstance(selected, dict) or field not in selected:
+                raise ValueError("published field is absent from its supporting output")
+            selected = selected[field]
+        if not fields or item["value"] != selected:
+            raise ValueError("published field differs from the original fit")
+        evidence.append(source["value"])
+    fits = [value for value in evidence if isinstance(value, dict) and {"x", "observed", "predicted"} <= value.keys()]
     if not fits:
         raise ValueError("missing observation-level evidence for the published fit")
     for fit in fits:
@@ -64,7 +88,8 @@ def check_published_coefficients(report, results, expected):
             if fields is value and expected.keys() & fields.keys():
                 mapping_rows[result["subproblem_id"], result["id"]] = expected.keys() & fields.keys()
         else:
-            fields = {result["id"]: value}
+            key = result["value_ref"].rsplit(".", 1)[-1] if result.get("support_ref") else result["id"]
+            fields = {key: value}
         for name in expected.keys() & fields.keys():
             key = (result["subproblem_id"], name, result["id"])
             if key in wanted or abs(Fraction(str(fields[name])) - Fraction(str(expected[name]))) > TOLERANCE:
@@ -144,8 +169,9 @@ def audit_run(root):
         verification = VerificationReport.model_validate(read("verification_report.json"))
         if verification.status != "verified" or verification != ResultVerificationStage.assess(root / "execution_manifest.json", root):
             raise ValueError("current evidence cannot reproduce verification")
-        results = read("result_registry.json")["verified_results"]
-        check_fitted_observations(results, pairs, reference)
+        registry = read("result_registry.json")
+        results = registry["verified_results"]
+        check_fitted_observations(results, pairs, reference, supporting_outputs=registry.get("supporting_outputs"))
         published = check_published_coefficients(markdown.decode("utf-8"), results, reference)
         receipt.update(passed=True, coefficients=published, guidance_sha256=audit["guidance_sha256"])
     except (OSError, ValueError, TypeError, KeyError, IndexError) as error:

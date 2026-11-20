@@ -102,7 +102,25 @@ def _check_registered_numbers(
     result_registry: dict[str, object],
     parameter_registry: dict[str, object],
     blocks: list[dict[str, object]],
+    assumption_number_context: dict[str, tuple[str, set[int | float]]] | None = None,
 ) -> None:
+    if assumption_number_context:
+        lines = text.splitlines()
+        in_claim_table = False
+        for i, line in enumerate(lines):
+            if line.startswith("## "):
+                in_claim_table = line.strip() == "## 结论状态登记"
+            if not in_claim_table or not line.startswith("|"):
+                continue
+            cells = re.split(r"(?<!\\)\|", line)
+            if len(cells) != 8:
+                continue
+            entry = assumption_number_context.get(cells[1].strip())
+            if entry and cells[5].strip() == entry[0]:
+                allowed = {_normalize_number(value) for value in entry[1]}
+                cells[5] = _NUMBER_RE.sub(lambda m: "" if _normalize_number(m[0]) in allowed else m[0], cells[5])
+                lines[i] = "|".join(cells)
+        text = "\n".join(lines)
     text_numbers = _extract_numbers(text)
     if not text_numbers:
         return

@@ -108,6 +108,52 @@ def test_small_published_coefficient_mapping_can_also_be_verified():
         check_published_coefficients(report.replace('"slope": -0.3', '"slope": -0.4'), [result], expected)
 
 
+def test_projected_answers_publish_the_fields_and_keep_the_fit_as_support():
+    from app.guidance.renderer import render_verified_guidance
+    from scripts.verify_anscombe_fit import check_fitted_observations, check_published_coefficients
+
+    expected = {"slope": 2, "intercept": 1}
+    fit = {"x": [1, 2], "observed": [3, 5], "predicted": [3, 5], "named_coefficients": expected}
+    support = {"line": {"fit": {"source_node": "estimate", "value": fit}}}
+    results = [{"id": "answer_" + field, "subproblem_id": "line", "status": "evidence_verified",
+                "source_node": "estimate", "value": value, "value_ref": "fit.named_coefficients." + field,
+                "support_ref": "result_registry.json#/supporting_outputs/line/fit"} for field, value in expected.items()]
+    report = render_verified_guidance(approved_model={}, verification_report={"status": "verified"},
+        parameter_registry={}, result_registry={"verified_results": results, "supporting_outputs": support})
+    for field, value in expected.items():
+        assert f"| line | {field} | {value} |" in report
+    assert check_published_coefficients(report, results, expected) == expected
+    rows = [(1, 3), (2, 5)]
+    check_fitted_observations(results, rows, expected, supporting_outputs=support)
+    for invalid_support in ({}, {"other": support["line"]}, {"line": {"fit": {"source_node": "other", "value": fit}}}):
+        with pytest.raises(ValueError):
+            check_fitted_observations(results, rows, expected, supporting_outputs=invalid_support)
+
+
+def test_source_count_authorizes_only_the_approved_assumption_cell():
+    from app.artifacts.guidance_audit import build_guidance_audit_report
+    from app.guidance.guidance_stage import _assumption_number_context
+
+    statement = "The fit uses 11 observations."
+    fact = {"fact_id": "count", "value": 11, "source_refs": ["question#p1"]}
+    sub = {"subproblem_id": "s", "fact_bindings": [{"fact_id": "count", "model_paths": ["/execution_components/0"]}],
+           "assumptions": [{"statement": statement, "source_refs": ["question#p1"]}],
+           "final_answers": [{"id": "line"}]}
+    result = {"id": "line", "subproblem_id": "s", "value": 2.5}
+    registry = {"verified_results": [result]}
+    text = "## 结论状态登记\n\n| line | verified | registered value | line | " + statement + " | scoped |"
+    def unknown(doc, source=fact):
+        context = _assumption_number_context({"locked_facts": [source]}, {"subproblems": [sub]}, registry)
+        audit = build_guidance_audit_report(guidance_markdown=doc, guidance_context={}, result_registry=registry,
+                                            assumption_number_context=context)
+        return {n for b in audit["blocks"] if b["type"] == "unregistered_numeric_claim" for n in b["numbers"]}
+    assert not unknown(text)
+    assert unknown(text.replace("registered value", "estimated slope = 11")) == {"11"}
+    assert unknown(text.replace(statement, "There were 19 observations.")) == {"19"}
+    assert unknown(text.replace("## 结论状态登记", "## 其他")) == {"11"}
+    assert unknown(text, {**fact, "source_refs": ["unrelated#p8"]}) == {"11"}
+
+
 def test_workbook_to_published_coefficients_and_tampered_table(tmp_path, monkeypatch):
     from scripts.verify_anscombe_fit import audit_run, check_published_coefficients
 

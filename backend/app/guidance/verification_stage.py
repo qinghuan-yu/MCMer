@@ -14,6 +14,7 @@ from app.guidance.model_review_validation import assess_mathematical_review
 from app.guidance.model_validation.contracts import walk_mappings
 from app.guidance.model_validators import build_default_model_validator_registry
 from app.guidance.operator_execution import OperatorExecutionManifest
+from app.guidance.output_references import artifact_field, split_output_reference, supporting_output_ref
 from app.guidance.recovery import (
     canonical_digest, file_snapshots, generated_figure_paths, model_source_snapshots,
 )
@@ -127,8 +128,13 @@ class ResultVerificationStage:
             result_registry=results,
             figure_registry=figure_registry,
             source_ids_by_subproblem=source_ids,
+            nodes_by_subproblem={
+                part.subproblem_id: set(part.execution_node_ids) & set(manifest.executed_node_ids)
+                for part in approved.approved_model_ir.subproblems if part.execution_status == "solvable"
+            },
         )
-        evidence_issues = [*source_issues, *evidence_issues]
+        projection_issues, support = _verify_answer_outputs(approved, manifest, plan_nodes, results)
+        evidence_issues = [*source_issues, *evidence_issues, *projection_issues]
         coverage_issues = _blocked_result_issues(results)
         problem_path = root / "problem_spec.json"
         problem_spec = (
@@ -138,6 +144,7 @@ class ResultVerificationStage:
         model_adequacy = _assess_model_adequacy(
             approved, results, problem_spec=problem_spec,
             mathematical_review=assess_mathematical_review(approved, root=root, problem_spec=problem_spec),
+            supporting_values=support if not (execution_issues or evidence_issues) else {},
         )
         if execution_issues or evidence_issues:
             model_adequacy["numerical_validation"]["status"] = "blocked"
@@ -150,7 +157,7 @@ class ResultVerificationStage:
         report = VerificationReport(
             model_id=manifest.model_id,
             coverage_status=(
-                "partial"
+                "blocked" if results.get("blocked_results") and not results.get("verified_results") else "partial"
                 if approved.review_status == "partial" or results.get("blocked_results")
                 else "complete"
             ),
@@ -196,6 +203,78 @@ class ResultVerificationStage:
         )
         return report
 
+
+def _verify_answer_outputs(approved, manifest, plan_nodes, results):
+    """Bind each field to its approved answer, executed output, and full output digest."""
+    rows = results.get("verified_results") or []
+    subs = {part.subproblem_id: part for part in approved.approved_model_ir.subproblems
+            if part.execution_status == "solvable"}
+    owners = {(node.subproblem_id, alias): node.node_id for node in plan_nodes
+              if node.node_id in manifest.executed_node_ids for alias in node.outputs}
+    declared = {(sid, answer.id): answer for sid, part in subs.items() for answer in part.final_answers}
+    internal = results.get("supporting_outputs", {})
+    if not isinstance(internal, dict) or any(not isinstance(v, dict) for v in internal.values()):
+        return ["malformed supporting_outputs in result registry"], {}
+    references = {supporting_output_ref(sid, output) for sid, group in internal.items() for output in group}
+    by_id = {row["id"]: row for row in rows if isinstance(row, dict)
+             and isinstance(row.get("id"), str) and isinstance(row.get("subproblem_id"), str)}
+    issues, support = [], {}
+    if len(by_id) != len(rows):
+        issues.append("registered answers must have distinct result IDs")
+    if manifest.status in {"passed", "partial"}:
+        accounted = {(row["subproblem_id"], row["id"])
+                     for row in [*by_id.values(), *(results.get("blocked_results") or [])]
+                     if isinstance(row, dict) and isinstance(row.get("id"), str)
+                     and isinstance(row.get("subproblem_id"), str)}
+        if declared.keys() - accounted:
+            issues.append("approved answers are missing from both verified and blocked results")
+    used_outputs = set()
+    for row in by_id.values():
+        sid, identifier = row.get("subproblem_id"), row.get("id")
+        answer = declared.get((sid, identifier))
+        if answer is None:
+            issues.append(f"result {identifier} is not an approved answer in {sid}")
+            continue
+        try:
+            source, field = split_output_reference(answer.value_ref, subs[sid].output_producers)
+            node = owners.get((sid, source))
+            if not node or node != row.get("source_node") or node != subs[sid].output_producers[source]:
+                raise ValueError("source node does not own the executed output")
+            if row.get("evidence_ids") != answer.evidence_ids or row.get("status") != answer.status:
+                raise ValueError("answer differs from approved evidence or claim status")
+            if not field:
+                if "support_ref" in row or "value_ref" in row:
+                    raise ValueError("whole output unexpectedly declares a field projection")
+                continue
+            reference = row.get("support_ref")
+            if row.get("value_ref") != answer.value_ref or not isinstance(reference, str):
+                raise ValueError("missing or incorrect approved output field")
+            if reference == supporting_output_ref(sid, source):
+                backing = internal.get(sid, {}).get(source)
+            else:
+                name = reference.removeprefix("result_registry.json#")
+                whole = declared.get((sid, name))
+                if reference != f"result_registry.json#{name}" or whole is None or whole.value_ref != source:
+                    raise ValueError("invalid supporting result reference")
+                backing = by_id.get(name)
+                if not backing or backing.get("subproblem_id") != sid:
+                    raise ValueError("supporting answer is outside this subproblem")
+            if not isinstance(backing, dict) or backing.get("source_node") != node or "value" not in backing:
+                raise ValueError("missing supporting output of the executed node")
+            value = backing["value"]
+            if canonical_digest(value) != manifest.output_value_sha256.get(reference):
+                raise ValueError("supporting output differs from the executed value digest")
+            if "value" not in row or canonical_digest(artifact_field(value, field)) != canonical_digest(row["value"]):
+                raise ValueError("answer differs from the specified output field")
+            used_outputs.add(reference)
+            if reference in references and isinstance(value, dict):
+                support.setdefault(sid, {})[reference] = value
+        except (TypeError, ValueError, KeyError) as exc:
+            issues.append(f"result {identifier}: {exc}")
+    if used_outputs != set(manifest.output_value_sha256) or references - used_outputs:
+        issues.append("supporting output references differ from the verified projections")
+    return issues, support
+
 def _blocked_result_issues(result_registry: dict) -> list[str]:
     blocked_results = result_registry.get("blocked_results")
     if not isinstance(blocked_results, list):
@@ -220,11 +299,12 @@ def _assess_model_adequacy(
     *,
     problem_spec: ProblemSpec | None,
     mathematical_review: VerificationLayer,
+    supporting_values: dict | None = None,
 ) -> dict:
     return ModelAdequacyLayer(
         source_coverage=_assess_source_coverage(approved, problem_spec),
         mathematical_review=mathematical_review,
-        numerical_validation=_assess_numerical_validation(approved, result_registry),
+        numerical_validation=_assess_numerical_validation(approved, result_registry, supporting_values),
     ).model_dump()
 
 
@@ -260,6 +340,7 @@ def _assess_source_coverage(
 def _assess_numerical_validation(
     approved: ApprovedModelIR,
     result_registry: dict,
+    supporting_values: dict | None = None,
 ) -> dict:
     registry = build_default_model_validator_registry()
     verified_results = result_registry.get("verified_results")
@@ -295,13 +376,13 @@ def _assess_numerical_validation(
         candidate_roles.update(roles)
         evidence = []
         source_refs: dict[int, str] = {}
-        for result in subproblem_results:
-            reference = f"result_registry.json#{result['id']}"
+        registered = [(f"result_registry.json#{result['id']}", result.get("value")) for result in subproblem_results]
+        for reference, value in [*registered, *(supporting_values or {}).get(subproblem.subproblem_id, {}).items()]:
             if reference not in evidence_refs:
                 evidence_refs.append(reference)
-            if isinstance(result.get("value"), dict):
-                evidence.append(result["value"])
-                for node in walk_mappings([result["value"]]):
+            if isinstance(value, dict):
+                evidence.append(value)
+                for node in walk_mappings([value]):
                     source_refs.setdefault(id(node), reference)
 
         for family in subproblem.validation.model_families:
@@ -372,6 +453,7 @@ def _operator_evidence_issues(
     result_registry: dict,
     figure_registry: dict,
     source_ids_by_subproblem: dict[str, set[str]],
+    nodes_by_subproblem: dict[str, set[str]],
 ) -> tuple[list[str], list[dict]]:
     issues: list[str] = []
     parameters = parameter_registry.get("parameters")
@@ -409,7 +491,8 @@ def _operator_evidence_issues(
         if not isinstance(evidence_ids, list) or not evidence_ids:
             issues.append(f"result {result_id} has no evidence IDs")
         else:
-            allowed = executed_node_ids | source_ids_by_subproblem.get(str(result.get("subproblem_id") or ""), set())
+            sid = str(result.get("subproblem_id") or "")
+            allowed = nodes_by_subproblem.get(sid, set()) | source_ids_by_subproblem.get(sid, set())
             unknown = sorted(set(map(str, evidence_ids)) - allowed)
             if unknown:
                 issues.append(

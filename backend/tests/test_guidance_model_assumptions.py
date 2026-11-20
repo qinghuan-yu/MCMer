@@ -238,8 +238,8 @@ def test_result_claims_and_guidance_inherit_modeling_assumptions() -> None:
     model_ir = ModelIR.model_validate(_model_payload())
     registry = _result_registry(
         model_ir,
-        {"solution": {"objective_value": 42.0}},
-        {"solution": "solve_indexed_model"},
+        {model_ir.subproblems[0].subproblem_id: {"solution": {"objective_value": 42.0}}},
+        {model_ir.subproblems[0].subproblem_id: {"solution": "solve_indexed_model"}},
     )
 
     statement = _assumption_payload()["statement"]
