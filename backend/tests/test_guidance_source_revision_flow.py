@@ -247,8 +247,15 @@ def test_pipeline_applies_source_before_modeling_and_keeps_one_mathematical_revi
 
     class Output:
         async def run(self, **kwargs):
-            kwargs["output_path"].write_text('{"status": "partial"}', encoding="utf-8")
-            return kwargs["output_path"]
+            output = kwargs["output_path"]
+            output.write_text('{"status": "partial"}', encoding="utf-8")
+            if output.name == "guidance.md":
+                from hashlib import sha256
+                (output.parent / "guidance_audit_report.json").write_text(
+                    json.dumps({"status": "PASS", "publication_status": "partial",
+                                "guidance_sha256": sha256(output.read_bytes()).hexdigest()}), encoding="utf-8",
+                )
+            return output
 
     pipeline = GuidancePipeline(
         decomposition_stage=Decomposition(), source_stage=SourceStage(source_adjudicator=Source()),

@@ -1,2 +1,4 @@
 # Preserve the original bytes and SHA-256 of archived test evidence.
 backend/closeout/validation/*.xml -text
+backend/tests/fixtures/scipy_milp/question.txt text eol=lf
+backend/tests/fixtures/scipy_milp/case.json text eol=lf

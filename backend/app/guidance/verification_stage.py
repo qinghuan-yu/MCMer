@@ -34,10 +34,15 @@ class ResultVerificationStage:
         input_path: Path | None,
         output_path: Path,
     ) -> Path:
+        report = self.assess(_required_input(input_path), output_path.parent)
+        _write_model(output_path, report)
+        return output_path
+
+    @staticmethod
+    def assess(input_path: Path, root: Path) -> VerificationReport:
         manifest = OperatorExecutionManifest.model_validate_json(
-            _required_input(input_path).read_text(encoding="utf-8")
+            input_path.read_text(encoding="utf-8")
         )
-        root = output_path.parent
         approved = ApprovedModelIR.model_validate_json(
             (root / "approved_model_ir.json").read_text(encoding="utf-8")
         )
@@ -191,8 +196,7 @@ class ResultVerificationStage:
                 "figures": figures,
             },
         )
-        _write_model(output_path, report)
-        return output_path
+        return report
 
 def _blocked_result_issues(result_registry: dict) -> list[str]:
     blocked_results = result_registry.get("blocked_results")

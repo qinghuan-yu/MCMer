@@ -77,7 +77,7 @@ def test_joint_formulation_charges_each_defined_training_participant(tmp_path, o
 
         async def chat(self, **kwargs):
             stage = kwargs["agent_name"]
-            response = core if stage.endswith("indexed_core") else formulation if stage.endswith(("indexed_constraints", "indexed_formulation")) else architecture
+            response = formulation if stage.endswith("indexed_constraints") else {**architecture, "indexed_data": core}
             if response is formulation:
                 self.attempts += 1
                 if omit_on_first_attempt and self.attempts == 1:

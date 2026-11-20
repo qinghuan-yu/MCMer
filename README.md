@@ -2,9 +2,28 @@
 
 MCMer 是一个面向数学建模场景的实验性全栈系统，保留来源追踪、ModelIR、数值算子、验证与报告能力。
 
-**项目于 2026-11-10 按用户决定封档，最小建模闭环未完成，开发结束。**
+**2026-11-20 重新开启 Guidance 子题建模。** 默认入口由 LLM 提交候选及参数来源，可按需查询一次算子。harness 读取实际参数，校验模型，按具体错误最多纠正一次。审核、计算、结果验证和报告沿用同一工作流。
 
-## 封档状态
+## 运行与复核
+
+在应用里照常创建建模指导任务即可使用新流程。离线示例用脚本响应代替模型供应商，从冻结题目一直运行到导出的报告，并独立枚举四资产的 81 种收费情形。真实模型对该题的验收仍待新的调用额度。
+
+2026-11-20 另用 SciPy 整数规划例题实测。独立穷举得到两个最优解 (1, 2) 和 (2, 2)，两者均使 y 达到最大值 2。脚本提供模型回复时，默认流程求解和导出通过。真实模型在首个子题误用文本参数，纠正输出被截断，任务随即阻断。实测共 5 次请求、75502 tokens，正式数值结果为 0。五条原响应离线回放产生相同的阻断报告。[题面](backend/tests/fixtures/scipy_milp/question.txt) · [实测回执](backend/tests/fixtures/scipy_milp/live_receipt.json)
+
+在 `backend` 目录运行：
+
+```powershell
+$env:LITELLM_LOCAL_MODEL_COST_MAP='True'
+..\.venv\Scripts\python.exe -X utf8 -m pytest tests/test_guidance_modeling_harness.py tests/test_portfolio_harness_loop.py tests/test_scipy_milp_guidance.py -q -p no:cacheprovider
+```
+
+可对已发布的四资产运行单独复核。在同一目录运行以下命令，将路径和结果 ID 替换为该次运行的值。变量名与示例不同，可用 `--amount-keys`、`--fee-keys` 按 S1 到 S4 指定，并指定银行余额、最大损失与全存银行收益的变量名；完整选项见 `--help`。核验器只读工作区，以退出码和 JSON 返回结论。
+
+```powershell
+..\.venv\Scripts\python.exe -X utf8 scripts/verify_closeout_portfolio.py --audit-run <运行目录> --result-id <结果ID>
+```
+
+## 2026-11-10 封档状态
 
 冻结版本：`closeout-incomplete-2026-11-10`，位于 `codex/math-agent-harness` 分支。
 
@@ -20,7 +39,7 @@ MCMer 是一个面向数学建模场景的实验性全栈系统，保留来源�
 - `codex/math-agent-harness`：本次封档分支，保存 ModelIR 重构、有限实测与最终记录。
 - `main`、`agent`：保留的历史分支，本次封档未合并或改写其内容。
 
-项目当前没有活动开发主线。
+当前开发范围和实测状态以[唯一执行计划](docs/compute_first_guidance_plan.md)为准。
 
 ## 致谢
 

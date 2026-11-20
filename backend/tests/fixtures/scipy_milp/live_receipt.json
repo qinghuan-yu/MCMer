@@ -1,0 +1,96 @@
+{
+  "case_id": "scipy_milp_integer_example",
+  "date": "2026-11-20",
+  "model": "deepseek/deepseek-flash",
+  "case_sha256": "da60920122612373e669fd347bdd32ebb7db9b90cdfa9d564d01b9aeecd037f0",
+  "task_sha256": "a2a91121c3d3a51000df7804768e75597959374379d532a9fa91b910f3711f11",
+  "code_sha256": "70be83ee6958d7e5dd8e824610c5f0bb741d5fc051d885c18c7712b3647633dd",
+  "budget": {
+    "model": "deepseek-flash",
+    "endpoint": "https://api.deepseek.com",
+    "max_calls": 12,
+    "max_total_tokens": 250000,
+    "max_total_run_seconds": 720,
+    "max_runs": 1
+  },
+  "outcome": "blocked",
+  "publication_status": "blocked",
+  "diagnostic_audit_status": "PASS",
+  "executed_solver": false,
+  "verified_result_count": 0,
+  "model_review_api_calls": 0,
+  "seconds": 175.578,
+  "total_tokens": 75502,
+  "unknown_usage_calls": 0,
+  "failure": "A locked text fact containing x,y was used as a numeric parameter. The correction reached its output limit and returned no usable proposal. Dependent subproblems were blocked.",
+  "calls": [
+    {
+      "number": 1,
+      "agent": "GuidanceDecomposerStructure",
+      "finish_reason": "stop",
+      "total_tokens": 4898,
+      "request_sha256": "2d4aa1a099a46dd93698a37f5742f1136bf356d517c2fcf0cf43c3d0806d974a",
+      "response_sha256": "fa4d05e0d3d0359ed667e5ad1aae04bcab603ef8a9176cf5cfe238739cfb6176"
+    },
+    {
+      "number": 2,
+      "agent": "GuidanceDecomposerFacts",
+      "finish_reason": "stop",
+      "total_tokens": 8075,
+      "request_sha256": "c0864ca77f05b79fb4f12365413ff2f563ba910ee29024f07b91e62562f565f1",
+      "response_sha256": "eedf70e5ca0e82dc74f840fa5b86c88da7fc2b74124c16f1fb77b4eca344d2cf"
+    },
+    {
+      "number": 3,
+      "agent": "GuidanceModeler_sp1_model_formulation",
+      "finish_reason": "stop",
+      "total_tokens": 14253,
+      "request_sha256": "fc3e469f4999dc48e66b85d41de51835176127ea4a280466c6bf692b9d0fafff",
+      "response_sha256": "083cf4af7b624d5417d93a4033fcfec5bc4158180302e23e82b1c52a03366f97"
+    },
+    {
+      "number": 4,
+      "agent": "GuidanceModeler_sp1_model_formulation_proposal",
+      "finish_reason": "stop",
+      "total_tokens": 22206,
+      "request_sha256": "51dbb5fca5971a8cd89434c003fad80fe0fee86e4a694a0966e1b69d6b87b4e9",
+      "response_sha256": "1c5d6ebb56407786ef724327cbcdfdd06e982181c18b2b0e26fd4711088b0d95"
+    },
+    {
+      "number": 5,
+      "agent": "GuidanceModeler_sp1_model_formulation_proposal",
+      "finish_reason": "length",
+      "total_tokens": 26070,
+      "request_sha256": "0596c523f0df0efe5c53f8b814faa0d10da786f75c2327b59ae4a12e57d1d096",
+      "response_sha256": "df7ed53e7d36287de6220c544359fc39165a204dbbabd27b79a1e64cb9a8d95a"
+    }
+  ],
+  "sha256": {
+    "model_ir.json": "5497508c8b1763b88921e137c473765e5b7146b78afb5d5f089ecec2a6f6b37d",
+    "approved_model_ir.json": "fc3e8c9e18f6d0c44e09d7528e08d885eb25e86c2bae578c5520e1aa98e00540",
+    "verification_report.json": "ef9f45a261b21b6d2b8e56a52ea93d3d45e4b772e82290a5cd481303c2427c32",
+    "result_registry.json": "483f7bf7e707a12de625e98d620a39b3672f4b9dc8f829dd744d77955ca75798",
+    "guidance.md": "32bb10566768ef1bffd00c9dceac73ea55fb5b37a47e4192c348e56a4ca23d66",
+    "guidance_audit_report.json": "665d44d3a04400bf420d9f6bc436d12f6108e3e96ba4b8eb4805c930c2f58ca3"
+  },
+  "offline_response_replay": {
+    "matched_request_histories": 5,
+    "identical_report": true,
+    "external_calls": 0
+  },
+  "independent_reference": {
+    "bounded_integer_points": 25,
+    "feasible_points": 11,
+    "max_y": 2,
+    "optimal_points": [
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        2
+      ]
+    ]
+  }
+}

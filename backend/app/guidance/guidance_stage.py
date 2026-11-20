@@ -8,9 +8,11 @@ from pathlib import Path
 from app.artifacts.guidance_audit import build_guidance_audit_report
 from app.guidance.contracts import VerificationReport
 from app.guidance.model_review_contracts import ApprovedModelIR
+from app.guidance.recovery import file_snapshots
 from app.guidance.renderer import render_verified_guidance
+from app.guidance.guidance_rendering.sections import _append_fact_traceability, _verification_layer_rows
+from app.guidance.verification_stage import ResultVerificationStage
 from app.guidance.stage_io import (
-    _read_json,
     _read_json_if_exists,
     _required_input,
     _write_model,
@@ -30,33 +32,31 @@ class GuidanceStage:
     ) -> Path:
         source_path = _required_input(input_path)
         root = output_path.parent
-        problem_spec = _read_json_if_exists(root / "problem_spec.json")
+        execution_manifest = {}
+        calculation_failure = {}
         if source_path.name == "approved_model_ir.json":
+            problem_spec = _read_json_if_exists(root / "problem_spec.json")
             report, approved, parameters, results = _build_blocked_guidance_artifacts(
                 root,
                 source_path,
             )
         else:
-            report = VerificationReport.model_validate_json(
-                source_path.read_text(encoding="utf-8")
-            )
-            refs = report.artifact_refs
-            approved = _read_json(root / str(refs["approved_model"]))
-            parameters = _read_json_if_exists(root / str(refs["parameter_registry"]))
-            results = _read_json_if_exists(root / str(refs["result_registry"]))
-            execution_manifest = _read_json_if_exists(
-                root / str(refs.get("execution_manifest", "execution_manifest.json"))
-            )
-            calculation_failure = _read_json_if_exists(root / "calculation_failure.json")
-            report = _enforce_verified_guidance_evidence(
-                report,
-                approved_model=approved,
-                parameter_registry=parameters,
-                result_registry=results,
-            )
-        if source_path.name == "approved_model_ir.json":
-            execution_manifest = {}
-            calculation_failure = {}
+            report = _read_verification_for_publication(source_path)
+            # 下游只读取工作区中约定的正式工件，不接受文档提供的任意路径。
+            approved, parameters, results, problem_spec = {}, {}, {}, {}
+            try:
+                approved = _read_json_if_exists(root / "approved_model_ir.json")
+                execution_manifest = _read_json_if_exists(root / "execution_manifest.json")
+                problem_spec = _read_json_if_exists(root / "problem_spec.json")
+                parameters = _read_json_if_exists(root / "parameter_registry.json")
+                results = _read_json_if_exists(root / "result_registry.json")
+                calculation_failure = _read_json_if_exists(root / "calculation_failure.json")
+                if report.status != "blocked":
+                    report = _publication_report(report, root)
+            except (OSError, ValueError) as exc:
+                report = report.model_copy(update={"status": "blocked", "blocking_issues": [
+                    f"cannot read publication evidence: {exc}",
+                ]})
         guidance = render_verified_guidance(
             approved_model=approved,
             verification_report=report.model_dump(mode="json"),
@@ -68,7 +68,7 @@ class GuidanceStage:
         )
         context = {
             "artifact_type": "guidance",
-            "required_sections": _required_guidance_sections(guidance),
+            "required_sections": _required_guidance_sections(guidance, results),
         }
         audit = build_guidance_audit_report(
             guidance_markdown=guidance,
@@ -79,8 +79,21 @@ class GuidanceStage:
                 "figures": report.artifact_refs.get("figures", []),
             },
             artifact_root=root,
+            expected_fact_appendix=_append_fact_traceability("", problem_spec=problem_spec,
+                model=approved.get("approved_model_ir", {})).strip(),
+            verification_rows=_verification_layer_rows(report.model_dump(mode="json")),
         )
+        if audit["status"] == "BLOCK" and report.status != "blocked":
+            issues = [f"{item['type']} ({item['location']})" for item in audit["blocks"]]
+            report = report.model_copy(update={"status": "blocked", "blocking_issues": issues})
+            guidance = render_verified_guidance(
+                approved_model=approved, verification_report=report.model_dump(mode="json"),
+                parameter_registry=parameters, result_registry=results, problem_spec=problem_spec,
+            )
+            context["required_sections"] = _required_guidance_sections(guidance, results)
+        audit["publication_status"] = report.status
         output_path.write_text(guidance, encoding="utf-8")
+        audit["guidance_sha256"] = file_snapshots(root, [output_path.name])[output_path.name]
         (root / "res.md").write_text(guidance, encoding="utf-8")
         (root / "guidance_context.json").write_text(
             json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -90,7 +103,7 @@ class GuidanceStage:
         )
         return output_path
 
-def _required_guidance_sections(guidance: str) -> list[str]:
+def _required_guidance_sections(guidance: str, results: dict) -> list[str]:
     if (
         guidance.startswith("# 计算链路阻断诊断")
         or guidance.startswith("# 建模链路阻断诊断")
@@ -104,94 +117,49 @@ def _required_guidance_sections(guidance: str) -> list[str]:
             "下一步修复动作",
             "可复现附件说明",
         ]
-    return [
-        "可信度摘要",
-        "问题理解",
-        "数据与来源",
-        "参数与来源表",
-        "模型选择理由",
-        "建模路线与读者决策",
-        "建模路线取舍",
-        "可辨识性分析",
-        "结论状态登记",
-        "分问题建模步骤",
-        "必要计算结果",
-        "最终答案与应填表格",
-        "复核与稳健性",
-        "阻断项与待确认项",
-        "论文转化建议",
-        "可复现附件说明",
+    summary = results.get("summary", {})
+    sections = [
+        "可信度摘要", "问题理解", "数据与来源", "参数与来源表", "模型选择理由",
+        "分问题建模步骤", "必要计算结果", "复核与稳健性", "阻断项与待确认项", "可复现附件说明",
     ]
+    for field, section in (
+        ("reader_decision_guide", "建模路线与读者决策"), ("method_route_comparison", "建模路线取舍"),
+        ("identifiability_analysis", "可辨识性分析"), ("claim_registry", "结论状态登记"),
+    ):
+        if summary.get(field):
+            sections.append(section)
+    if results.get("verified_results") or summary.get("final_answer_tables"):
+        sections.append("最终答案与应填表格")
+    return sections
 
-def _enforce_verified_guidance_evidence(
-    report: VerificationReport,
-    *,
-    approved_model: dict,
-    parameter_registry: dict,
-    result_registry: dict,
-) -> VerificationReport:
-    if report.status != "verified":
-        return report
 
-    issues: list[str] = []
-    parameters = parameter_registry.get("parameters")
-    if not isinstance(parameters, list) or not parameters:
-        issues.append("verified guidance evidence missing: parameter evidence")
-    verified_results = result_registry.get("verified_results")
-    if not isinstance(verified_results, list) or not verified_results:
-        issues.append("verified guidance evidence missing: numerical results")
-
-    check_groups = {
-        "input checks": report.input_checks,
-        "equation checks": report.equation_checks,
-        "unit checks": report.unit_checks,
-        "constraint checks": report.constraint_checks,
-        "residual checks": report.residual_checks,
-        "sensitivity checks": report.sensitivity_checks,
-    }
-    for label, checks in check_groups.items():
-        if not checks:
-            issues.append(f"verified guidance evidence missing: {label}")
-        elif any(str(check.get("status")) != "passed" for check in checks):
-            issues.append(f"verified guidance evidence failed: {label}")
-
-    model = approved_model.get("approved_model")
-    model = model if isinstance(model, dict) else {}
-    subproblems = model.get("subproblem_models")
-    if not isinstance(subproblems, list) or not subproblems:
-        issues.append("verified guidance evidence missing: subproblem modeling details")
-    else:
-        for subproblem in subproblems:
-            if not _has_complete_subproblem_guidance_details(subproblem):
-                issues.append("verified guidance evidence incomplete: subproblem modeling details")
-                break
-
-    if not issues:
-        return report
-    return report.model_copy(
-        update={
-            "status": "blocked",
-            "blocking_issues": [*report.blocking_issues, *issues],
-        }
-    )
-
-def _has_complete_subproblem_guidance_details(subproblem: object) -> bool:
-    if not isinstance(subproblem, dict):
-        return False
-    execution_status = subproblem.get("execution_status")
-    if execution_status == "solvable":
-        return all(
-            isinstance(subproblem.get(field), list) and bool(subproblem[field])
-            for field in ("equations", "parameters", "solve_steps")
+def _read_verification_for_publication(path: Path) -> VerificationReport:
+    try:
+        return VerificationReport.model_validate_json(path.read_bytes())
+    except (OSError, ValueError):
+        reason = f"无法读取有效的验证记录 {path.name}，请从执行清单重新复核。"
+        layer = {"status": "not_assessed", "reasons": [reason]}
+        # 此对象仅供阻断报告显示，保留原验证记录或缺失现场。
+        return VerificationReport(
+            model_id="", coverage_status="blocked", blocking_issues=[reason],
+            execution_verified=layer, evidence_supported=layer,
+            model_adequate={"source_coverage": layer, "mathematical_review": layer,
+                            "numerical_validation": layer},
+            artifact_refs={"verification": path.name},
         )
-    if execution_status == "blocked":
-        return (
-            bool(str(subproblem.get("blocking_reason") or "").strip())
-            and isinstance(subproblem.get("missing_inputs"), list)
-            and bool(subproblem["missing_inputs"])
-            and bool(str(subproblem.get("recovery_action") or "").strip())
-        )
-    return False
+
+
+def _publication_report(report: VerificationReport, root: Path) -> VerificationReport:
+    # 重读同一套执行、来源、数学验证证据，不重新求解，也不由报告另作数学裁决。
+    try:
+        current = ResultVerificationStage.assess(root / "execution_manifest.json", root)
+        if current == report and current.evidence_supported.status == "passed":
+            return report
+        issues = current.blocking_issues or ["verification evidence missing or changed before publication"]
+    except (OSError, ValueError, KeyError) as exc:
+        issues = [f"verification evidence unavailable before publication: {exc}"]
+    return report.model_copy(update={"status": "blocked", "blocking_issues": issues})
+
 
 def _build_blocked_guidance_artifacts(
     root: Path,

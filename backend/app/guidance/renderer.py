@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.guidance.guidance_rendering.data import (
@@ -230,8 +231,27 @@ def render_verified_guidance(
             )
         )
 
+    for sub in model.get("subproblems", []):
+        for component in sub.get("execution_components", []):
+            if component["kind"] != "indexed_linear":
+                continue
+            for parameter in component["model"]["parameters"]:
+                references = [v["source_ref"] for v in parameter.get("values", [])]
+                values = [v["value"] for v in parameter.get("values", [])] or parameter.get("dense_values", [])
+                source = references or [parameter.get("dense_source_ref") or parameter.get("runtime_source")]
+                source_text = ", ".join(dict.fromkeys(str(ref) for ref in source))
+                preview = ", ".join(str(v) for v in values[:8]) + ("…" if len(values) > 8 else "")
+                lines.append(f"| {_cell(parameter['id'])} | — | {_cell(sub['subproblem_id'])} | "
+                             f"{_cell(preview or '执行时绑定')} | — | ModelIR | "
+                             f"{_cell(source_text)} | 来源绑定 |")
+
     lines.extend(["", "## 模型选择理由", ""])
-    lines.append(str(model.get("selected_method") or "未登记推荐方法。"))
+    for sub in model.get("subproblems", []):
+        for candidate in sub.get("candidate_models", []):
+            lines.append(f"- `{_cell(sub['subproblem_id'])}` · {_cell(candidate.get('role'))} "
+                         f"`{_cell(candidate.get('id'))}`，适用范围为{_cell(candidate.get('applicability_boundary'))}。")
+    if model.get("selected_method"):
+        lines.append(str(model["selected_method"]))
     candidates = model.get("candidate_methods", [])
     if isinstance(candidates, list):
         for candidate in candidates:
@@ -351,11 +371,32 @@ def render_verified_guidance(
                 lines.extend(f"- 说明：{_guidance_text(note)}" for note in notes if str(note).strip())
             lines.append("")
 
+    elif any("value" in item for item in result_registry.get("verified_results", [])):
+        lines.extend(["", "## 最终答案与应填表格", "", "| 子问题 | 输出项 | 数值 | 状态 | 证据 |",
+                      "| --- | --- | --- | --- | --- |"])
+        for result in result_registry["verified_results"]:
+            if "value" not in result:
+                continue
+            value = result["value"]
+            if isinstance(value, dict) and "objective_value" in value and isinstance(value.get("decision_values"), dict):
+                fields = {"objective_value": value["objective_value"], **value["decision_values"]}
+            else:
+                fields = {result["id"]: value}
+            for name, number in fields.items():
+                display = json.dumps(number, ensure_ascii=False) if isinstance(number, (list, dict)) else str(number)
+                if len(display) > 500:
+                    display = display[:500] + "…（完整输出见登记记录）"
+                lines.append(f"| {_cell(result.get('subproblem_id'))} | {_cell(name)} | {_cell(display)} | "
+                             f"{_cell(result.get('status'))} | `result_registry.json#{_cell(result['id'])}` |")
+
     lines.extend(["", "## 分问题建模步骤", ""])
     lines.extend(_registered_subproblem_modeling_lines(result_registry, model))
 
     lines.extend(["", "## 必要计算结果", ""])
-    lines.extend(_calculation_context_lines(result_registry, parameter_registry))
+    if model.get("subproblems"):
+        lines.append("参数与约束见审核后的 ModelIR。各项输出按执行清单中的求解器及节点登记。")
+    else:
+        lines.extend(_calculation_context_lines(result_registry, parameter_registry))
     for result in result_registry.get("verified_results", []):
         if not isinstance(result, dict):
             continue
@@ -414,6 +455,8 @@ def render_verified_guidance(
             continue
         passed = sum(1 for check in checks if isinstance(check, dict) and check.get("status") == "passed")
         lines.append(f"- {label}复核：{passed}/{len(checks)} 项通过。")
+    if not verification_report.get("sensitivity_checks"):
+        lines.append("- 本次验证记录未登记单独的敏感性检验。")
     for subproblem in model.get("subproblems", []):
         if not isinstance(subproblem, dict):
             continue

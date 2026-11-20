@@ -17,6 +17,8 @@ def build_guidance_audit_report(
     parameter_registry: dict[str, object] | None = None,
     figure_registry: dict[str, object] | None = None,
     artifact_root: Path | None = None,
+    expected_fact_appendix: str = "",
+    verification_rows: list[str] | None = None,
 ) -> dict[str, object]:
     """Audit whether a guidance document is traceable enough to trust."""
     text = guidance_markdown or ""
@@ -45,7 +47,23 @@ def build_guidance_audit_report(
         _check_parameter_source_table_structure(text, context, parameters, blocks)
         _check_review_section_error_context(text, context, blocks)
         _check_minimum_guidance_evidence(results, parameters, blocks)
-        _check_registered_numbers(text, results, parameters, blocks)
+        # 来源附录逐字对照已核验的题面与模型。正文数字仍逐项对照结果与参数。
+        numeric_text = text.rstrip()
+        if expected_fact_appendix:
+            if numeric_text.endswith("\n" + expected_fact_appendix):
+                numeric_text = numeric_text.removesuffix(expected_fact_appendix)
+            else:
+                blocks.append({"type": "fact_trace_mismatch", "location": "题面事实追踪",
+                               "severity": "high", "fix": "Regenerate the trace from the verified source and ModelIR."})
+        if verification_rows:
+            # 验证计数只属于相应的状态表，不能授权正文中的同值数学结论。
+            summary = "\n".join(verification_rows)
+            if summary in numeric_text:
+                numeric_text = numeric_text.replace(summary, "", 1)
+            else:
+                blocks.append({"type": "verification_summary_mismatch", "location": "可信度摘要",
+                               "severity": "high", "fix": "Render the recorded verification layers."})
+        _check_registered_numbers(numeric_text, results, parameters, blocks)
         _check_figure_interpretation_context(text, context, figures, blocks)
         _check_figure_coverage(text, figures, artifact_root, blocks)
 

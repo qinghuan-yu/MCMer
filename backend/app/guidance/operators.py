@@ -124,10 +124,19 @@ class OperatorRegistry:
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-    def model_contracts(self) -> list[dict]:
-        # 编译器托管的 MILP 只发布可用性与入口，不向模型开放内部系数参数。
-        return [
-            item.model_dump(
-                mode="json", exclude={"parameters_schema"} if item.system_managed else set(),
-            ) for item in self.definitions()
-        ]
+    def model_catalog(self) -> list[dict]:
+        return [item.model_dump(mode="json", include={
+            "operator_id", "description", "system_managed", "inputs", "outputs",
+        }) for item in self.definitions()]
+
+    def model_contracts(self, operator_ids: list[str] | None = None) -> list[dict]:
+        contracts = []
+        for operator_id in sorted(self._operators) if operator_ids is None else operator_ids:
+            definition = self.get(operator_id)
+            if definition is None:
+                raise ValueError(f"unknown operator: {operator_id}")
+            # 程序托管的求解器只公开入口，不开放内部系数。
+            contracts.append(definition.model_dump(
+                mode="json", exclude={"parameters_schema"} if definition.system_managed else set(),
+            ))
+        return contracts

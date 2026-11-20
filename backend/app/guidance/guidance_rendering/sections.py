@@ -245,6 +245,26 @@ def _registered_subproblem_modeling_lines(
     analyses = _identifiability_analysis(result_registry)
     answer_tables = _final_answer_tables(result_registry)
     lines: list[str] = []
+    for subproblem in model.get("subproblems", []):
+        if subproblem.get("execution_status") == "blocked":
+            lines.extend(_blocked_subproblem_modeling_lines(subproblem))
+            continue
+        lines.extend(["", f"**{_cell(subproblem.get('subproblem_id'))}**", "",
+                      f"- 建模目标：{_cell(subproblem.get('objective'))}"])
+        for component in subproblem.get("execution_components", []):
+            if component["kind"] == "indexed_linear":
+                indexed = component["model"]
+                lines.extend([
+                    f"- 索引模型参数：{_join_claim_items([p['id'] for p in indexed['parameters']])}。",
+                    f"- 约束：{_join_claim_items([c['id'] for c in indexed['constraints']])}。",
+                    f"- 求解节点：`{_cell(component['solver_node_id'])}`。",
+                ])
+            else:
+                for operator in component.get("operators", []):
+                    lines.append(f"- 算子 `{_cell(operator['operator_id'])}` 从已绑定的参数与输入生成"
+                                 f"输出 {_join_claim_items(operator['outputs'])}。")
+        for answer in subproblem.get("final_answers", []):
+            lines.append(f"- 输出 `{_cell(answer['id'])}`：{_cell(answer['item'])}。")
     if analyses:
         for analysis in analyses:
             subproblem_id = str(analysis.get("subproblem_id") or "unknown")

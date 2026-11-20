@@ -71,6 +71,7 @@ def _mixed_model_ir() -> dict:
 
 def _bind_execution_source(root, approved):
     """为库存夹具登记实际标量来源；只补证据映射，保留原数值和约束。"""
+    from app.artifacts.evidence_profile import build_evidence_profile
     from app.artifacts.input_catalog import build_input_catalog
     from app.guidance.contracts import ProblemSpec
     from app.guidance.model_ir import ModelIR
@@ -82,10 +83,12 @@ def _bind_execution_source(root, approved):
         f"{parameter['id']} {value['coordinates']} = {value['value']}"
         for parameter in parameters for value in parameter["values"]
     )
-    source = root / "inventory_inputs.txt"
+    source = root / "data" / "inventory_inputs.txt"
+    source.parent.mkdir(exist_ok=True)
     source.write_text(text, encoding="utf-8")
     catalog = build_input_catalog(source, work_dir=root, extracted_text=text)
     source_ref = catalog.blocks[0].source_ref
+    registered_source, = build_evidence_profile(root).evidence
     facts, bindings = [], []
     for index, parameter in enumerate(parameters):
         parameter["source_fact_ids"] = []
@@ -99,7 +102,9 @@ def _bind_execution_source(root, approved):
             bindings.append({"fact_id": fact_id, "model_paths": [f"/execution_components/0/model/parameters/{index}"]})
     inventory["fact_bindings"] = bindings
     for data in inventory["data"]:
-        data["source_ref"] = source_ref
+        data["source_ref"] = registered_source.source_ref
+    for answer in inventory["final_answers"]:
+        answer["evidence_ids"] = [registered_source.evidence_id]
     spec = ProblemSpec(task_summary="Run the finite inventory fixture with registered parameter values.",
                        subproblems=[{"id": item["subproblem_id"],
                                      "required_fact_ids": [fact["fact_id"] for fact in facts]
@@ -223,6 +228,7 @@ def test_verification_reports_partial_coverage_without_failing_execution(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["coverage_status"] == "partial"
     assert report["execution_verified"]["status"] == "passed"
+    assert report["evidence_supported"]["status"] == "passed"
     assert report["status"] == "partial"
     assert any(
         "unavailable_estimate" in issue
@@ -447,6 +453,7 @@ def test_runtime_failure_in_one_subproblem_isolates_and_preserves_independent_ve
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["coverage_status"] == "partial"
     assert report["execution_verified"]["status"] == "passed"
+    assert report["evidence_supported"]["status"] == "passed"
     assert report["status"] == "partial"
     assert any(
         "missing_attachment_subproblem" in issue

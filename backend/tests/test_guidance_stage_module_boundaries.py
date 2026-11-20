@@ -5,7 +5,6 @@ from app.guidance.operator_catalog import build_default_operator_registry
 import importlib
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import get_type_hints
 
 import pytest
@@ -67,23 +66,14 @@ def test_indexed_core_validator_keeps_resolvable_type_annotations() -> None:
 def test_indexed_core_request_requires_exact_static_parameter_source(monkeypatch) -> None:
     from app.guidance import model_generation
     from app.guidance.contracts import ProblemSpec
-    from app.guidance.model_ir_drafts import ModelIRGenerationDraft, SolvableModelIRDraft
 
     captured = {}
-    architecture = SolvableModelIRDraft.model_construct(
-        execution_components=["indexed_linear_model"], operators=[],
-    )
-
     async def capture_request(**kwargs):
-        if kwargs["model_type"] is ModelIRGenerationDraft:
-            return SimpleNamespace(
-                subproblems=[architecture], model_dump=lambda **_: {},
-            )
         captured["prompt"] = kwargs["system_prompt"]
-        raise RuntimeError("captured core request")
+        raise RuntimeError("captured proposal")
 
     monkeypatch.setattr(model_generation, "_request_model", capture_request)
-    with pytest.raises(RuntimeError, match="captured core request"):
+    with pytest.raises(RuntimeError, match="captured proposal"):
         asyncio.run(model_generation._request_single_subproblem_model(
             llm=None,
             system_prompt="Build the requested model.",

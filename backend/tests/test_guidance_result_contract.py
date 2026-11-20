@@ -14,9 +14,11 @@ from app.schemas.response import TaskResult
 def test_guidance_result_exposes_three_verification_layers(tmp_path: Path) -> None:
     from app.guidance.pipeline import _final_result
 
-    (tmp_path / "guidance.md").write_text("# guidance\n", encoding="utf-8")
+    markdown = b"# guidance\n"
+    (tmp_path / "guidance.md").write_bytes(markdown)
     (tmp_path / "guidance_audit_report.json").write_text(
-        '{"status":"PASS","scores":{},"blocks":[]}',
+        json.dumps({"status": "PASS", "scores": {}, "blocks": [], "publication_status": "partial",
+                    "guidance_sha256": hashlib.sha256(markdown).hexdigest()}),
         encoding="utf-8",
     )
     (tmp_path / "approved_model_ir.json").write_text(

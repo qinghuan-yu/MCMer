@@ -1,0 +1,21 @@
+{
+  "case_id": "scipy_milp_integer_example",
+  "task_file": "question.txt",
+  "task_sha256": "a2a91121c3d3a51000df7804768e75597959374379d532a9fa91b910f3711f11",
+  "source_url": "https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.milp.html",
+  "source_note": "Maximization example in the SciPy 1.17.1 milp docstring. Only the translated question is ingested.",
+  "budget": {
+    "model": "deepseek-flash",
+    "endpoint": "https://api.deepseek.com",
+    "max_calls": 12,
+    "max_total_tokens": 250000,
+    "max_total_run_seconds": 720,
+    "max_runs": 1
+  },
+  "acceptance": [
+    "Default pipeline with real model transport returns completed, with verified evidence, PASS audit, and a matching published report digest.",
+    "Published x and y are nonnegative integers satisfying all three original inequalities. Published objective equals y.",
+    "Independent exhaustive enumeration over all integer points with 0 <= x,y <= 4 gives the same maximum. Accept every optimal tie.",
+    "Inspect the published report and model against the original question. Never send reference solutions or scripted replies to the model."
+  ]
+}

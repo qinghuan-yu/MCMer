@@ -367,8 +367,7 @@ def test_hybrid_candidates_may_wait_for_the_system_managed_solver_node():
 class _StageLLM:
     def __init__(self, architecture, core, constraints):
         self.responses = {
-            "architecture": architecture,
-            "indexed_core": core,
+            "proposal": [{**architecture, "indexed_data": data} for data in (core if isinstance(core, list) else [core])],
             "indexed_constraints": constraints,
         }
         self.calls = []
@@ -376,10 +375,7 @@ class _StageLLM:
 
     async def chat(self, **kwargs):
         self.calls.append(kwargs)
-        stage = next((
-            name for name in ("indexed_core", "indexed_constraints")
-            if kwargs["agent_name"].endswith(name)
-        ), "architecture")
+        stage = "indexed_constraints" if kwargs["agent_name"].endswith("indexed_constraints") else "proposal"
         attempt = self.attempts.get(stage, 0)
         self.attempts[stage] = attempt + 1
         responses = self.responses[stage]
@@ -441,7 +437,7 @@ def test_modeler_reuses_a_fact_in_architecture_parameters_and_constraints(tmp_pa
 
     subproblem = model.subproblems[0]
     assert subproblem.execution_status == "solvable", subproblem.model_dump()
-    assert len(llm.calls) == 3
+    assert len(llm.calls) == 2
     for call in llm.calls:
         payload = json.loads(call["history"][1]["content"])
         assert payload["locked_facts"] == original_spec["locked_facts"]
@@ -454,10 +450,8 @@ def test_modeler_reuses_a_fact_in_architecture_parameters_and_constraints(tmp_pa
             "/execution_components/1/model/constraints/0",
         ],
     }]
-    core_payload = json.loads(llm.calls[1]["history"][1]["content"])
-    constraint_payload = json.loads(llm.calls[2]["history"][1]["content"])
-    assert core_payload["fact_coverage"]["uncovered_fact_ids"] == []
-    assert len(core_payload["fact_coverage"]["uses"]) == 1
+    constraint_payload = json.loads(llm.calls[1]["history"][1]["content"])
+    assert constraint_payload["fact_coverage"]["uncovered_fact_ids"] == []
     assert len(constraint_payload["fact_coverage"]["uses"]) == 2
 
 
@@ -576,8 +570,8 @@ def test_rejected_core_attempt_cannot_satisfy_final_coverage(tmp_path):
     ).model(problem_spec=spec, task={}, work_dir=tmp_path))
 
     assert result.subproblems[0].execution_status == "blocked"
-    assert llm.attempts["indexed_core"] == 2
-    constraint_payload = json.loads(llm.calls[3]["history"][1]["content"])
+    assert llm.attempts["proposal"] == 2
+    constraint_payload = json.loads(llm.calls[2]["history"][1]["content"])
     assert constraint_payload["fact_coverage"]["uncovered_fact_ids"] == ["fact.rule"]
     diagnostic = json.loads((tmp_path / "modeling_failure_problem1.json").read_text(encoding="utf-8"))
     assert "fact coverage mismatch" in diagnostic["error"]

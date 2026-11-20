@@ -15,7 +15,7 @@ from app.guidance.failure_contracts import (
 from app.guidance.model_review_contracts import (ApprovedModelIR, ModelIRReview, ModelReviewSubmission)
 from app.guidance.model_review_validation import bind_model_review, load_review_catalog
 from app.guidance.model_ir import (BlockedModelIR, ModelIR)
-from app.guidance.recovery import invalidate_stage_outputs, load_source_preflight
+from app.guidance.recovery import file_snapshots, invalidate_stage_outputs, load_source_preflight
 from app.schemas.response import (
     TaskProgress,
     TaskResult,
@@ -255,8 +255,8 @@ def _preserve_revision_request(root: Path, model_path: Path) -> Path:
 
 def _final_result(task_id: str, root: Path):
     guidance_path = root / "guidance.md"
-    audit = _read_json(root / "guidance_audit_report.json")
-    verification = _read_json(root / "verification_report.json")
+    audit = _read_terminal_artifact(root / "guidance_audit_report.json")
+    verification = _read_terminal_artifact(root / "verification_report.json")
     final_status, final_message = _resolve_final_outcome(root, audit)
     yield _progress(task_id, "done", 1.0, final_message, status=final_status)
     yield {
@@ -277,26 +277,36 @@ def _final_result(task_id: str, root: Path):
             audit_blocks=audit.get("blocks", []),
             verification_layers=extract_verification_layers(verification),
             capability_coverage=extract_capability_coverage(
-                approved_model=_read_json(root / "approved_model_ir.json"),
-                compilation_result=_read_json(root / "compilation_result.json"),
-                result_registry=_read_json(root / "result_registry.json"),
+                approved_model=_read_terminal_artifact(root / "approved_model_ir.json"),
+                compilation_result=_read_terminal_artifact(root / "compilation_result.json"),
+                result_registry=_read_terminal_artifact(root / "result_registry.json"),
             ),
         ).model_dump(),
     }
 
 
 def _resolve_final_outcome(root: Path, audit: dict) -> tuple[str, str]:
-    if str(audit.get("status") or "").upper() == "BLOCK":
+    audit_status = str(audit.get("status") or "").upper()
+    if audit_status not in {"PASS", "PARTIAL"}:
         return "blocked", "guidance audit blocked the generated plan"
-    approved = _read_json(root / "approved_model_ir.json")
+    approved = _read_terminal_artifact(root / "approved_model_ir.json")
     review_status = str(approved.get("review_status") or "").lower()
     if review_status in {"blocked", "revision_required"}:
         return "blocked", "model approval blocked execution"
-    verification = _read_json(root / "verification_report.json")
+    verification = _read_terminal_artifact(root / "verification_report.json")
     verification_status = str(verification.get("status") or "").lower()
     if verification_status == "blocked":
         return "blocked", "result verification blocked the generated plan"
-    if review_status == "partial" or verification_status == "partial":
+    if audit.get("publication_status") == "blocked":
+        return "blocked", "report evidence blocked publication"
+    if review_status not in {"approved", "partial"} or verification_status not in {"verified", "partial"}:
+        return "blocked", "verified task evidence is missing"
+    if audit.get("publication_status") != verification_status:
+        return "blocked", "publication record does not match result verification"
+    digest = audit.get("guidance_sha256")
+    if not digest or file_snapshots(root, ["guidance.md"])["guidance.md"] != digest:
+        return "blocked", "published guidance is missing or changed"
+    if review_status == "partial" or verification_status == "partial" or audit_status == "PARTIAL":
         return "partial", "guidance plan generated with incomplete verification or blocked subproblems"
     return "completed", "guidance plan generated"
 
@@ -327,6 +337,14 @@ def _read_json(path: Path) -> dict:
         return {}
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else {}
+
+
+def _read_terminal_artifact(path: Path) -> dict:
+    # 失败界面也需要末态；不可读的回执不能提供完成凭证。
+    try:
+        return _read_json(path)
+    except (OSError, ValueError):
+        return {}
 
 
 def _load_approved_model(path: Path) -> ApprovedModelIR:

@@ -11,14 +11,14 @@ These rules are mandatory for every agent modifying this repository.
 
 ## Product and Runtime Direction
 
-- The project is archived with the minimal end-to-end modeling loop incomplete, explicitly accepted by the user on 2026-11-10. Preserve the frozen code, evidence, and honest failure status. There is no active development goal; the final plan owns the archive facts and this file owns execution rules.
+- Preserve the 2026-11-10 archive tag, evidence, and incomplete acceptance. On 2026-11-20 the user reopened the Guidance modeling module for a bounded LLM/harness loop and approved aligning report publication and terminal task status with verified ModelIR evidence. The single plan defines the active scope. A new live evaluation requires a separately authorized budget.
 - Do not resume implementation, fix historical limitations, make model API calls, reset evaluation budgets, or reinterpret incomplete acceptance as success without an explicit user instruction reopening the project. Historical plans, recovery suggestions, and unused token allowance do not authorize new work. Read-only inspection and offline verification of the archived version remain allowed.
 - Reuse the current Guidance workflow, ModelIR, registered solvers, and mathematical evidence kernel. New harnesses, production sandboxes, SDK migrations, orchestration replacements, and broader problem coverage are outside the closeout scope unless the user explicitly changes that scope.
 - New generated-code execution is outside this closeout scope. Existing isolation guarantees still apply: no unrestricted host fallback, no inherited credentials or configuration secrets, and explicit file, network, dependency, time, memory, and output limits for any approved isolated experiment.
 - Keep exploratory observations, assumptions, and formally accepted results distinct. Both ModelIR and code execution must retain source, transformation, version, run, and validation evidence before their results can support final claims.
 - Keep the existing workflow responsible for execution state, budgets, cancellation, recovery, and validation. A model completion message, successful script, or second LLM opinion is not sufficient to mark mathematics verified; a new harness is not a prerequisite for closeout.
 - Preserve evidence and failure-isolation guarantees. Do not create a second result authority, hidden fallback, or parallel production workflow to make the demonstration pass.
-- Preserve the frozen task and its unmet acceptance criteria. Historical failures remain explicit limitations. Do not treat unit tests, a manual solver probe, or a blocked report as successful model-generated mathematics. Feature development has ended.
+- Preserve the frozen task and its unmet acceptance criteria. Historical failures remain explicit limitations. Do not treat unit tests, a manual solver probe, or a blocked report as successful model-generated mathematics.
 - Real API tests use only `deepseek-flash` within the authorized data scope. Exclude biological research problems. Keep failed runs and unknown usage in the ledger; do not silently expand budgets or resample until success.
 
 ## Verify Before Diagnosing

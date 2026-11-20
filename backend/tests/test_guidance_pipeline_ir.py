@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -244,7 +245,10 @@ def test_partial_review_and_verification_resolve_to_partial_task_status(
         encoding="utf-8",
     )
 
-    assert _resolve_final_outcome(tmp_path, {"status": "PASS"})[0] == "partial"
+    (tmp_path / "guidance.md").write_bytes(b"partial report")
+    audit = {"status": "PASS", "publication_status": "partial",
+             "guidance_sha256": hashlib.sha256(b"partial report").hexdigest()}
+    assert _resolve_final_outcome(tmp_path, audit)[0] == "partial"
 
 
 @pytest.mark.parametrize("review_status,verification_status,audit_status,status,message", [
@@ -252,7 +256,8 @@ def test_partial_review_and_verification_resolve_to_partial_task_status(
     ("approved", "blocked", "PASS", "blocked", "result verification blocked the generated plan"),
     ("approved", "passed", "BLOCK", "blocked", "guidance audit blocked the generated plan"),
     ("partial", "partial", "PASS", "partial", "guidance plan generated with incomplete verification or blocked subproblems"),
-    ("approved", "passed", "PASS", "completed", "guidance plan generated"),
+    ("approved", "verified", "PASS", "completed", "guidance plan generated"),
+    ("approved", "", "PASS", "blocked", "verified task evidence is missing"),
 ])
 def test_final_progress_names_the_actual_blocking_layer_and_matches_result(
     tmp_path, review_status, verification_status, audit_status, status, message,
@@ -260,10 +265,12 @@ def test_final_progress_names_the_actual_blocking_layer_and_matches_result(
     from app.guidance.pipeline import _final_result
 
     approved = _partial_approved_payload() if review_status == "partial" else _approved_payload(review_status)
+    (tmp_path / "guidance.md").write_bytes(b"report")
     for name, payload in [
         ("approved_model_ir.json", approved),
         ("verification_report.json", {"status": verification_status}),
-        ("guidance_audit_report.json", {"status": audit_status}),
+        ("guidance_audit_report.json", {"status": audit_status, "publication_status": verification_status,
+                                       "guidance_sha256": hashlib.sha256(b"report").hexdigest()}),
     ]:
         (tmp_path / name).write_text(json.dumps(payload), encoding="utf-8")
 
@@ -273,6 +280,29 @@ def test_final_progress_names_the_actual_blocking_layer_and_matches_result(
     assert progress["data"]["message"] == message
     assert progress["data"]["current_subtask"] == message
     assert result["data"]["audit_status"] == audit_status
+
+
+def test_audit_for_another_download_cannot_complete_task(tmp_path: Path) -> None:
+    from app.guidance.pipeline import _resolve_final_outcome
+
+    (tmp_path / "approved_model_ir.json").write_text('{"review_status":"approved"}', encoding="utf-8")
+    (tmp_path / "verification_report.json").write_text('{"status":"verified"}', encoding="utf-8")
+    (tmp_path / "guidance.md").write_text("changed after publication", encoding="utf-8")
+    audit = {"status": "PASS", "publication_status": "verified", "guidance_sha256": "0" * 64}
+    assert _resolve_final_outcome(tmp_path, audit)[0] == "blocked"
+
+
+@pytest.mark.parametrize("publication", [None, "verified"])
+def test_partial_outcome_requires_matching_publication_record(tmp_path: Path, publication) -> None:
+    from app.guidance.pipeline import _resolve_final_outcome
+
+    (tmp_path / "approved_model_ir.json").write_text('{"review_status":"partial"}', encoding="utf-8")
+    (tmp_path / "verification_report.json").write_text('{"status":"partial"}', encoding="utf-8")
+    (tmp_path / "guidance.md").write_bytes(b"partial")
+    audit = {"status": "PASS", "guidance_sha256": hashlib.sha256(b"partial").hexdigest()}
+    if publication is not None:
+        audit["publication_status"] = publication
+    assert _resolve_final_outcome(tmp_path, audit)[0] == "blocked"
 
 
 def test_guidance_pipeline_allows_exactly_one_model_ir_revision(tmp_path: Path) -> None:

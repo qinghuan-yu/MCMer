@@ -91,7 +91,10 @@ def _unknown_final_answer_evidence_refs(
     parameter_registry: dict[str, object],
 ) -> list[str]:
     known_refs = _registered_result_ids(result_registry) | _registered_parameter_ids(parameter_registry)
-    refs = sorted(set(_EVIDENCE_ID_RE.findall(section)))
+    # ModelIR 的结果 ID 由模型声明，引用显式带上当前结果注册表。
+    registry_ref = r"`result_registry\.json#([^`\s|]+)`"
+    explicit = set(re.findall(registry_ref, section))
+    refs = sorted(explicit | set(_EVIDENCE_ID_RE.findall(re.sub(registry_ref, "", section))))
     return [ref for ref in refs if ref not in known_refs]
 
 

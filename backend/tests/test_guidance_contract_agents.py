@@ -516,7 +516,7 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
         }],
     )
     evidence_profile = _indexed_evidence(core, tmp_path)
-    llm = StubLLM([draft, core, constraints])
+    llm = StubLLM([{**draft, "indexed_data": core}, constraints])
 
     problem_spec = ProblemSpec(
         task_summary="A shared physical multiplier applies to every subproblem.",
@@ -832,7 +832,7 @@ def test_modeler_promotes_forecast_bound_indexed_model_into_ordered_plan(
         validator_id="forecast.test.validator.v1",
     ))
     model_ir = asyncio.run(LLMModeler(
-        StubLLM([architecture, core, constraints]),
+        StubLLM([{**architecture, "indexed_data": core}, constraints]),
         registry=registry,
     ).model(
         problem_spec=problem_spec,
@@ -997,7 +997,7 @@ def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
     from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
-    llm = StubLLM(_blocked_ir())
+    llm = StubLLM([{"inspect_operators": ["forecast.future_basis_rolling_origin"]}, _blocked_ir()])
     problem_spec = ProblemSpec(
         task_summary="Build an executable model.",
         subproblems=[_subproblem(objective="Optimize the plan.")],
@@ -1016,10 +1016,13 @@ def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
     payload = json.loads(llm.calls[0]["history"][1]["content"])
     assert "available_operator_ids" not in payload
     descriptions = payload.get("available_operators")
-    assert descriptions, "Generation must receive the runtime input/output/parameter contracts."
+    assert descriptions
     forecast = next(item for item in descriptions if item["operator_id"] == "forecast.future_basis_rolling_origin")
     assert set(forecast["inputs"]) == {"time", "target"}
-    assert "future_time" in forecast["parameters_schema"]["properties"]
+    assert "parameters_schema" not in forecast
+    selected, = json.loads(llm.calls[1]["history"][1]["content"])["operator_contracts"]
+    assert selected["operator_id"] == forecast["operator_id"]
+    assert "future_time" in selected["parameters_schema"]["properties"]
 
 
 @pytest.mark.parametrize("contract_state", ["matching", "missing", "changed"])
@@ -1181,7 +1184,8 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
         "constraints": indexed["constraints"],
     }
     evidence_profile = _indexed_evidence(core, tmp_path)
-    responses = [draft, core, constraints]
+    draft["indexed_data"] = core
+    responses = [draft, constraints]
     if retry_wrong_family:
         invalid = json.loads(json.dumps(draft))
         invalid["subproblems"][0]["validation"]["model_families"].insert(0, "optimization")
@@ -1213,7 +1217,7 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
     assert result_subproblem.equations == []
     assert result_subproblem.constraints == []
     assert '"EquationSpec"' not in llm.calls[0]["history"][0]["content"]
-    assert len(llm.calls) == 3 + int(retry_wrong_family)
+    assert len(llm.calls) == 2 + int(retry_wrong_family)
     assert result_subproblem.validation.model_families == ["mixed_integer_linear_optimization"]
     if retry_wrong_family:
         assert "optimization" in invalid["subproblems"][0]["validation"]["model_families"]
@@ -1439,7 +1443,7 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
     evidence_profile = _indexed_evidence(core, tmp_path)
     invalid_core = deepcopy(core)
     invalid_core["parameters"][0]["index_sets"] = ["unknown_period"]
-    llm = StubLLM([draft, invalid_core, core, constraints])
+    llm = StubLLM([{**draft, "indexed_data": invalid_core}, {**draft, "indexed_data": core}, constraints])
 
     problem_spec = ProblemSpec(
         task_summary="Optimize a generic finite inventory system.",
@@ -1460,9 +1464,8 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
         component.kind == "indexed_linear"
         for component in result.subproblems[0].execution_components
     )
-    assert len(llm.calls) == 4
-    assert "IndexedLinearCoreDraft" in llm.calls[2]["history"][0]["content"]
-    assert "unknown parameter index sets" in llm.calls[2]["history"][1]["content"]
+    assert len(llm.calls) == 3
+    assert "unknown parameter index sets" in llm.calls[1]["history"][1]["content"]
 
 
 
