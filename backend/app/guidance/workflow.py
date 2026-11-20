@@ -20,6 +20,7 @@ from app.guidance.verification_stage import ResultVerificationStage
 from app.schemas.enums import TaskStatus
 from app.schemas.response import TaskResult
 from app.services.config_manager import config_manager
+from app.services.source_ingest import ingest_pasted_question
 from app.services.task_service import task_manager
 
 
@@ -89,6 +90,10 @@ async def run_guidance_workflow(task_id: str, task: dict) -> AsyncGenerator[dict
     """Run guidance without entering the historical paper workflow."""
     task_manager.update_status(task_id, TaskStatus.RUNNING)
     try:
+        # 在恢复仅有文字的旧任务时，沿用与新建任务相同的原件登记方式。
+        if source_fields := ingest_pasted_question(task):
+            task_manager.update_task_fields(task_id, **source_fields)
+            task.update(source_fields)
         final_status = "completed"
         async for payload in build_default_guidance_pipeline(
             str(task.get("workflow_mode") or "standard")

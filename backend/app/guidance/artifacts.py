@@ -95,6 +95,10 @@ class IdentifiabilityItem(BaseModel):
     guidance: str = Field(min_length=1)
 
 
+def registered_output_statement(result_id: str, source_node: str) -> str:
+    return f"结果 {result_id} 取自节点 {source_node} 的登记输出。"
+
+
 class ClaimRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

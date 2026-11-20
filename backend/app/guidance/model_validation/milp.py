@@ -203,9 +203,12 @@ def milp_baseline(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
         float(recorded), recomputed, rel_tol=1e-9, abs_tol=1e-9
     ):
         return failed("MILP baseline objective disagrees with independent recomputation")
-    recommended = float(node["objective_value"])
-    if sense == "minimize" and recommended > recomputed + 1e-7:
-        return failed("recommended MILP objective is worse than the feasible baseline")
-    if sense == "maximize" and recommended < recomputed - 1e-7:
-        return failed("recommended MILP objective is worse than the feasible baseline")
-    return passed_check("recommended MILP result was compared with an independently feasible baseline")
+    recommended = node["objective_value"]
+    if not finite_number(recommended):
+        return failed("MILP comparison requires a finite recommended objective")
+    if ((sense == "minimize" and recommended > recomputed + 1e-7)
+            or (sense == "maximize" and recommended < recomputed - 1e-7)):
+        check = failed("recommended MILP objective is worse than the feasible baseline")
+    else:
+        check = passed_check("recommended MILP result was compared with an independently feasible baseline")
+    return check.record_comparison(node, "feasible_point", "objective", recomputed, recommended)

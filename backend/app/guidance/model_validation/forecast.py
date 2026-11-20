@@ -251,7 +251,9 @@ def future_errors(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
         or not math.isclose(recorded_rmse, best_score, rel_tol=1e-9, abs_tol=1e-9)
     ):
         return failed("selected forecast errors or RMSE do not independently recompute")
-    return passed_check("selected and seasonal-baseline rolling errors were independently recomputed")
+    return passed_check("selected and seasonal-baseline rolling errors were independently recomputed").record_comparison(
+        node, "seasonal_naive", "rolling_rmse", baseline_rmse, recorded_rmse,
+    )
 
 def future_interval(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     evidence = _future_evidence(nodes)

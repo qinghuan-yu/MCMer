@@ -1,0 +1,3 @@
+附件 observations.xlsx 的工作表 observations 记录了 Anscombe 第一组的 11 对观测。第一行是列名，x1 是自变量，y1 是响应变量。
+
+请使用全部观测，按普通最小二乘拟合带截距的直线 y1 = intercept + slope × x1。以一份结果给出截距 intercept 和斜率 slope 的数值，保留至少四位小数。结果用于描述这组观测。

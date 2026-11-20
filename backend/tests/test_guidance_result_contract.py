@@ -280,6 +280,69 @@ def test_workspace_download_returns_complete_evidence_zip(tmp_path: Path, monkey
         assert "workspace.zip" not in names
 
 
+def test_workspace_download_accepts_explicitly_figureless_verified_task(tmp_path, monkeypatch):
+    from app.api import routes
+
+    _write_complete_guidance_workspace(tmp_path)
+    (tmp_path / "figures/result.png").unlink()
+    (tmp_path / "figure_registry.json").write_text('{"figures":[],"summary":{"total_count":0}}', encoding="utf-8")
+    monkeypatch.setattr(routes.task_manager, "get_task", lambda _: {"work_dir": str(tmp_path), "status": "completed"})
+    response = asyncio.run(routes.download_workspace("no-figures"))
+    try:
+        with zipfile.ZipFile(response.path) as archive:
+            manifest = json.loads(archive.read("workspace_manifest.json"))
+            assert manifest["completeness_status"] == "complete"
+            assert manifest["artifact_groups"]["figures"] == []
+            assert archive.read("guidance.md") == (tmp_path / "guidance.md").read_bytes()
+            assert "inputs/problem.docx" in archive.namelist()
+    finally:
+        Path(response.path).unlink()
+
+
+@pytest.mark.parametrize(("defect", "group"), [
+    ("registered", "figures"), ("planned", "figures"), ("explicitly_required", "figures"),
+    ("registry_shape", "figures"), ("registry_count", "figures"), ("verified_figure", "figures"),
+    ("source_removed", "original_inputs"),
+    ("output_removed", "execution_outputs"), ("manifest_removed", "execution_manifest"),
+])
+def test_completed_workspace_rejects_missing_declared_evidence(tmp_path, monkeypatch, defect, group):
+    from fastapi import HTTPException
+    from app.api import routes
+
+    _write_complete_guidance_workspace(tmp_path)
+    def save(name, value):
+        (tmp_path / name).write_text(json.dumps(value), encoding="utf-8")
+
+    if defect == "registered":
+        save("figure_registry.json", {"figures": [{"path": "figures/result.png"}, {"path": "figures/missing.png"}]})
+    elif defect == "planned":
+        save("execution_plan.json", {"graph": {"nodes": [{"node_id": "plot-1", "operator_id": "plot.xy_evidence",
+              "operator_version": "1", "parameters": {"path": "figures/planned.png"}}]}})
+    elif defect == "explicitly_required":
+        save("figure_registry.json", {"figures": []})
+        save("problem_contract.json", {"paper_requires_figures": True})
+    elif defect == "registry_shape":
+        save("figure_registry.json", {"figures": ["invalid"]})
+    elif defect == "registry_count":
+        save("figure_registry.json", {"figures": [], "summary": {"total_count": 1}})
+    elif defect == "verified_figure":
+        save("verification_report.json", {"status": "verified", "artifact_refs": {
+            "figures": [{"path": "figures/validated.png", "linked_result_ids": ["verified-result"]}]}})
+    elif defect == "source_removed":
+        path = tmp_path / "inputs/problem.docx"
+        save("execution_manifest.json", {"status": "passed", "source_files_sha256": {
+            "inputs/problem.docx#paragraph-1": hashlib.sha256(path.read_bytes()).hexdigest()}})
+        path.unlink()
+    elif defect == "output_removed":
+        save("execution_manifest.json", {"status": "passed", "generated_files": ["missing-output.json"]})
+    else:
+        (tmp_path / "execution_manifest.json").unlink()
+    monkeypatch.setattr(routes.task_manager, "get_task", lambda _: {"work_dir": str(tmp_path), "status": "completed"})
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(routes.download_workspace("incomplete-archive"))
+    assert raised.value.status_code == 409 and group in raised.value.detail["missing_required_groups"]
+
+
 def test_workspace_download_rejects_passed_execution_with_missing_evidence(
     tmp_path: Path,
     monkeypatch,

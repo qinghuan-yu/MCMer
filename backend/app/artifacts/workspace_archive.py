@@ -6,7 +6,7 @@ import hashlib
 import json
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -63,13 +63,29 @@ class WorkspaceArchiveIncompleteError(ValueError):
         )
 
 
-def build_workspace_archive(task_id: str, work_dir: Path) -> Path:
+def build_workspace_archive(task_id: str, work_dir: Path, *, task_status: str | None = None) -> Path:
     files = _workspace_files(work_dir)
-    relative_paths = [path.relative_to(work_dir).as_posix() for path in files]
-    execution_status = _execution_status(work_dir)
-    groups, operator_versions_complete = _artifact_groups(work_dir, relative_paths)
+    records = [_file_record(work_dir, path) for path in files]
+    digests = {record.path: record.sha256 for record in records}
+    execution = _read_json(work_dir / "execution_manifest.json") or {}
+    status = execution.get("status")
+    execution_status = status if isinstance(status, str) and status else "unknown"
+    groups, operator_versions_complete = _artifact_groups(work_dir, list(digests))
     missing = _missing_required_groups(groups, operator_versions_complete)
-    if execution_status == "passed" and missing:
+    if task_status == "completed" and execution_status != "passed":
+        missing.append("execution_manifest")
+    if not _figures_complete(work_dir, groups, digests):
+        missing.append("figures")
+    for field, group in (("source_files_sha256", "original_inputs"), ("input_files_sha256", "original_inputs"),
+                         ("output_files_sha256", "execution_outputs")):
+        snapshots = execution.get(field, {})
+        if not _snapshots_match(snapshots, digests):
+            missing.append(group)
+    declared = execution.get("generated_files", [])
+    if not isinstance(declared, list) or any(not isinstance(path, str) or path not in digests for path in declared):
+        missing.append("execution_outputs")
+    missing = list(dict.fromkeys(missing))
+    if missing and (execution_status == "passed" or task_status == "completed"):
         raise WorkspaceArchiveIncompleteError(missing)
 
     manifest = WorkspaceArchiveManifest(
@@ -78,7 +94,7 @@ def build_workspace_archive(task_id: str, work_dir: Path) -> Path:
         completeness_status="complete" if not missing else "partial",
         missing_required_groups=missing,
         artifact_groups=groups,
-        files=[_file_record(work_dir, path) for path in files],
+        files=records,
     )
     archive_path = _temporary_archive_path(task_id)
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -239,23 +255,69 @@ def _missing_required_groups(
         "guidance_audit_report.json",
     }:
         missing.append("verification_reports")
-    if not groups.figures:
-        missing.append("figures")
     if groups.guidance != ["guidance.md"]:
         missing.append("guidance")
     return missing
 
 
-def _execution_status(work_dir: Path) -> str:
-    payload = _read_json(work_dir / "execution_manifest.json")
-    status = payload.get("status") if payload is not None else None
-    return status if isinstance(status, str) and status else "unknown"
+def _figures_complete(root: Path, groups: WorkspaceArtifactGroups, files: dict[str, str]) -> bool:
+    registry = _read_json(root / "figure_registry.json") or {}
+    figures = registry.get("figures")
+    if not isinstance(figures, list):
+        return False
+    summary = registry.get("summary", {})
+    if not isinstance(summary, dict) or summary.get("total_count", len(figures)) != len(figures):
+        return False
+    registered = set()
+    for entry in figures:
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(path, str) or not path or path not in files:
+            return False
+        registered.add(path)
+    groups.figures = sorted(set(groups.figures) | registered)
+    report = _read_json(root / "verification_report.json") or {}
+    refs = report.get("artifact_refs", {})
+    if not isinstance(refs, dict):
+        return False
+    if "figures" in refs:
+        if not isinstance(refs["figures"], list):
+            return False
+        for entry in refs["figures"]:
+            path = entry.get("path") if isinstance(entry, dict) else entry
+            if not isinstance(path, str) or path not in registered:
+                return False
+    contract = _read_json(root / "problem_contract.json") or {}
+    if contract.get("paper_requires_figures") is True and not registered:
+        return False
+    plan = _read_json(root / "execution_plan.json") or {}
+    graph = plan.get("graph")
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if not isinstance(nodes, list):
+        return False
+    for node in nodes:
+        if isinstance(node, dict) and node.get("operator_id") == "plot.xy_evidence":
+            parameters = node.get("parameters")
+            planned_path = parameters.get("path") if isinstance(parameters, dict) else None
+            if not isinstance(planned_path, str) or planned_path not in registered:
+                return False
+    return True
+
+
+def _snapshots_match(snapshots: object, digests: dict[str, str]) -> bool:
+    if not isinstance(snapshots, dict):
+        return False
+    for reference, expected in snapshots.items():
+        # Source citations may address a paragraph in a registered file.
+        path = PurePosixPath(reference.partition("#")[0].replace("\\", "/")).as_posix()
+        if not isinstance(expected, str) or digests.get(path) != expected:
+            return False
+    return True
 
 
 def _read_json(path: Path) -> dict | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
 

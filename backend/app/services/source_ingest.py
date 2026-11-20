@@ -1,12 +1,14 @@
 """上传源材料解析服务。"""
 from __future__ import annotations
 
+import hashlib
 import os
 import posixpath
 import re
 import shutil
 import zipfile
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from app.artifacts.input_catalog import build_input_catalog
@@ -34,6 +36,7 @@ MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
 PRIMARY_QUESTION_HINTS = ("problem", "question", "题目", "原题", "赛题")
 SECONDARY_QUESTION_HINTS = ("附录", "appendix", "术语", "说明")
+PASTED_QUESTION_PATH = Path("inputs/form/question.txt")
 
 
 class SourceIngestError(RuntimeError):
@@ -189,10 +192,12 @@ def ingest_question_source(saved_path: str, task: dict) -> dict[str, Any]:
     text = _read_text_like_file(saved_path).strip()
     updates: dict[str, Any] = {}
     current_source_file = str(task.get("source_question_file") or "").strip()
-    current_score = _score_question_source(current_source_file, str(task.get("source_question_text") or "")) if current_source_file else -10**9
+    previous_text = str(task.get("source_question_text") or "").strip()
+    current_score = _score_question_source(current_source_file, previous_text) if current_source_file else -10**9
     new_score = _score_question_source(saved_path, text)
 
-    if not current_source_file or new_score >= current_score:
+    pasted = Path(task["work_dir"]) / PASTED_QUESTION_PATH
+    if not current_source_file or Path(current_source_file) == pasted or new_score >= current_score:
         build_input_catalog(
             saved_path,
             work_dir=task["work_dir"],
@@ -203,11 +208,47 @@ def ingest_question_source(saved_path: str, task: dict) -> dict[str, Any]:
             "source_question_file": saved_path,
             "input_catalog_ref": "input_catalog.json",
         })
-    if not (task.get("question") or "").strip():
-        updates["question"] = text
-    if not (task.get("source_question") or "").strip():
-        updates["source_question"] = text
+        if task.get("pasted_question_sha256") or str(task.get("source_question") or "").strip() == previous_text:
+            updates["source_question"] = text
+        if not task.get("pasted_question_sha256") and str(task.get("question") or "").strip() == previous_text:
+            updates["question"] = text
     return updates
+
+
+def ingest_pasted_question(task: dict) -> dict[str, Any]:
+    text = task.get("source_question") or task.get("question") or ""
+    if not text.strip() or task.get("source_question_file") or task.get("input_catalog_ref"):
+        return {}
+    root = Path(task["work_dir"])
+    if (root / "input_catalog.json").exists() or (root / "source_preflight.json").exists():
+        return {}
+    source = root / PASTED_QUESTION_PATH
+    data = text.encode("utf-8")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    # 旧任务可重试。先写完整原件，再以不可覆盖的方式发布到固定来源路径。
+    with TemporaryDirectory(dir=source.parent) as directory:
+        staged = Path(directory) / "question.txt"
+        staged.write_bytes(data)
+        try:
+            os.link(staged, source)
+        except FileExistsError:
+            if source.read_bytes() != data:
+                raise SourceIngestError("已保存的粘贴题面与任务文字不一致。")
+    return {**ingest_question_source(str(source), task), "pasted_question_sha256": hashlib.sha256(data).hexdigest()}
+
+
+def guidance_question_text(task: dict) -> str:
+    question = str(task.get("source_question") or task.get("question") or "").strip()
+    digest = task.get("pasted_question_sha256")
+    if not digest:
+        return question
+    data = (Path(task["work_dir"]) / PASTED_QUESTION_PATH).read_bytes()
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise SourceIngestError("粘贴题面原件与登记摘要不一致。")
+    # 表单可以附在上传的原题旁。仅所选原件进入事实目录，其余文字保留为用户要求。
+    texts = (question, data.decode("utf-8").strip(), str(task.get("question") or "").strip())
+    primary, *notes = dict.fromkeys(text.replace("\r\n", "\n") for text in texts if text)
+    return "\n\n".join([primary, *(f"用户补充要求（题面事实以来源目录中的原件为准）：\n{text}" for text in notes)])
 
 
 def ingest_paper_source(saved_path: str, task: dict) -> dict[str, Any]:

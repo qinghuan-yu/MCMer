@@ -30,17 +30,15 @@ def test_passing_layers_do_not_hide_incomplete_subproblem_coverage(
                 "reasons": ["Executed models passed."],
                 "candidate_roles": ["baseline", "recommended"],
                 "checks": {"supported.baseline_comparison": "passed"},
+                "evidence_refs": ["result_registry.json#supported"],
+                "baseline_comparisons": [{
+                    "baseline_kind": "feasible_point", "metric": "objective",
+                    "baseline_value": 0, "result_value": 23,
+                    "check_ref": "supported.baseline_comparison",
+                    "evidence_ref": "result_registry.json#supported",
+                }],
             },
         },
-        counterevidence_records=[{
-            "subproblem_id": "supported",
-            "challenged_candidate_id": "baseline",
-            "status": "excluded",
-            "exclusion_reason": "The recommended route passed baseline comparison.",
-            "check_refs": ["supported.baseline_comparison"],
-            "evidence_refs": ["result_registry.json#supported"],
-            "applicability_boundary": "Registered finite models.",
-        }],
     )
 
     assert report.status == expected_status

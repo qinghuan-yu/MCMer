@@ -53,6 +53,11 @@ def test_regression_family_runs_independent_adequacy_validators() -> None:
         "extreme_inputs",
     }
     assert all(check.status == "passed" for check in assessment.checks.values())
+    evidence["baseline_metrics"]["rmse"] = 0.1
+    tied = registry.assess(family="regression", candidate_roles={"baseline", "recommended"}, evidence=[evidence])
+    comparison = tied.checks["baseline_comparison"]
+    assert comparison.status == "failed"
+    assert [(item.baseline_value, item.result_value) for item in comparison.baseline_measurements] == [(0.1, 0.1)]
 
 
 def test_optimization_family_requires_consistent_multistart_evidence() -> None:
@@ -178,6 +183,18 @@ def test_milp_family_independently_recomputes_objective_feasibility_and_bounds()
     assert forged_integer.checks["integrality_recompute"].status == "failed"
 
 
+def test_missing_or_nonfinite_milp_objectives_cannot_supply_a_baseline_measurement() -> None:
+    from app.guidance.model_validation.milp import milp_baseline
+
+    evidence = _milp_evidence()
+    evidence["objective_value"] = float("inf")
+    invalid = milp_baseline([evidence])
+    assert invalid.status == "failed" and not invalid.baseline_measurements
+    del evidence["baseline"]
+    missing = milp_baseline([evidence])
+    assert missing.status == "not_assessed" and not missing.baseline_measurements
+
+
 def test_evaluation_family_independently_recomputes_ranking_and_stability() -> None:
     registry = build_default_model_validator_registry()
     evidence = {
@@ -218,6 +235,7 @@ def test_evaluation_family_independently_recomputes_ranking_and_stability() -> N
         "weight_sensitivity",
         "extreme_inputs",
     }
+    assert all(not check.baseline_measurements for check in assessment.checks.values())
 
     evidence["scores"][1] = 0.8
     forged = registry.assess(
@@ -369,6 +387,10 @@ def test_graph_family_independently_verifies_path_flow_and_min_cut() -> None:
         "min_cut_certificate",
         "extreme_inputs",
     }
+    assert {(item.metric, item.baseline_value, item.result_value)
+            for item in assessment.checks["baseline_comparison"].baseline_measurements} == {
+                ("distance", 6, 3), ("flow", 0, 5),
+            }
 
     evidence["shortest_path"]["distance"] = 2.0
     forged = registry.assess(
@@ -497,6 +519,10 @@ def test_future_forecast_family_independently_recomputes_all_temporal_evidence()
         "interval_recompute",
         "sensitivity_recompute",
     }
+    comparison, = assessment.checks["error_and_baseline_recompute"].baseline_measurements
+    assert comparison.baseline_kind == "seasonal_naive"
+    assert comparison.baseline_value == evidence["baseline_metrics"]["rmse"]
+    assert comparison.result_value == evidence["metrics"]["rmse"]
 
     for check_name, mutate in [
         (

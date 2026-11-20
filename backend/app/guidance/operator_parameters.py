@@ -156,9 +156,14 @@ class SearchParameters(OperatorParameters):
 
 
 class BasisRegressionParameters(OperatorParameters):
-    """对声明的基函数进行最小二乘，可在显式网格上选择 $candidate。"""
+    """按声明基函数最小二乘。无搜索的满秩 constant+identity 返回含诊断的 fit，其 named_coefficients 字段含 intercept 与 slope。"""
+    contract_version: ClassVar[str] = "2.1.0"
     basis: list[BasisTerm] = Field(min_length=1)
     search: SearchParameters | None = None
+    sensitivity_threshold: Number = Field(
+        default=0.2, ge=0, allow_inf_nan=False,
+        description="描述性直线删一后在样本区间的最大位移占观测响应极差的允许比例，默认五分之一。",
+    )
 
 
 class HingeParameters(OperatorParameters):

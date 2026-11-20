@@ -11,6 +11,7 @@ from app.guidance.model_ir_compiler import ExecutionPlan
 from app.guidance.model_ir_semantics import validate_model_fact_coverage
 from app.guidance.model_review_contracts import ApprovedModelIR
 from app.guidance.model_review_validation import assess_mathematical_review
+from app.guidance.model_validation.contracts import walk_mappings
 from app.guidance.model_validators import build_default_model_validator_registry
 from app.guidance.operator_execution import OperatorExecutionManifest
 from app.guidance.recovery import (
@@ -140,14 +141,11 @@ class ResultVerificationStage:
         )
         if execution_issues or evidence_issues:
             model_adequacy["numerical_validation"]["status"] = "blocked"
+            model_adequacy["numerical_validation"]["baseline_comparisons"] = []
             model_adequacy["numerical_validation"]["reasons"].append(
                 "numerical validation is blocked until execution and evidence layers pass"
             )
             model_adequacy = ModelAdequacyLayer.model_validate(model_adequacy).model_dump()
-        counterevidence_records = _build_counterevidence_records(
-            approved,
-            model_adequacy,
-        )
 
         report = VerificationReport(
             model_id=manifest.model_id,
@@ -173,7 +171,7 @@ class ResultVerificationStage:
                 ],
             },
             model_adequate=model_adequacy,
-            counterevidence_records=counterevidence_records,
+            counterevidence_records=_build_counterevidence_records(approved),
             input_checks=[{
                 "status": "passed" if not missing else "failed",
                 "checked_files": manifest.generated_files,
@@ -272,6 +270,7 @@ def _assess_numerical_validation(
     checks: dict[str, str] = {}
     reasons: list[str] = []
     evidence_refs: list[str] = []
+    baseline_comparisons: list[dict] = []
     family_statuses: list[str] = []
 
     blocked_subproblem_ids = {
@@ -287,22 +286,23 @@ def _assess_numerical_validation(
             result
             for result in verified_results
             if isinstance(result, dict)
+            and result.get("id")
             and result.get("subproblem_id") == subproblem.subproblem_id
         ]
         if not subproblem_results and subproblem.subproblem_id in blocked_subproblem_ids:
             continue
         roles = {candidate.role for candidate in subproblem.candidate_models}
         candidate_roles.update(roles)
-        evidence = [
-            result["value"]
-            for result in subproblem_results
-            if isinstance(result.get("value"), dict)
-        ]
+        evidence = []
+        source_refs: dict[int, str] = {}
         for result in subproblem_results:
-            result_id = str(result.get("id") or "")
-            reference = f"result_registry.json#{result_id}"
-            if result_id and reference not in evidence_refs:
+            reference = f"result_registry.json#{result['id']}"
+            if reference not in evidence_refs:
                 evidence_refs.append(reference)
+            if isinstance(result.get("value"), dict):
+                evidence.append(result["value"])
+                for node in walk_mappings([result["value"]]):
+                    source_refs.setdefault(id(node), reference)
 
         for family in subproblem.validation.model_families:
             assessment = registry.assess(
@@ -313,7 +313,14 @@ def _assess_numerical_validation(
             family_statuses.append(assessment.status)
             prefix = f"{subproblem.subproblem_id}.{family}"
             for name, check in assessment.checks.items():
-                checks[f"{prefix}.{name}"] = check.status
+                check_ref = f"{prefix}.{name}"
+                checks[check_ref] = check.status
+                for measurement in check.baseline_measurements:
+                    baseline_comparisons.append({
+                        **measurement.model_dump(),
+                        "check_ref": check_ref,
+                        "evidence_ref": check.comparison_source(source_refs),
+                    })
             if assessment.reasons:
                 reasons.extend(
                     f"{prefix}: {reason}" for reason in assessment.reasons
@@ -333,80 +340,29 @@ def _assess_numerical_validation(
         "status": status,
         "candidate_roles": sorted(candidate_roles) or ["alternative"],
         "checks": checks,
+        "baseline_comparisons": baseline_comparisons,
         "reasons": reasons,
         "evidence_refs": evidence_refs or ["approved_model_ir.json"],
     }
 
-def _build_counterevidence_records(
-    approved: ApprovedModelIR,
-    model_adequacy: dict,
-) -> list[dict]:
-    checks = model_adequacy["numerical_validation"]["checks"]
-    if not isinstance(checks, dict):
-        checks = {}
-    report_evidence_refs = model_adequacy.get("evidence_refs")
-    if not isinstance(report_evidence_refs, list):
-        report_evidence_refs = []
-
-    records: list[dict] = []
-    for subproblem in approved.approved_model_ir.subproblems:
-        if subproblem.execution_status != "solvable":
-            continue
-        prefix = f"{subproblem.subproblem_id}."
-        subproblem_checks = {
-            name: status
-            for name, status in checks.items()
-            if name.startswith(prefix)
+def _build_counterevidence_records(approved: ApprovedModelIR) -> list[dict]:
+    # Family validators compare concrete measurements. Their results do not identify
+    # a separately proposed candidate, even when that candidate has the baseline role.
+    return [
+        {
+            "subproblem_id": subproblem.subproblem_id,
+            "challenged_candidate_id": candidate.id,
+            "status": "not_assessed",
+            "exclusion_reason": "candidate-specific comparison evidence was not produced",
+            "applicability_boundary": candidate.applicability_boundary,
+            "check_refs": [],
+            "evidence_refs": [],
         }
-        passed_refs = [
-            name for name, status in subproblem_checks.items() if status == "passed"
-        ]
-        failed_refs = [
-            name for name, status in subproblem_checks.items() if status == "failed"
-        ]
-        baseline_comparison_passed = any(
-            name.endswith(".baseline_comparison")
-            for name in passed_refs
-        )
-
-        for candidate in subproblem.candidate_models:
-            if candidate.role == "recommended":
-                continue
-            if (
-                candidate.role == "baseline"
-                and model_adequacy.get("status") == "passed"
-                and baseline_comparison_passed
-            ):
-                status = "excluded"
-                reason = (
-                    "the recommended route passed the registered baseline comparison "
-                    "and every declared model-family validator"
-                )
-                check_refs = passed_refs
-                evidence_refs = list(report_evidence_refs)
-            elif failed_refs:
-                status = "not_excluded"
-                reason = (
-                    "the available validation evidence does not justify excluding "
-                    "this route"
-                )
-                check_refs = failed_refs
-                evidence_refs = list(report_evidence_refs)
-            else:
-                status = "not_assessed"
-                reason = "candidate-specific exclusion evidence was not produced"
-                check_refs = []
-                evidence_refs = []
-            records.append({
-                "subproblem_id": subproblem.subproblem_id,
-                "challenged_candidate_id": candidate.id,
-                "status": status,
-                "exclusion_reason": reason,
-                "check_refs": check_refs,
-                "evidence_refs": evidence_refs,
-                "applicability_boundary": candidate.applicability_boundary,
-            })
-    return records
+        for subproblem in approved.approved_model_ir.subproblems
+        if subproblem.execution_status == "solvable"
+        for candidate in subproblem.candidate_models
+        if candidate.role != "recommended"
+    ]
 
 def _operator_evidence_issues(
     *,

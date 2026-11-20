@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from app.guidance.renderer import render_verified_guidance
 
 
@@ -321,3 +325,76 @@ def test_renderer_explains_figure_with_bound_result_claim() -> None:
 
     figure_section = markdown.split("## 图片解读", 1)[1].split("## 复核与稳健性", 1)[0]
     assert "岩石折线 BIC 明显低于单一直线" in figure_section
+
+
+@pytest.mark.parametrize("use_archived_claim", [True, False], ids=["published_problem", "invented_method"])
+def test_published_methods_are_grounded_in_execution(tmp_path, monkeypatch, use_archived_claim):
+    from test_verify_ortools_simple_mip import OfflineExample, QUESTION, publish_offline_example
+
+    historical = "最优性说明：整数候选枚举与连续松弛上界共同支持的求解结论"
+    assert historical in (QUESTION.parent / "verified_guidance.md").read_text(encoding="utf-8")
+    description = historical if use_archived_claim else "三色裁判法已经独立复核种子序列。"
+    monkeypatch.setattr(OfflineExample, "answer_item", description)
+    publish_offline_example(tmp_path, monkeypatch, ("optimum", "optimality"))
+
+    def read(name):
+        return json.loads((tmp_path / name).read_bytes())
+
+    registry = read("result_registry.json")
+    verification = read("verification_report.json")
+    assert verification["schema_version"] == "1.1" and verification["status"] == "verified"
+    assert all(entry["status"] == "not_assessed" for entry in verification["counterevidence_records"])
+    comparison, = verification["model_adequate"]["numerical_validation"]["baseline_comparisons"]
+    assert (comparison["baseline_kind"], comparison["metric"], comparison["baseline_value"], comparison["result_value"]) == (
+        "feasible_point", "objective", 0.0, 23.0)
+    assert comparison["evidence_ref"] == "result_registry.json#optimum"
+    if use_archived_claim:
+        from copy import deepcopy
+        from app.guidance.contracts import VerificationReport
+        from app.guidance.guidance_stage import _publication_report
+
+        legacy = deepcopy(verification)
+        legacy["schema_version"] = "1.0"
+        del legacy["model_adequate"]["numerical_validation"]["baseline_comparisons"]
+        with pytest.raises(ValueError, match="excluded"):
+            VerificationReport.model_validate(legacy)
+        legacy["counterevidence_records"][0].update(
+            status="excluded", check_refs=[comparison["check_ref"]], evidence_refs=[comparison["evidence_ref"]],
+        )
+        outdated = VerificationReport.model_validate(legacy)
+        blocked = _publication_report(outdated, tmp_path)
+        assert blocked.status == "blocked" and any("legacy" in issue for issue in blocked.blocking_issues)
+        legacy["schema_version"] = "1.1"
+        with pytest.raises(ValueError, match="candidate-specific"):
+            VerificationReport.model_validate(legacy)
+    claims = registry["summary"]["claim_registry"]
+    assert all(description not in claim["claim_text"] and "solve_indexed_model" in claim["claim_text"] for claim in claims)
+    bound_line = "原始界 23.0，对偶界 23.0，相对间隙 0.0"
+    baseline_line = "可行基线点的原目标值为 0.0"
+
+    def check_report(report):
+        mentions = [line for line in report.splitlines() if description in line]
+        assert mentions and all("模型拟定的输出项" in line for line in mentions)
+        assert report.count(bound_line) == report.count(baseline_line) == 1
+        assert "optimization.milp" in report and "solve_indexed_model" in report
+
+    check_report((tmp_path / "guidance.md").read_text(encoding="utf-8"))
+    # 兼容旧执行登记中将模型自述记作结论的工件。
+    for row in [*claims, *registry["verified_results"]]:
+        row["claim_text"] = description
+    args = dict(approved_model=read("approved_model_ir.json"), verification_report=read("verification_report.json"),
+                parameter_registry=read("parameter_registry.json"), result_registry=registry,
+                execution_manifest=read("execution_manifest.json"))
+    check_report(render_verified_guidance(**args))
+    numerical = args["verification_report"]["model_adequate"]["numerical_validation"]
+    bound_check = "integer_optimum.mixed_integer_linear_optimization.bound_and_gap"
+    numerical["checks"][bound_check] = "not_assessed"
+    without_bound = render_verified_guidance(**args)
+    assert bound_line not in without_bound and baseline_line in without_bound
+    numerical["checks"][bound_check] = "passed"
+    args["verification_report"]["evidence_supported"]["status"] = "blocked"
+    assert bound_line not in render_verified_guidance(**args)
+    args["verification_report"]["evidence_supported"]["status"] = "passed"
+    args["execution_manifest"]["executed_node_ids"] = []
+    stale = render_verified_guidance(**args)
+    assert bound_line not in stale and baseline_line not in stale

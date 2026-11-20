@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.guidance.artifacts import registered_output_statement
 from app.guidance.guidance_rendering.data import (
     _READER_DECISION_TOPIC_LABELS,
     _cell,
@@ -28,6 +29,7 @@ from app.guidance.guidance_rendering.sections import (
     _append_fact_traceability,
     _calculation_context_lines,
     _data_source_lines,
+    _milp_certificate_lines,
     _problem_understanding_lines,
     _registered_subproblem_modeling_lines,
     _verification_layer_rows,
@@ -248,8 +250,8 @@ def render_verified_guidance(
     lines.extend(["", "## 模型选择理由", ""])
     for sub in model.get("subproblems", []):
         for candidate in sub.get("candidate_models", []):
-            lines.append(f"- `{_cell(sub['subproblem_id'])}` · {_cell(candidate.get('role'))} "
-                         f"`{_cell(candidate.get('id'))}`，适用范围为{_cell(candidate.get('applicability_boundary'))}。")
+            lines.append(f"- `{_cell(sub['subproblem_id'])}` 的模型拟议方案（{_cell(candidate.get('role'))}）"
+                         f"`{_cell(candidate.get('id'))}`，模型所述适用范围为“{_cell(candidate.get('applicability_boundary'))}”。")
     if model.get("selected_method"):
         lines.append(str(model["selected_method"]))
     candidates = model.get("candidate_methods", [])
@@ -323,17 +325,23 @@ def render_verified_guidance(
                 lines.append(f"- {label}：{_guidance_text(_join_claim_items(value))}")
             lines.append("")
 
+    registered = result_registry.get("verified_results", [])
+    value_statements = {
+        result["id"]: registered_output_statement(result["id"], result["source_node"])
+        for result in registered if isinstance(result, dict) and result.get("source_node") and "value" in result
+    }
     claim_registry = _claim_registry(result_registry)
     if claim_registry:
         lines.extend(["", "## 结论状态登记", ""])
         lines.append("| claim_id | 状态 | 结论 | 证据 | 依赖假设 | 风险 |")
         lines.append("| --- | --- | --- | --- | --- | --- |")
         for claim in claim_registry:
+            claim_id = claim.get("id") or claim.get("claim_id")
             lines.append(
                 "| {id} | {status} | {claim_text} | {evidence} | {assumptions} | {risk} |".format(
-                    id=_cell(claim.get("id") or claim.get("claim_id")),
+                    id=_cell(claim_id),
                     status=_cell(claim.get("status")),
-                    claim_text=_cell(claim.get("claim_text")),
+                    claim_text=_cell(value_statements.get(claim_id, claim.get("claim_text"))),
                     evidence=_cell(_join_claim_items(claim.get("evidence_ids"))),
                     assumptions=_cell(_join_claim_items(claim.get("assumptions"))),
                     risk=_cell(claim.get("risk") or claim.get("risk_note")),
@@ -380,6 +388,8 @@ def render_verified_guidance(
             value = result["value"]
             if isinstance(value, dict) and "objective_value" in value and isinstance(value.get("decision_values"), dict):
                 fields = {"objective_value": value["objective_value"], **value["decision_values"]}
+            elif isinstance(value, dict) and isinstance(value.get("named_coefficients"), dict) and value["named_coefficients"]:
+                fields = value["named_coefficients"]
             else:
                 fields = {result["id"]: value}
             for name, number in fields.items():
@@ -390,17 +400,20 @@ def render_verified_guidance(
                              f"{_cell(result.get('status'))} | `result_registry.json#{_cell(result['id'])}` |")
 
     lines.extend(["", "## 分问题建模步骤", ""])
-    lines.extend(_registered_subproblem_modeling_lines(result_registry, model))
+    executed_nodes = set((execution_manifest or {}).get("executed_node_ids", []))
+    lines.extend(_registered_subproblem_modeling_lines(result_registry, model, executed_nodes))
 
     lines.extend(["", "## 必要计算结果", ""])
     if model.get("subproblems"):
         lines.append("参数与约束见审核后的 ModelIR。各项输出按执行清单中的求解器及节点登记。")
+        lines.extend(_milp_certificate_lines(model, registered, executed_nodes, verification_report))
     else:
         lines.extend(_calculation_context_lines(result_registry, parameter_registry))
     for result in result_registry.get("verified_results", []):
         if not isinstance(result, dict):
             continue
-        lines.append(f"- `{_cell(result.get('id'))}`：{result.get('claim_text') or '已登记结果'}")
+        statement = value_statements.get(result.get("id"), result.get("claim_text") or "已登记结果")
+        lines.append(f"- `{_cell(result.get('id'))}`：{statement}")
         metrics = result.get("metrics", {})
         if isinstance(metrics, dict):
             for name, value in metrics.items():
@@ -409,7 +422,7 @@ def render_verified_guidance(
     lines.extend(["", "## 图片解读", ""])
     figures = verification_report.get("artifact_refs", {}).get("figures", [])
     result_claims = {
-        str(result.get("id") or ""): _guidance_text(result.get("claim_text"))
+        str(result.get("id") or ""): _guidance_text(value_statements.get(result.get("id"), result.get("claim_text")))
         for result in result_registry.get("verified_results", [])
         if isinstance(result, dict)
     }
@@ -430,7 +443,7 @@ def render_verified_guidance(
         lines.append(f"![{role}]({path})")
         lines.append(
             f"- 图片 `{path}`；用途 `{role}`；来源数据：{sources}；绑定结果：{result_ids}。"
-            f"解释：本图直接支撑已登记结论：{linked_claims or '对应结果的模型与数据关系'}。"
+            f"解释：图片登记时关联的结果为“{linked_claims or '对应结果的模型与数据关系'}”。"
             "局限：图形贴合只说明登记证据在当前模型口径下自洽，不能单独证明不可观测变量被唯一恢复，也不等于真实机理已被证明。"
         )
 
@@ -466,7 +479,7 @@ def render_verified_guidance(
                 continue
             lines.append(
                 "- 假设与局限 `{subproblem}/{assumption_id}`：{statement}；"
-                "依据：{sources}；替代情景：{alternatives}；敏感性检查：{checks}。".format(
+                "依据：{sources}；替代情景：{alternatives}；拟议敏感性检查：{checks}。".format(
                     subproblem=subproblem_id,
                     assumption_id=_cell(assumption.get("id")),
                     statement=_guidance_text(assumption.get("statement")),

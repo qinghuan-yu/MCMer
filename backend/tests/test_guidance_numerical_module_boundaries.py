@@ -47,6 +47,7 @@ def test_registered_operator_is_owned_by_its_numerical_domain(
     assert runtime.executor.__module__ == f"app.guidance.operator_runtimes.{owner}"
     assert runtime.definition.version == (
         "3.0.0" if operator_id == "data.read_excel_table"
+        else "2.1.0" if operator_id == "regression.basis_least_squares"
         else "1.0.0" if operator_id in {"data.inspect_file", "data.profile_table"}
         else "2.0.0"
     )

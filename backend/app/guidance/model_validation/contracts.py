@@ -17,16 +17,46 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FiniteFloat,
+    PrivateAttr,
 )
 
 
 ValidationStatus = Literal["passed", "failed", "not_assessed"]
+
+
+class BaselineMeasurement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    baseline_kind: str = Field(min_length=1)
+    metric: str = Field(min_length=1)
+    baseline_value: FiniteFloat
+    result_value: FiniteFloat
+
 
 class ValidationCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: ValidationStatus
     reason: str
+    baseline_measurements: list[BaselineMeasurement] = Field(default_factory=list)
+    _source_node_id: int | None = PrivateAttr(default=None)
+
+    def record_comparison(
+        self, source: Mapping[str, Any], kind: str, metric: str, baseline: float, result: float,
+    ) -> ValidationCheck:
+        # 对象标识仅在本次复核中定位原始结果，写入持久记录的是对应的 result_registry 引用。
+        self._source_node_id = id(source)
+        self.baseline_measurements.append(BaselineMeasurement(
+            baseline_kind=kind, metric=metric, baseline_value=baseline, result_value=result,
+        ))
+        return self
+
+    def comparison_source(self, sources: dict[int, str]) -> str:
+        if self._source_node_id not in sources:
+            raise ValueError("baseline measurement has no registered source")
+        return sources[self._source_node_id]
+
 
 class ModelValidationAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")

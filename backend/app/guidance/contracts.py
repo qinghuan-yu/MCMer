@@ -9,6 +9,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.guidance.model_validation.contracts import BaselineMeasurement
+
 
 class SourceRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -538,11 +540,17 @@ class VerificationLayer(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+class BaselineComparisonRecord(BaselineMeasurement):
+    check_ref: str = Field(min_length=1)
+    evidence_ref: str = Field(pattern=r"^result_registry\.json#\S+$")
+
+
 class NumericalValidationLayer(VerificationLayer):
     candidate_roles: list[Literal["baseline", "recommended", "alternative"]] = Field(
         default_factory=list
     )
     checks: dict[str, VerificationLayerStatus] = Field(default_factory=dict)
+    baseline_comparisons: list[BaselineComparisonRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def prevent_unsupported_pass(self) -> NumericalValidationLayer:
@@ -621,7 +629,7 @@ class CounterevidenceRecord(BaseModel):
 class VerificationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     model_id: str
     status: Literal["verified", "partial", "blocked"] = "partial"
     coverage_status: Literal["complete", "partial", "blocked"] = "complete"
@@ -640,12 +648,31 @@ class VerificationReport(BaseModel):
 
     @model_validator(mode="after")
     def aggregate_layer_statuses(self) -> VerificationReport:
-        if self.model_adequate.status == "passed" and not any(
+        if self.schema_version == "1.0" and self.model_adequate.status == "passed" and not any(
             record.status == "excluded" for record in self.counterevidence_records
         ):
-            raise ValueError(
-                "model_adequate requires counterevidence for at least one excluded route"
-            )
+            raise ValueError("legacy model_adequate requires at least one excluded route")
+        if self.schema_version == "1.1":
+            numerical = self.model_adequate.numerical_validation
+            for record in self.counterevidence_records:
+                if record.status != "not_assessed" or record.check_refs or record.evidence_refs:
+                    raise ValueError("candidate-specific evidence is required to assess a proposed route")
+            for comparison in numerical.baseline_comparisons:
+                if (numerical.checks.get(comparison.check_ref) not in {"passed", "failed"}
+                        or comparison.evidence_ref not in numerical.evidence_refs):
+                    raise ValueError("baseline comparison requires its executed check and registered result")
+            if self.model_adequate.status == "passed":
+                measured_checks = {item.check_ref for item in numerical.baseline_comparisons}
+                required = {
+                    name for name in numerical.checks
+                    if name.rsplit(".", 1)[-1] in {"baseline_comparison", "error_and_baseline_recompute"}
+                }
+                if required - measured_checks:
+                    raise ValueError("a passed baseline check requires measured values from a registered result")
+                if not numerical.checks or not any(
+                    ref.startswith("result_registry.json#") for ref in numerical.evidence_refs
+                ):
+                    raise ValueError("model adequacy requires numerical checks with registered results")
         if self.execution_verified.status != "passed" or self.coverage_status == "blocked":
             self.status = "blocked"
         elif (

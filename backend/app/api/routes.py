@@ -116,11 +116,14 @@ async def create_task(req: CreateTaskRequest):
     default_question = "论文润色任务" if task_type == "polish" else ""
     if task_type == "writing":
         task_type = "guidance"
+    source_question = req.source_question.strip()
+    if task_type == "guidance":
+        source_question = req.source_question if source_question else req.question
     task_id = task_manager.create_task(
         question=req.question.strip() or default_question,
         task_type=task_type,
         workflow_mode=workflow_mode,
-        source_question=req.source_question.strip(),
+        source_question=source_question,
         paper_content=req.paper_content,
         polishing_requirements=req.polishing_requirements.strip(),
     )
@@ -342,7 +345,7 @@ async def download_workspace(task_id: str):
         raise HTTPException(status_code=404, detail="项目工作区不存在")
 
     try:
-        archive_path = build_workspace_archive(task_id, work_dir)
+        archive_path = build_workspace_archive(task_id, work_dir, task_status=task.get("status"))
     except WorkspaceArchiveIncompleteError as exc:
         raise HTTPException(
             status_code=409,

@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+import re
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,16 @@ def validate_case(case_path: Path):
     task_path = (case_path.parent / case["task_file"]).resolve()
     if not task_path.is_relative_to(case_path.parent) or sha(task_path) != case["task_sha256"]:
         raise ValueError("frozen task SHA mismatch")
+    filenames = set()
+    for item in case.get("attachments", []):
+        name = item["file"]
+        if (not isinstance(name, str) or not re.fullmatch(r"[\w-][\w. -]*\.(?:xlsx|csv)", name, re.I)
+                or PureWindowsPath(name).is_reserved() or name.casefold() in filenames):
+            raise ValueError("invalid or duplicate data filename")
+        filenames.add(name.casefold())
+        path = (case_path.parent / name).resolve()
+        if path.parent != case_path.parent or not path.is_file() or sha(path) != item["sha256"]:
+            raise ValueError("frozen attachment SHA mismatch")
     budget = case["budget"]
     if budget["model"] != "deepseek-flash" or budget["endpoint"] != ENDPOINT:
         raise ValueError("model or endpoint is outside authorization")
@@ -121,6 +132,12 @@ def prepare_run(case_path, root):
     target = root / "inputs/question" / case["task_file"]
     target.parent.mkdir(parents=True)
     shutil.copy2(Path(case_path).parent / case["task_file"], target)
+    for item in case.get("attachments", []):
+        data = root / "data" / item["file"]
+        data.parent.mkdir(exist_ok=True)
+        shutil.copy2(Path(case_path).parent / item["file"], data)
+        if sha(data) != item["sha256"]:
+            raise ValueError("copied attachment SHA mismatch")
     from app.services.source_ingest import ingest_question_source
     from app.artifacts.evidence_profile import build_evidence_profile
     task = {"task_id": root.name, "work_dir": str(root), "workflow_mode": "standard", "task_type": "guidance"}
@@ -299,6 +316,8 @@ async def main():
                 "persistent_config_unchanged": lambda: config_hash == sha(config_manager.CONFIG_FILE),
                 "code_unchanged": lambda: current_code == code_sha(math_runtime_snapshot(BACKEND / "dsh")),
                 "task_unchanged": lambda: sha(root / "inputs/question" / case["task_file"]) == case["task_sha256"],
+                "attachments_unchanged": lambda: all(sha(root / "data" / item["file"]) == item["sha256"]
+                                                     for item in case.get("attachments", [])),
                 "credential_scan_passed": lambda: all(secret.encode() not in p.read_bytes()
                                                       for p in root.rglob("*") if p.is_file()),
             }

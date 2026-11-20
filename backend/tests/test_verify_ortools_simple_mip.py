@@ -72,6 +72,7 @@ def test_mismatched_decision_keys_or_registered_objective(solution):
 
 class OfflineExample:
     answer_ids = ("optimum",)
+    answer_item = "最优整数解与目标值"
 
     def __init__(self, **settings):
         self.__dict__.update(settings)
@@ -102,7 +103,7 @@ class OfflineExample:
                 sub = reply["subproblems"][0]
                 sub["objective"] = "最大化 x + 10y"
                 answer, = sub["final_answers"]
-                sub["final_answers"] = [{**answer, "id": key} for key in self.answer_ids]
+                sub["final_answers"] = [{**answer, "id": key, "item": self.answer_item} for key in self.answer_ids]
         elif agent_name == "GuidanceModelReviewer_integer_optimum":
             base = "/execution_components/0/model"
             reply = {"subproblem_id": "integer_optimum", "status": "approved", "mathematical_checks": [
@@ -114,9 +115,7 @@ class OfflineExample:
         return scripted_model_reply(reply, kwargs)
 
 
-@pytest.mark.parametrize("answer_ids", [("optimum",), ("optimum", "coordinates", "objective", "feasibility")],
-                         ids=["one_answer", "four_answers"])
-def test_independent_audit_of_published_offline_run_and_tampering(tmp_path, monkeypatch, answer_ids):
+def publish_offline_example(tmp_path, monkeypatch, answer_ids):
     source = tmp_path / "inputs/question/question.txt"
     source.parent.mkdir(parents=True)
     shutil.copyfile(QUESTION, source)
@@ -131,6 +130,13 @@ def test_independent_audit_of_published_offline_run_and_tampering(tmp_path, monk
 
     events = asyncio.run(run())
     assert events[-1]["data"]["status"] == "completed", events[-1]["data"]
+    return events
+
+
+@pytest.mark.parametrize("answer_ids", [("optimum",), ("optimum", "coordinates", "objective", "feasibility")],
+                         ids=["one_answer", "four_answers"])
+def test_independent_audit_of_published_offline_run_and_tampering(tmp_path, monkeypatch, answer_ids):
+    events = publish_offline_example(tmp_path, monkeypatch, answer_ids)
 
     def save(name, data):
         (tmp_path / name).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")

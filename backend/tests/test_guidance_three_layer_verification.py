@@ -34,8 +34,8 @@ def test_unassessed_counterevidence_does_not_require_fabricated_refs() -> None:
     assert record.evidence_refs == []
 
 
-def test_model_adequate_pass_requires_excluded_route_counterevidence() -> None:
-    with pytest.raises(ValidationError, match="counterevidence"):
+def test_model_adequate_pass_rejects_a_baseline_check_without_its_measurements() -> None:
+    with pytest.raises(ValidationError, match="baseline"):
         VerificationReport.model_validate(
             {
                 "model_id": "compared-model",
@@ -177,13 +177,18 @@ def test_numerical_validators_do_not_supply_mathematical_review() -> None:
         "result_registry.json#regression_validation",
         "result_registry.json#optimization_validation",
     ]
-    records = _build_counterevidence_records(approved, layer)
+    records = _build_counterevidence_records(approved)
     assert len(records) == 1
     assert records[0]["challenged_candidate_id"] == "simple_baseline"
     assert records[0]["status"] == "not_assessed"
     assert records[0]["check_refs"] == []
     assert records[0]["evidence_refs"] == []
     assert records[0]["applicability_boundary"].startswith("附件给定采样区间")
+    comparisons = numerical["baseline_comparisons"]
+    assert {(row["metric"], row["baseline_value"], row["result_value"], row["evidence_ref"]) for row in comparisons} == {
+        ("rmse", 0.5, (0.02 / 3) ** 0.5, "result_registry.json#regression_validation"),
+        ("objective", 10, 8, "result_registry.json#optimization_validation"),
+    }
 
 
 def test_model_adequate_rejects_recommended_route_without_baseline() -> None:

@@ -43,7 +43,7 @@ if (!(Test-Path backend/.env.dev)) { Copy-Item backend/.env.example backend/.env
 ## 跑第一道题
 
 1. 在 **首页 → 方案生成** 保留默认的 **standard：标准模式**。
-2. 在 **上传数据** 中放入一份原题。支持 TXT、Markdown、含可提取文字的 PDF 和 DOCX。当前版本通过原题文件建立可逐段引用的来源目录。手边只有粘贴文本时，先保存为 UTF-8 的 `question.txt` 再上传。表格可用 CSV 或 XLSX 一并上传。
+2. 在题面框中直接粘贴文字，或在 **上传数据** 中放入 TXT、Markdown、含可提取文字的 PDF 或 DOCX。仅粘贴时，工作台会保存 UTF-8 原件，并为各段建立引用。同时上传原题时，系统以选中的上传原件登记题面事实，将另贴的文字保存为补充要求。CSV 或 XLSX 数据表可以一并上传。
 3. 点击 **生成方案**。第一次可以直接上传仓库里的整数规划题。它给出两个非负整数变量，要求在两条约束下最大化目标函数，报告变量值和最优值。[示例题面](backend/tests/fixtures/ortools_simple_mip/question.txt)
 4. 在运行页查看进度。默认流程按交付目标拆题，登记原文和表格来源。模型可检查草稿、查询算子、修改变量及约束，然后提交模型。工作台会在提交时指出未绑定的事实或无效的答案证据，并允许模型根据反馈修正。独立审核通过后，后端编译模型、执行算子、复核数值并生成报告。
 
@@ -51,7 +51,7 @@ if (!(Test-Path backend/.env.dev)) { Copy-Item backend/.env.example backend/.env
 
 运行页按 **执行正确性、证据可追溯性、模型充分性** 展示检查结果。点 **下载 MD** 获取报告，对应接口为 `GET /api/tasks/{task_id}/guidance.md`。以后可以从 **项目 → 打开项目** 回看进度和诊断，或选 **查看方案** 阅读报告。
 
-**下载工作区 ZIP** 对应 `GET /api/tasks/{task_id}/workspace.zip`。整包下载会检查所需文件组，目前要求包含图表。下方 OR-Tools 例题无需图表，它的 Markdown 报告可以下载，整包接口则返回 HTTP 409，并在 `missing_required_groups` 中列出 `figures`。原始计算材料仍保存在本地任务目录。
+**下载工作区 ZIP** 对应 `GET /api/tasks/{task_id}/workspace.zip`。无图任务也可下载，包内的 `workspace_manifest.json` 列出各文件的路径、大小与 SHA-256。若已登记的图表或必要的执行材料缺失，接口会返回 HTTP 409，并在 `missing_required_groups` 中列出缺项。
 
 | 任务状态 | 怎样读报告 |
 | --- | --- |
@@ -78,7 +78,7 @@ if (!(Test-Path backend/.env.dev)) { Copy-Item backend/.env.example backend/.env
 .\.venv\Scripts\python.exe -m pip install pytest pytest-asyncio jsonschema
 Set-Location backend
 $env:LITELLM_LOCAL_MODEL_COST_MAP = 'True'
-..\.venv\Scripts\python.exe -X utf8 -m pytest -q -p no:cacheprovider tests/test_scipy_milp_guidance.py tests/test_workbench_guidance_controls.py tests/test_portfolio_harness_loop.py
+..\.venv\Scripts\python.exe -X utf8 -m pytest -q -p no:cacheprovider tests/test_scipy_milp_guidance.py tests/test_workbench_guidance_controls.py tests/test_portfolio_harness_loop.py tests/test_anscombe_linear_fit.py
 ```
 
 SciPy 例题用穷举核对最优解，`(1, 2)` 和 `(2, 2)` 都使目标 y 达到 2。成对测试先去掉资源上限，验证求解前会报告缺少哪项输入，再补上上限或更正证据引用，检查工作台能否发布正确答案。四资产例题把求解结果与独立枚举的 81 种收费情形进行比较。[整数规划测试](backend/tests/test_scipy_milp_guidance.py) · [修订与阻断测试](backend/tests/test_workbench_guidance_controls.py) · [四资产测试](backend/tests/test_portfolio_harness_loop.py)
@@ -89,7 +89,7 @@ SciPy 例题用穷举核对最优解，`(1, 2)` 和 `(2, 2)` 都使目标 y 达�
 
 同一题的首次实测也算出目标值 23，但四项答案引用了执行清单中不存在的证据名，最终为 `blocked`，正式发布 0 项。这次失败促使工作台在模型提交时反馈无效引用。修复后的全套离线回归为 **988 项通过，0 项跳过**，其中 2 项历史响应回放依赖本机留存材料。[首次实测回执](backend/tests/fixtures/ortools_simple_mip/live_receipt.json) · [验收与历史记录](docs/compute_first_guidance_plan.md)
 
-阅读示例报告时，最优值 23 有独立穷举验算支持。报告还提到连续松弛上界，该次执行清单只登记了整数求解节点，未单独计算报告所述的松弛上界。
+原始示例报告保留了当时的文字，其中将连续松弛称为最优性依据。该次执行记录实际给出了整数求解器的原始界和对偶界，二者都是 23，相对间隙为 0。当前报告根据执行记录展示这些值，并将模型拟议的方法标明来源。独立穷举属于验收时的外部核算。
 
 ## 项目与许可证
 

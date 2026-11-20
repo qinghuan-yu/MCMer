@@ -105,10 +105,13 @@ def graph_baseline(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     )):
         return failed("graph baseline comparison requires finite path and flow values")
     if distance > baseline_distance + 1e-10:
-        return failed("weighted shortest path is worse than the shortest-hop baseline")
-    if flow_value < baseline_flow - 1e-10:
-        return failed("maximum flow is worse than the zero-flow baseline")
-    return passed_check("weighted path and feasible flow improve on declared graph baselines")
+        check = failed("weighted shortest path is worse than the shortest-hop baseline")
+    elif flow_value < baseline_flow - 1e-10:
+        check = failed("maximum flow is worse than the zero-flow baseline")
+    else:
+        check = passed_check("weighted path and feasible flow are no worse than the recorded baselines")
+    check.record_comparison(node, "shortest_hop_path", "distance", baseline_distance, distance)
+    return check.record_comparison(node, "reference_flow", "flow", baseline_flow, flow_value)
 
 def graph_connectivity(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     parsed = _graph_evidence(nodes)

@@ -173,6 +173,39 @@ def test_changed_task_is_rejected_before_output_directory_exists(tmp_path):
     assert not (tmp_path / "output").exists()
 
 
+def test_frozen_attachment_uses_normal_data_profile_and_checks_bytes(tmp_path):
+    case = json.loads(CASE.read_bytes())
+    (tmp_path / case["task_file"]).write_bytes((CASE.parent / case["task_file"]).read_bytes())
+    rows = b"x,y\n1,4\n2,5\n"
+    data = tmp_path / "observations.csv"
+    data.write_bytes(rows)
+    case["attachments"] = [{"file": data.name, "sha256": hashlib.sha256(rows).hexdigest()}]
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(case), encoding="utf-8")
+    run = tmp_path / "run"
+    prepare_run(path, run)
+    evidence, = json.loads((run / "evidence_profile.json").read_bytes())["evidence"]
+    assert evidence["source_ref"] == "data/observations.csv"
+    assert evidence["sha256"] == case["attachments"][0]["sha256"]
+    assert (run / evidence["source_ref"]).read_bytes() == rows
+    data.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="SHA"):
+        prepare_run(path, tmp_path / "changed")
+    assert not (tmp_path / "changed").exists()
+
+
+@pytest.mark.parametrize("filename", ["../observations.csv", "/absolute.csv", "folder/file.csv", "D:observations.csv"])
+def test_attachment_requires_a_portable_basename(tmp_path, filename):
+    case = json.loads(CASE.read_bytes())
+    (tmp_path / case["task_file"]).write_bytes((CASE.parent / case["task_file"]).read_bytes())
+    case["attachments"] = [{"file": filename, "sha256": "0" * 64}]
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(case), encoding="utf-8")
+    with pytest.raises(ValueError, match="filename"):
+        prepare_run(path, tmp_path / "run")
+    assert not (tmp_path / "run").exists()
+
+
 def test_fresh_input_and_default_stages_exclude_reference_material(tmp_path):
     task = prepare_run(CASE, tmp_path / "run")
     original = (CASE.parent / "portfolio_task.txt").read_bytes()

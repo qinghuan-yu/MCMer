@@ -156,6 +156,9 @@ def _publication_report(report: VerificationReport, root: Path) -> VerificationR
         if current == report and current.evidence_supported.status == "passed":
             return report
         issues = current.blocking_issues or ["verification evidence missing or changed before publication"]
+        if current.schema_version != report.schema_version:
+            issues = [*current.blocking_issues,
+                      "legacy baseline comparisons and candidate exclusions require a new verification report"]
     except (OSError, ValueError, KeyError) as exc:
         issues = [f"verification evidence unavailable before publication: {exc}"]
     return report.model_copy(update={"status": "blocked", "blocking_issues": issues})

@@ -1,0 +1,24 @@
+{
+  "case_id": "anscombe_linear_fit",
+  "source_url": "https://vincentarelbundock.github.io/Rdatasets/csv/datasets/anscombe.csv",
+  "task_file": "question.txt",
+  "task_sha256": "34b6edcff1a30a11bc1437adc06a10e319dd39cc74883c199ae9c021c6ddb29e",
+  "attachments": [
+    {
+      "file": "observations.xlsx",
+      "sha256": "e99cbdf26edb479b343c07b9d7721f9696ba60c17b50bcd30cc9926cbaa12c16"
+    }
+  ],
+  "budget": {
+    "model": "deepseek-flash",
+    "endpoint": "https://api.deepseek.com",
+    "max_calls": 12,
+    "max_total_tokens": 250000,
+    "max_total_run_seconds": 720,
+    "max_runs": 1
+  },
+  "acceptance": [
+    "Complete the standard workflow with real model calls, the source-bound workbook, approved ModelIR and verified publication.",
+    "Check both published coefficients against exact centered sums for all eleven frozen observations, with absolute error at most 0.00005."
+  ]
+}

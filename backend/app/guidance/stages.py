@@ -12,6 +12,7 @@ from app.artifacts.evidence_profile import (
     load_evidence_profile,
 )
 from app.artifacts.input_catalog import InputCatalog
+from app.services.source_ingest import guidance_question_text
 from app.guidance.contracts import ProblemSpec
 from app.guidance.evidence_consistency import (
     validate_model_evidence_consistency,
@@ -68,7 +69,7 @@ class DecompositionStage:
         output_path: Path,
     ) -> Path:
         root = output_path.parent
-        question = str(task.get("source_question") or task.get("question") or "").strip()
+        question = guidance_question_text(task)
         evidence_profile = build_evidence_profile(root).model_dump(mode="json")
         input_catalog = InputCatalog.model_validate_json(
             (root / "input_catalog.json").read_text(encoding="utf-8")

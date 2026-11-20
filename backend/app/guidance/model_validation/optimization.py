@@ -27,8 +27,10 @@ def optimization_baseline(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     if not finite_number(recommended) or not finite_number(baseline):
         return failed("baseline comparison contains a non-finite objective")
     if recommended > baseline:
-        return failed("recommended objective is worse than the minimization baseline")
-    return passed_check("recommended objective is no worse than the minimization baseline")
+        check = failed("recommended objective is worse than the minimization baseline")
+    else:
+        check = passed_check("recommended objective is no worse than the minimization baseline")
+    return check.record_comparison(node, "registered_objective", "objective", baseline, recommended)
 
 def multistart(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     node = find_evidence(nodes, "multistart")

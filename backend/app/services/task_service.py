@@ -20,6 +20,7 @@ from app.schemas.response import (
     extract_verification_layers,
 )
 from app.services.redis_manager import redis_manager
+from app.services.source_ingest import ingest_pasted_question
 from app.utils.document_export import finalize_markdown_export
 from app.utils.markdown import normalize_math_markdown
 from app.utils.log_util import logger
@@ -193,6 +194,8 @@ class TaskManager:
             "source_markdown_file": "",
             "source_image_manifest": [],
         }
+        if task_type in {"guidance", "writing"} and not parent_task_id:
+            task_info.update(ingest_pasted_question(task_info))
         self._active_tasks[task_id] = task_info
 
         # 持久化任务信息

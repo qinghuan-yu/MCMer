@@ -10,7 +10,7 @@ from typing import Literal
 import nbformat
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.guidance.artifacts import ClaimRecord
+from app.guidance.artifacts import ClaimRecord, registered_output_statement
 from app.guidance.model_ir import (
     BlockedModelIR,
     ModelIR,
@@ -421,7 +421,7 @@ def _result_registry(
             claims.append(ClaimRecord(
                 id=answer.id,
                 status=answer.status,
-                claim_text=answer.item,
+                claim_text=registered_output_statement(answer.id, artifact_nodes[answer.value_ref]),
                 evidence_ids=[answer.id],
                 assumptions=assumption_statements,
                 risk=(

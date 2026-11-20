@@ -530,7 +530,9 @@ def _node_dependencies(
             dependencies.add(producer)
             continue
         owner, separator, _ = reference.partition(".")
-        if separator and owner in node_ids:
+        if separator and owner in artifact_producers:
+            dependencies.add(artifact_producers[owner])
+        elif separator and owner in node_ids:
             dependencies.add(owner)
     return dependencies
 

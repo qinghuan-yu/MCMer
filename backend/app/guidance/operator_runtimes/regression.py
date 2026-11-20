@@ -111,6 +111,59 @@ def _fit_basis(x: np.ndarray, y: np.ndarray, basis: list[dict], candidate=None) 
         "design_matrix": matrix.tolist(),
     }
 
+
+def _descriptive_line_evidence(x: np.ndarray, y: np.ndarray, fit: dict, kinds: list[str], threshold: float) -> dict:
+    intercept = fit["coefficients"][kinds.index("constant")]
+    slope = fit["coefficients"][kinds.index("identity")]
+    indices = [int(np.argmin(x)), int(np.argmax(x))]
+    endpoints = x[indices]
+    endpoint_predictions = intercept + slope * endpoints
+    average = float(np.mean(y))
+    evidence = {
+        "named_coefficients": {"intercept": intercept, "slope": slope},
+        "x": x.tolist(), "observed": y.tolist(),
+        "baseline_method": "response mean over all observations",
+        "baseline_metrics": residual_metrics(y - average),
+        "extreme_inputs": {
+            "scope": "minimum and maximum observed predictor, without extrapolation",
+            "x": endpoints.tolist(), "predicted": endpoint_predictions.tolist(),
+            "finite": bool(np.isfinite(endpoint_predictions).all()),
+            "constraints_satisfied": bool(np.allclose(endpoint_predictions, np.asarray(fit["predicted"])[indices])),
+        },
+    }
+    if len(x) < 3:
+        return evidence
+
+    # For simple OLS, PRESS gives exactly the held-out residual for each deletion.
+    centered = x - np.mean(x)
+    standardized = centered / np.linalg.norm(centered)
+    inverse_count = 1.0 / len(x)
+    retained = 1.0 - inverse_count - standardized**2
+    if np.any(retained <= 32 * np.finfo(float).eps):
+        return evidence  # A deletion makes the line unidentifiable.
+    held_out_errors = np.asarray(fit["residuals"]) / retained
+    baseline_predictions = average + (average - y) / (len(y) - 1)
+    baseline_errors = y - baseline_predictions
+    evidence["cross_validation"] = {
+        "method": "leave-one-observation-out; compare worst single-point error with the training-mean baseline",
+        "predicted": (y - held_out_errors).tolist(), "baseline_predicted": baseline_predictions.tolist(),
+        "fold_rmse": np.abs(held_out_errors).tolist(),
+        "max_allowed_rmse": float(np.max(np.abs(baseline_errors))),
+        "rmse": residual_metrics(held_out_errors)["rmse"], "baseline_rmse": residual_metrics(baseline_errors)["rmse"],
+    }
+    response_range = float(np.ptp(y))
+    if response_range > 0:
+        # Each deleted line minus the full fit is affine, so its largest absolute change is at an endpoint.
+        cross_leverage = inverse_count + standardized[:, None] * standardized[indices]
+        displacement = np.abs(held_out_errors[:, None] * cross_leverage)
+        evidence["sensitivity"] = {
+            "method": "maximum leave-one-out fitted-line displacement on observed x range / observed y range",
+            "max_absolute_change": float(np.max(displacement)), "response_range": response_range,
+            "max_relative_change": float(np.max(displacement) / response_range), "threshold": threshold,
+        }
+    return evidence
+
+
 def basis_least_squares(
     *, inputs: dict, parameters: dict, random_seed, work_dir: Path
 ) -> dict:
@@ -119,7 +172,12 @@ def basis_least_squares(
     y = np.asarray(inputs["y"], dtype=float)
     search = parameters["search"]
     if not search:
-        return {"fit": _fit_basis(x, y, parameters["basis"])}
+        basis = parameters["basis"]
+        fit = _fit_basis(x, y, basis)
+        kinds = [term["kind"] for term in basis]
+        if x.ndim == y.ndim == 1 and sorted(kinds) == ["constant", "identity"] and fit["rank"] == 2:
+            fit.update(_descriptive_line_evidence(x, y, fit, kinds, parameters["sensitivity_threshold"]))
+        return {"fit": fit}
     candidates = [float(value) for value in search["candidates"]]
     fits = [_fit_basis(x, y, parameters["basis"], candidate) for candidate in candidates]
     best_index = min(range(len(fits)), key=lambda index: fits[index]["metrics"]["rmse"])

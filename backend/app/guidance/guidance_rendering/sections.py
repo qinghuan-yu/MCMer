@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
+
+from app.guidance.model_validation.contracts import finite_number
 
 from app.guidance.guidance_rendering.data import (
     _cell,
@@ -238,9 +241,44 @@ def _problem_understanding_lines(
         lines.append("- 时间/数据口径：以题设、附件字段、样本/period/time 单位和参数表登记为准。")
     return lines
 
+def _milp_certificate_lines(model: dict, registered: list[dict], executed_nodes: set[str], report: dict) -> list[str]:
+    numerical = report.get("model_adequate", {}).get("numerical_validation", {})
+    layers = (report.get("execution_verified", {}), report.get("evidence_supported", {}), numerical)
+    if any(layer.get("status") != "passed" for layer in layers):
+        return []
+    eligible = {
+        (sub["subproblem_id"], component["solver_node_id"])
+        for sub in model.get("subproblems", [])
+        for component in sub.get("execution_components", [])
+        if component["kind"] == "indexed_linear" and component["solver_node_id"] in executed_nodes
+    }
+    checks = numerical.get("checks", {})
+    lines = []
+    for result in registered:
+        key = (result.get("subproblem_id"), result.get("source_node"))
+        if key not in eligible or not isinstance(result.get("value"), dict):
+            continue
+        eligible.remove(key)  # 同一次求解可服务多个答案项，只展示一份证书。
+        solution = result["value"]
+        prefix = f"{key[0]}.mixed_integer_linear_optimization."
+        reference = f"`result_registry.json#{_cell(result['id'])}`"
+        certificate = solution.get("bound_certificate", {})
+        primal, dual = certificate.get("primal_bound"), certificate.get("dual_bound")
+        gap = solution.get("solver", {}).get("mip_gap")
+        if checks.get(prefix + "bound_and_gap") == "passed" and all(finite_number(n) for n in (primal, dual, gap)):
+            lines.append(f"- 节点 `{_cell(key[1])}` 的求解证书记录原始界 {primal}，对偶界 {dual}，相对间隙 {gap}。证据见 {reference}。")
+        baseline = solution.get("baseline", {})
+        if (checks.get(prefix + "baseline_comparison") == "passed" and baseline.get("feasible") is True
+                and finite_number(baseline.get("objective_value"))):
+            method = "求解器以零目标求出可行点，" if baseline.get("method") == "zero_objective_feasible_point" else ""
+            lines.append(f"- {method}可行基线点的原目标值为 {baseline['objective_value']}。证据见 {reference}。")
+    return lines
+
+
 def _registered_subproblem_modeling_lines(
     result_registry: dict[str, Any],
     model: dict[str, Any],
+    executed_nodes: set[str],
 ) -> list[str]:
     analyses = _identifiability_analysis(result_registry)
     answer_tables = _final_answer_tables(result_registry)
@@ -254,17 +292,28 @@ def _registered_subproblem_modeling_lines(
         for component in subproblem.get("execution_components", []):
             if component["kind"] == "indexed_linear":
                 indexed = component["model"]
+                node = component["solver_node_id"]
+                route = "已执行求解节点" if node in executed_nodes else "模型拟定的求解节点"
                 lines.extend([
                     f"- 索引模型参数：{_join_claim_items([p['id'] for p in indexed['parameters']])}。",
                     f"- 约束：{_join_claim_items([c['id'] for c in indexed['constraints']])}。",
-                    f"- 求解节点：`{_cell(component['solver_node_id'])}`。",
+                    f"- {route} `{_cell(node)}` 使用 `optimization.milp`。",
                 ])
             else:
                 for operator in component.get("operators", []):
-                    lines.append(f"- 算子 `{_cell(operator['operator_id'])}` 从已绑定的参数与输入生成"
+                    node = operator["node_id"]
+                    route = "已执行算子" if node in executed_nodes else "模型拟定的算子"
+                    lines.append(f"- {route} `{_cell(operator['operator_id'])}`，节点 `{_cell(node)}`，"
                                  f"输出 {_join_claim_items(operator['outputs'])}。")
+                    if operator.get("parameters"):
+                        params = json.dumps(operator["parameters"], ensure_ascii=False, separators=(", ", ": "))
+                        preview = params if len(params) <= 360 else params[:360] + "…（完整参数见 approved_model_ir.json）"
+                        lines.append(f"  - 模型登记的算子参数 `{_cell(preview)}`。")
+                for candidate in subproblem.get("candidate_models", []):
+                    if candidate.get("role") == "recommended":
+                        lines.append(f"- 模型拟定的适用边界：{_cell(candidate['applicability_boundary'])}")
         for answer in subproblem.get("final_answers", []):
-            lines.append(f"- 输出 `{_cell(answer['id'])}`：{_cell(answer['item'])}。")
+            lines.append(f"- 模型拟定的输出项 `{_cell(answer['id'])}`，说明原文为“{_cell(answer['item'])}”。")
     if analyses:
         for analysis in analyses:
             subproblem_id = str(analysis.get("subproblem_id") or "unknown")

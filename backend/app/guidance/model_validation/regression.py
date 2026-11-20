@@ -28,8 +28,10 @@ def regression_baseline(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     if not finite_number(recommended) or not finite_number(baseline):
         return failed("baseline comparison contains a non-finite RMSE")
     if recommended >= baseline:
-        return failed("recommended RMSE does not improve on the baseline")
-    return passed_check("recommended RMSE improves on the recorded baseline")
+        check = failed("recommended RMSE does not improve on the baseline")
+    else:
+        check = passed_check("recommended RMSE improves on the recorded baseline")
+    return check.record_comparison(node, "recorded_baseline", "rmse", baseline, recommended)
 
 def residual_recompute(nodes: list[Mapping[str, Any]]) -> ValidationCheck:
     node = find_evidence(nodes, "observed", "predicted", "residuals", "metrics")
