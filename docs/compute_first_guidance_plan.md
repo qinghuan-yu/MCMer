@@ -2,11 +2,11 @@
 
 本文件是唯一长期计划的最终状态记录；执行规则见 `AGENTS.md`。2026-11-10，用户明确选择“按未完成事实封档”，批准保存代码、验证记录与失败回执，冻结版本并结束开发。此决定替代“闭环成功后才封档”的原结束条件，不改变数学验收失败的事实。
 
-CURRENT：本次主分支发布已完成，无活动步骤。
+CURRENT：分支改名及引用核对已完成，无活动步骤。
 
 ## 数学建模工作台重做
 
-用户已批准在 `codex/deepseek-modeling-workbench` 重做建模环节。基线提交为 `f2d5062`。沿用正式来源、ModelIR、审核、求解和发布，以数学工作台支持增量建模，旧版实测仍计为失败。
+用户已批准在 `deepseek-modeling-workbench` 重做建模环节。基线提交为 `f2d5062`。沿用正式来源、ModelIR、审核、求解和发布，以数学工作台支持增量建模，旧版实测仍计为失败。
 
 - [x] R1 数学工具按来源与角色校验增量编辑，拒绝的操作保留此前草稿。变量、定义域、目标与约束可登记事实所对应的模型位置，完成后提交正式 ModelIR。
 - [x] R2 默认入口运行官方 DeepSeek Harness AgentLoop，限定四项数学工具。多交付目标须附可核对的题面引文。默认入口的两道既有题、恢复及合同测试已通过。
@@ -14,7 +14,9 @@ CURRENT：本次主分支发布已完成，无活动步骤。
 - [ ] R4 首轮真实数学验收未通过，本轮裁决已归档。Google OR-Tools 新题仅授权一轮 deepseek-flash，最多 12 次请求、250000 tokens、720 秒。实测 10 次请求、148090 tokens、161.687 秒，未知用量 0。模型通过审核，求解得到 x=3、y=2、目标 23，独立枚举 12 个可行点得到相同唯一解。四项登记答案引用的 `milp_solution` 不在执行清单中，发布和任务均为 blocked，正式发布 0 项。原版十条响应离线回放逐请求匹配，报告字节一致。修复版的独立裁决记在 R6。[题面](../backend/tests/fixtures/ortools_simple_mip/question.txt) · [实测回执](../backend/tests/fixtures/ortools_simple_mip/live_receipt.json)
 - [x] R5 索引求解器的输出名和证据节点随建模上下文提供。提交与恢复旧模型时查验引用，错误按答案反馈并列出可用证据。用 R4 的原始十个工具动作离线重放，最后一次提交当场拒绝四个无效引用，指出 `solve_indexed_model`。另用脚本模型按工具反馈修正，实际求解并通过发布。独立核验器也已用同一解对应四项答案的导出报告验证。最终全套离线回归 988 项通过，0 项跳过，58.49 秒。[回归测试](../backend/tests/test_workbench_guidance_controls.py) · [本机测试记录](../backend/.local/workbench-postlive-release.xml) · [原始动作重放](../backend/.local/ortools-r5-actions-rejected.json)
 - [x] R6 修复版 `bf5eb6c` 完成同一冻结 OR-Tools 公开题的真实闭环。独立授权的 deepseek-flash 一轮上限为 12 次请求、250000 tokens、720 秒，实耗 9 次、81320 tokens、87.875 秒，未知用量 0。任务 completed、报告 verified，执行、证据和数学验证均通过。独立枚举确认 12 个可行点中唯一最优为 (3,2)，目标 23，两约束余量均为 0.5。5 条答案记录均引用同一个解。九次原响应离线回放逐次匹配，报告 SHA-256 相同。额度已关闭。[实测与独立验算](../backend/tests/fixtures/ortools_simple_mip/live_retest_receipt.json) · [原始报告](../backend/tests/fixtures/ortools_simple_mip/verified_guidance.md)
-- [x] R7 主分支采用通过复测的工作台，原远端 `main` 精确保存在 `codex/main-before-modeling-workbench-20261120`（`dfdc0e4a0cdb11b529e82d4c3f6106235a0924c6`）。新 README 提供模型配置、上传题面、报告下载、离线复现和实测证据。应用入口以脚本模型离线核对了 TXT 上传、后台任务完成、Markdown 下载及报告指纹。已知仅粘贴文本时缺少来源目录，无图任务的 ZIP 导出返回 409。发布前全套离线回归 988 项通过，0 项跳过，前端构建通过。[使用说明](../README.md)
+- [x] R7 主分支采用通过复测的工作台，原远端 `main` 精确保存在 `main-before-modeling-workbench-20261120`（`dfdc0e4a0cdb11b529e82d4c3f6106235a0924c6`）。新 README 提供模型配置、上传题面、报告下载、离线复现和实测证据。应用入口以脚本模型离线核对了 TXT 上传、后台任务完成、Markdown 下载及报告指纹。已知仅粘贴文本时缺少来源目录，无图任务的 ZIP 导出返回 409。发布前全套离线回归 988 项通过，0 项跳过，前端构建通过。[使用说明](../README.md)
+
+- [x] R8 四个分支已在 GitHub 和本地去掉 `codex/` 前缀。`deepseek-modeling-workbench`、`main-before-modeling-workbench-20261120`、`math-agent-harness`、`modeling-core-refactor` 的提交分别核对为 `dc2bf39`、`dfdc0e4`、`047b228`、`f7038ac`，本地跟踪关系及 README 链接已更新。
 
 ## 重做前的基线（2026-11-20）
 
@@ -79,7 +81,7 @@ CURRENT：本次主分支发布已完成，无活动步骤。
 
 ## 版本与证据位置
 
-- 封档分支：`codex/math-agent-harness`。
+- 封档分支：`math-agent-harness`。
 - 封档标签：`closeout-incomplete-2026-11-10`；标签所指提交为最终版本，避免在提交内自引用未知提交号。
 - 最后业务修复提交：`ba369e104542d1973cab96b26ec34eab6f8acd26`。
 - 两轮审计基线：`02c0b8f32d44cfeb8fc12b5d0b3502320ba5311f`。

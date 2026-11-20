@@ -89,8 +89,10 @@ SciPy 例题用穷举核对最优解，`(1, 2)` 和 `(2, 2)` 都使目标 y 达�
 
 同一题的首次实测也算出目标值 23，但四项答案引用了执行清单中不存在的证据名，最终为 `blocked`，正式发布 0 项。这次失败促使工作台在模型提交时反馈无效引用。修复后的全套离线回归为 **988 项通过，0 项跳过**，其中 2 项历史响应回放依赖本机留存材料。[首次实测回执](backend/tests/fixtures/ortools_simple_mip/live_receipt.json) · [验收与历史记录](docs/compute_first_guidance_plan.md)
 
+阅读示例报告时，最优值 23 有独立穷举验算支持。报告还提到连续松弛上界，该次执行清单只登记了整数求解节点，未单独计算报告所述的松弛上界。
+
 ## 项目与许可证
 
-`main` 为数学建模工作台。原主分支保存为 [codex/main-before-modeling-workbench-20261120](https://github.com/qinghuan-yu/MCMer/tree/codex/main-before-modeling-workbench-20261120)。感谢 MathModelAgent 对本项目早期方向的启发。
+`main` 为数学建模工作台。原主分支保存为 [main-before-modeling-workbench-20261120](https://github.com/qinghuan-yu/MCMer/tree/main-before-modeling-workbench-20261120)。感谢 MathModelAgent 对本项目早期方向的启发。
 
 MCMer 采用 GPL-3.0-only 许可证。[许可证全文](LICENSE)
