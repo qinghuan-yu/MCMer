@@ -1,372 +1,96 @@
-# MCMer
+# MCMer 数学建模工作台
 
-MCMer 是一个面向数学建模场景的实验性全栈系统，保留来源追踪、ModelIR、数值算子、验证与报告能力。
+MCMer 把一道题从原文带到可以复核的数值答案。输入题面和数据后，模型在 DeepSeek Harness 中定义变量、目标和约束。MCMer 核对来源，独立审核模型，调用已注册的求解器，然后把经过验证的结果写入建模指导报告。某一问缺少数据或计算能力时，报告会指出缺什么，以及补齐后可以继续求什么。
 
-**本分支在 Guidance 默认入口运行 DeepSeek Harness 数学工作台。** 模型可以查看草稿与算子、逐项编辑模型并提交审核。工作台会将题面事实绑定到变量定义、数值参数、目标或约束。失败的编辑会返回具体原因，此前接受的编辑可以继续使用。独立审核、求解、数值验证和报告发布由 MCMer 完成。
+## 启动工作台
 
-## 运行与复核
+在仓库根目录选择一种启动方式。
 
-在应用里创建建模指导任务即可使用新流程。从源码运行需要 Node.js 22.12 或更新版本。在仓库根目录运行 `npm ci --ignore-scripts --prefix backend/dsh` 安装锁定的官方组件。Docker 镜像在构建时安装这些组件。离线示例用脚本提供模型回复，从冻结题目运行到导出的报告，其中四资产案例独立枚举 81 种收费情形。
+### Docker Compose
 
-重做后的首次真实验收使用 Google OR-Tools 的整数规划例题。DeepSeek Flash 从题面建模，通过数学审核后，求解器算出唯一最优解 x=3、y=2，目标值 23。独立枚举全部 12 个可行点得到相同结果。四项答案引用了执行清单里不存在的 `milp_solution`，因此最终任务和报告均为 `blocked`，正式发布 0 项。实测共 10 次请求、148090 tokens、161.687 秒。用十条原响应离线复现了同一份阻断报告。[公开题目](https://github.com/google/or-tools/blob/stable/ortools/linear_solver/samples/simple_mip_program.py) · [实测回执与独立复核](backend/tests/fixtures/ortools_simple_mip/live_receipt.json)
-
-修复后的工作台会在建模开始时提供索引求解器的输出名与证据节点名，并在提交时列出每条答案的无效引用。离线重放本轮原始动作，四项错误引用均在提交时被拦截。另一个离线用例按反馈改正引用后通过正式发布。修复版尚待真实模型复测。[端到端回归](backend/tests/test_workbench_guidance_controls.py)
-
-重做前的 SciPy 整数规划例题保留为基线。独立穷举得到两个最优解 (1, 2) 和 (2, 2)，两者均使 y 达到最大值 2。脚本提供模型回复时，默认流程求解和导出通过。旧版真实模型在首个子题误用文本参数，纠正输出被截断，任务随即阻断。实测共 5 次请求、75502 tokens，正式数值结果为 0。五条原响应离线回放产生相同的阻断报告。[题面](backend/tests/fixtures/scipy_milp/question.txt) · [实测回执](backend/tests/fixtures/scipy_milp/live_receipt.json)
-
-在 `backend` 目录运行：
+安装 Docker 并启动 Docker 引擎。首次检出时，从示例创建本地配置。以下命令可在 PowerShell 中运行。
 
 ```powershell
-$env:LITELLM_LOCAL_MODEL_COST_MAP='True'
-..\.venv\Scripts\python.exe -X utf8 -m pytest tests/test_workbench_guidance_controls.py tests/test_portfolio_harness_loop.py tests/test_scipy_milp_guidance.py tests/test_verify_ortools_simple_mip.py -q -p no:cacheprovider
+if (!(Test-Path backend/.env.dev)) { Copy-Item backend/.env.example backend/.env.dev }
+docker compose up -d --build
 ```
 
-可对已发布的四资产运行单独复核。在同一目录运行以下命令，将路径和结果 ID 替换为该次运行的值。变量名与示例不同，可用 `--amount-keys`、`--fee-keys` 按 S1 到 S4 指定，并指定银行余额、最大损失与全存银行收益的变量名；完整选项见 `--help`。核验器只读工作区，以退出码和 JSON 返回结论。
+镜像包含 Python、Node.js 和锁定版本的 DeepSeek Harness 组件。Compose 同时启动前端、后端和 Redis。进入 [工作台首页](http://127.0.0.1:5173)，后端健康状态可在 [健康检查](http://127.0.0.1:8000/health) 查看。用 `docker compose down` 停止服务。
+
+### Windows 本地运行
+
+准备 Python 3.11、Node.js 22.12 或更新版本，以及 pnpm。在 PowerShell 中运行以下命令。
 
 ```powershell
-..\.venv\Scripts\python.exe -X utf8 scripts/verify_closeout_portfolio.py --audit-run <运行目录> --result-id <结果ID>
-```
-
-## 2026-11-10 封档状态
-
-冻结版本：`closeout-incomplete-2026-11-10`，位于 `codex/math-agent-harness` 分支。
-
-- 最后工程验证为 923 项正式后端测试及 2 项原响应回放通过；这不是数学任务完成证明。
-- 冻结的四资产派生任务经过两轮 `deepseek-flash` 实测，均为 blocked，未进入求解，正式已验证结果为 0 项。
-- 两轮累计 14 次请求、311891 tokens。最后一轮因下一条约束请求的 token 预留不足而在外发前停止；不追加第三轮。
-- 代码、正式测试、失败回执与验证记录继续保留；本项目没有完成通用建模或竞赛整题能力验收。
-
-查阅[最终封档记录](docs/compute_first_guidance_plan.md)、[复测审计](docs/reviews/2026-11-10-closeout-retest.md)、[运行回执](backend/closeout/closeout_run_receipts.json)及[验证清单](backend/closeout/validation/manifest.json)。后续内容保留历史架构与使用说明，不代表本次闭环验收通过。
-
-## 分支定位
-
-- `codex/math-agent-harness`：本次封档分支，保存 ModelIR 重构、有限实测与最终记录。
-- `main`、`agent`：保留的历史分支，本次封档未合并或改写其内容。
-
-当前开发范围和实测状态以[唯一执行计划](docs/compute_first_guidance_plan.md)为准。
-
-## 致谢
-
-MCMer 的产品方向受到 MathModelAgent 等数学建模 Agent 项目的启发，感谢这些项目的早期探索。
-
-项目围绕论文局部修改、润色复核、数值结果追踪、DOCX 导出、历史项目回看和本地工作流可控性展开设计。
-
-## 项目预览
-
-![MCMer 首页预览](docs/homepage.png) 
-
-以下界面截图主要展示 `agent` 分支保留的论文工作流；`main` 复用同一前后端基础设施，但以建模指导、证据追踪和工作区导出为核心。
-
-`agent` 分支按两条主链路运行：
-
-1. 写作功能
-   适合从原题和数据出发，自动完成题目拆解、建模、审查、算法求解、数值复核、图表生成、成文与最终审查。
-2. 论文润色
-   适合对已有论文做一致性审查、数据复核、图文核对和竞赛风格修订。
-
-![MCMer 项目预览](docs/project.png) 
-
-1. 打开项目
-   可以进入历史项目，重新审核其工作流。
-2. 修订论文
-   针对已经完成的论文，重新提交修改观点，让agent重新审视问题并修订论文。
-
-![MCMer 配置预览](docs/config.png) 
-
-1. 配置api key
-   配置各主流模型服务商提供的key。 
-2. 选择模型
-   选择agent使用的模型。
-
----
-
-## 保留的 Guidance 架构
-
-封档分支保留以下设计约束：
-
-- 题目拆解、建模、模型审核、计算、结果复核和 Guidance 输出使用文件化阶段合同。
-- 参数、数值、图表和最终结论绑定数据来源与结果证据。
-- 子问题分别标记为可解或阻断；缺少附录、约束或独立观测时，记录缺失信息并保留已完成结果。
-- 工作区可以整体下载，包含 Guidance、注册表、Notebook、图表和诊断文件。
-- 使用 ModelIR 与注册算子执行图表达模型及计算；实际覆盖和未通过事项见封档记录。
-
-## Agent 分支工作流
-
-`agent` 分支的写作任务支持三种工作流模式：
-
-- `fast`：优先速度，适合快速产出可用模型方案和核心计算流程；正文保持短稿，只保留必要公式、主要结果和风险提示。
-- `standard`：默认模式，在完整性、速度和篇幅之间取中庸；会按 `solve_spec.subproblems` 拆分算法求解，每个子问题独立预算并立即落盘结构化结果。
-- `strict`：重点检查数值精度、单位一致性、公式口径、复核和证据链；正文优先呈现可复核表格、误差说明和阻断说明。
-
-算法求解阶段会优先生成 `result_registry.json`。其中 `summary` 会记录：
-
-- `verified_count` / `blocked_count`：可写入论文的已验证结果数与阻断项数。
-- `coverage_status`：`ready`、`partial` 或 `no_verified_results`。
-- `coverage_ratio`：有 verified 结果的结构化结果文件占比。
-- `top_blocked_reasons`：主要阻断原因，常见为工具调用次数、执行时间或缺少可复核数据。
-
-当代码手接近工具调用上限时，会进入“最小数值交付模式”：优先把已算出的关键数值表、参数表、来源文件和未完成原因写入结构化结果文件，避免整篇论文因为某个子问题被阻断而完全缺少数值。
-
-自动保全的中间结果不会直接等同于 `verified`。例如模型若采用 `T = K * P * d`，系统会检查 `K` 是否按 `T / (P * d)` 计算；若发现把 `P / T` 这类斜率误标为扭矩系数，会在结果注册表中阻断该项，等待重新求解或复核。
-
-## 技术栈
-
-- 前端：Vue 3、TypeScript、Vite、pnpm
-- 后端：FastAPI、WebSocket、Redis、LiteLLM
-- 代码执行：Jupyter Kernel 本地解释器
-- 导出：Markdown、DOCX、Notebook
-
-## 目录结构
-
-```text
-MCMer/
-├─ backend/
-│  ├─ app/
-│  ├─ project/
-│  ├─ pyproject.toml
-│  └─ runtime_config.example.json
-├─ frontend/
-│  ├─ src/
-│  └─ package.json
-├─ .venv/
-├─ start-dev.cmd
-└─ README.md
-```
-
----
-
-## 快速启动
-
-### 首次配置（git clone 之后）
-
-如果你是刚通过 `git clone` 拉取本项目，建议按下面顺序完成第一次配置。
-
-#### 1. 创建 Python 虚拟环境
-
-本项目默认使用项目根目录下的 `.venv`，`start-dev.cmd` 也依赖这个约定。
-
-```powershell
-git clone <your-repo-url>
-cd MCMer
-
 py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-python -m pip install --upgrade pip
-pip install -e .\backend
+.\.venv\Scripts\python.exe -m pip install -e .\backend
 npm ci --ignore-scripts --prefix backend/dsh
+pnpm --dir frontend install --frozen-lockfile
+if (!(Test-Path backend/.env.dev)) { Copy-Item backend/.env.example backend/.env.dev }
+.\start-dev.cmd
 ```
 
-说明：
+启动脚本分别打开前后端终端。前端使用 5173 端口，本地后端使用 **8010** 端口，Vite 将页面请求转发到该端口。分别在两个终端按 Ctrl+C 即可停止。[工作台首页](http://127.0.0.1:5173) · [本地后端接口文档](http://127.0.0.1:8010/docs)
 
-- 后端要求 Python >= 3.10，建议直接使用 Python 3.11。
-- 使用 `pip install -e .\backend` 后，会按 [backend/pyproject.toml](backend/pyproject.toml) 安装后端依赖。
-- 后端依赖包括 Jupyter/ipykernel、LiteLLM 和文档导出相关库。
+## 配置模型
 
-#### 2. 安装前端依赖
+1. 打开顶部的 **设置**，在对应服务商的输入框填入 API Key，点击 **保存 API Key**。
+2. 在 **默认模型选择** 中选择与密钥匹配且支持工具调用的模型，点击 **保存模型设置**。首次使用可以让拆题、建模和审核共用这个模型。
+3. 若要为拆题和建模指定不同模型，`COORDINATOR_MODEL` 用于拆题，`MODELER_MODEL` 用于建模、来源裁决和数学审核。模型选择顺序依次为运行时的专用模型、运行时的默认模型、环境中的专用模型、环境中的默认模型。网页保存的配置位于 `backend/.local/runtime_config.json`。[环境配置示例](backend/.env.example) · [运行时配置示例](backend/runtime_config.example.json)
+
+项目实测使用的模型标识是 `deepseek/deepseek-flash`。要复用这一配置，可在首次启动前将 `backend/.env.dev` 中的 `COORDINATOR_MODEL` 和 `MODELER_MODEL` 都设为该标识，并填写 `DEEPSEEK_API_KEY`。已有网页模型配置时，按上面的优先顺序选择生效值。提交任务会向所选服务商发送题面、相关数据和工具调用上下文。
+
+## 跑第一道题
+
+1. 在 **首页 → 方案生成** 保留默认的 **standard：标准模式**。
+2. 在 **上传数据** 中放入一份原题。支持 TXT、Markdown、含可提取文字的 PDF 和 DOCX。当前版本通过原题文件建立可逐段引用的来源目录。手边只有粘贴文本时，先保存为 UTF-8 的 `question.txt` 再上传。表格可用 CSV 或 XLSX 一并上传。
+3. 点击 **生成方案**。第一次可以直接上传仓库里的整数规划题。它给出两个非负整数变量，要求在两条约束下最大化目标函数，报告变量值和最优值。[示例题面](backend/tests/fixtures/ortools_simple_mip/question.txt)
+4. 在运行页查看进度。默认流程按交付目标拆题，登记原文和表格来源。模型可检查草稿、查询算子、修改变量及约束，然后提交模型。工作台会在提交时指出未绑定的事实或无效的答案证据，并允许模型根据反馈修正。独立审核通过后，后端编译模型、执行算子、复核数值并生成报告。
+
+## 查看结果与导出
+
+运行页按 **执行正确性、证据可追溯性、模型充分性** 展示检查结果。点 **下载 MD** 获取报告，对应接口为 `GET /api/tasks/{task_id}/guidance.md`。以后可以从 **项目 → 打开项目** 回看进度和诊断，或选 **查看方案** 阅读报告。
+
+**下载工作区 ZIP** 对应 `GET /api/tasks/{task_id}/workspace.zip`。整包下载会检查所需文件组，目前要求包含图表。下方 OR-Tools 例题无需图表，它的 Markdown 报告可以下载，整包接口则返回 HTTP 409，并在 `missing_required_groups` 中列出 `figures`。原始计算材料仍保存在本地任务目录。
+
+| 任务状态 | 怎样读报告 |
+| --- | --- |
+| `completed` | 所请求结果已通过发布复核。在答案表中查看数值、单位和来源。 |
+| `partial` | 逐题查看已验证的答案，以及其他子题的缺失条件。 |
+| `blocked` | 查看阻断位置、缺失输入和恢复动作。任务即使生成了诊断报告，仍可能有零项可发布结果。 |
+
+同一次运行的工作区保存在 `work_dir/<任务 ID>/`（使用上述配置时）。可按以下顺序复查一个数值。
+
+| 要核对什么 | 工作区文件 |
+| --- | --- |
+| 题面给了什么，原文和数据在哪里 | `input_catalog.json`、`evidence_profile.json`、`problem_spec.json` |
+| 模型用了哪些变量、假设、目标和约束，审核通过了哪些子题 | `model_ir.json`、`model_review.json`、`approved_model_ir.json` |
+| 哪些计算真正执行，数值对应哪个结果 | `execution_manifest.json`、`result_registry.json`，以及运行时生成的 `notebook.ipynb` |
+| 为什么可以发布，下载文本是否与复核版本一致 | `verification_report.json`、`guidance_audit_report.json`、`guidance.md`。审计回执含 `publication_status` 和报告 SHA-256 |
+
+如果求解器给出了候选值，先看 `result_registry.json` 的 `verified_results` 是否登记该答案，再核对报告中的数值。阻断任务也会出具审计回执，`publication_status` 表明该报告公布的是已验证答案还是阻断原因。
+
+## 离线复现
+
+从完成上述本地依赖安装的仓库根目录运行以下命令。测试使用脚本提供模型回复，实际执行官方工具循环、求解器、验证和报告导出，无需配置 API Key。
 
 ```powershell
-cd frontend
-pnpm install
-cd ..
+.\.venv\Scripts\python.exe -m pip install pytest pytest-asyncio jsonschema
+Set-Location backend
+$env:LITELLM_LOCAL_MODEL_COST_MAP = 'True'
+..\.venv\Scripts\python.exe -X utf8 -m pytest -q -p no:cacheprovider tests/test_scipy_milp_guidance.py tests/test_workbench_guidance_controls.py tests/test_portfolio_harness_loop.py
 ```
 
-说明：
+SciPy 例题用穷举核对最优解，`(1, 2)` 和 `(2, 2)` 都使目标 y 达到 2。成对测试先去掉资源上限，验证求解前会报告缺少哪项输入，再补上上限或更正证据引用，检查工作台能否发布正确答案。四资产例题把求解结果与独立枚举的 81 种收费情形进行比较。[整数规划测试](backend/tests/test_scipy_milp_guidance.py) · [修订与阻断测试](backend/tests/test_workbench_guidance_controls.py) · [四资产测试](backend/tests/test_portfolio_harness_loop.py)
 
-- 需要本机已安装 Node.js 和 `pnpm`。
-- 前端依赖量级不大，主要是 Vue 3、Vite、Pinia、KaTeX、marked 等常规依赖。
+## 验收记录
 
-#### 3. 复制环境配置文件
+在 Google OR-Tools 公开整数规划题上，DeepSeek Flash 通过修复后的工作台完成了从题面到报告的真实运行。求解结果为 **x = 3、y = 2、目标值 23**，独立枚举确认这是唯一最优解。任务状态为 `completed`，发布状态为 `verified`，五条答案记录引用同一个解。该轮共 9 次模型请求、81,320 tokens，用时 87.875 秒。[复测题面](backend/tests/fixtures/ortools_simple_mip/question.txt) · [实际导出的报告](backend/tests/fixtures/ortools_simple_mip/verified_guidance.md) · [复测回执](backend/tests/fixtures/ortools_simple_mip/live_retest_receipt.json)
 
-后端默认读取 `backend/.env.dev`，而不是直接读取 `.env.example`。因此 clone 后建议先复制一份：
+同一题的首次实测也算出目标值 23，但四项答案引用了执行清单中不存在的证据名，最终为 `blocked`，正式发布 0 项。这次失败促使工作台在模型提交时反馈无效引用。修复后的全套离线回归为 **988 项通过，0 项跳过**，其中 2 项历史响应回放依赖本机留存材料。[首次实测回执](backend/tests/fixtures/ortools_simple_mip/live_receipt.json) · [验收与历史记录](docs/compute_first_guidance_plan.md)
 
-```powershell
-Copy-Item .\backend\.env.example .\backend\.env.dev
-```
+## 项目与许可证
 
-前端如果需要单独指定后端地址，也可以复制：
+`main` 为数学建模工作台。原主分支保存为 [codex/main-before-modeling-workbench-20261120](https://github.com/qinghuan-yu/MCMer/tree/codex/main-before-modeling-workbench-20261120)。感谢 MathModelAgent 对本项目早期方向的启发。
 
-```powershell
-Copy-Item .\frontend\.env.example .\frontend\.env.development
-```
-
-至少建议检查这些配置项：
-
-- `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `MIMO_API_KEY`
-- `DEFAULT_MODEL`、`MODELER_MODEL`、`CODER_MODEL`、`WRITER_MODEL`
-- `CODE_INTERPRETER`，默认是 `local`
-- `REDIS_URL`，默认是 `redis://localhost:6379/0`
-
-补充说明：
-
-- Redis 不是强制前置。若本机没有 Redis，后端会自动退回内存模式，项目仍可启动。
-- 运行时模型和 key 也可以在前端设置页中修改，本地配置会写入 `backend/.local/runtime_config.json`。
-
-### 方式一：一键启动
-
-Windows 下可直接双击根目录脚本：
-
-```bat
-start-dev.cmd
-```
-
-这个脚本会：
-
-- 启动后端 `uvicorn app.main:app --port 8000`
-- 启动前端 `pnpm run dev --port 5173`
-- 若前端尚未安装依赖，会先自动执行 `pnpm install`
-
-启动后可访问：
-
-- 前端首页：`http://127.0.0.1:5173`
-- 后端接口文档：`http://127.0.0.1:8000/docs`
-
-### 方式二：手动启动
-
-#### 1. 后端
-
-```powershell
-cd backend
-..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-#### 2. 前端
-
-```powershell
-cd frontend
-pnpm install
-pnpm run dev --host 0.0.0.0 --port 5173
-```
-
-### 方式三：Docker Compose 启动
-
-Docker Compose 用于可复现部署；日常开发推荐使用本地 `.venv + pnpm`。
-
-#### 1. 准备配置文件
-
-后端建议先复制一份开发环境配置：
-
-```powershell
-Copy-Item .\backend\.env.example .\backend\.env.dev
-```
-
-如果希望预先放入运行时模型与 key 配置，也可以初始化本地运行时配置目录：
-
-```powershell
-New-Item -ItemType Directory -Force .\backend\.local | Out-Null
-Copy-Item .\backend\runtime_config.example.json .\backend\.local\runtime_config.json
-```
-
-说明：
-
-- Compose 会把项目根目录下的 `work_dir`、`backend/.local` 和 `backend/logs` 挂载到容器内，方便保留任务产物、运行时配置和日志。
-- Compose 内部会自动把后端 Redis 地址改为 `redis://redis:6379/0`，不需要手动改 `.env.dev`。
-
-#### 2. 一键启动
-
-```powershell
-docker compose up --build
-```
-
-Compose 把 `./backend/app` 挂载到容器内 `/app/app`，保存应用源码后 `uvicorn` 会自动重载。修改 `backend/dsh` 的桥接脚本或依赖、后端 Dockerfile、Python 或系统依赖后，运行 `docker compose up -d --build` 更新镜像。
-
-启动后可访问：
-
-- 前端首页：`http://127.0.0.1:5173`
-- 后端接口文档：`http://127.0.0.1:8000/docs`
-- 后端健康检查：`http://127.0.0.1:8000/health`
-
-#### 3. 停止与清理
-
-```powershell
-docker compose down
-```
-
-如果要连同 Redis 持久化数据一起删除：
-
-```powershell
-docker compose down -v
-```
-
-#### 4. Docker 方式的适用范围
-
-- 适合复现 Redis、FastAPI、Vite 前后端联动和导出链路。
-- 日常开发调试推荐使用本地 `.venv` 和 `pnpm run dev`。
-
-## 运行前准备
-
-### Python
-
-- 建议直接使用项目根目录下的 `.venv`
-- 推荐 Python 3.11
-- 后端依赖定义在 [backend/pyproject.toml](backend/pyproject.toml)
-
-### Node.js
-
-- 需要本地已安装 `pnpm`
-- Guidance 数学工作台要求 Node.js 22.12 或更新版本
-- 前端依赖定义在 [frontend/package.json](frontend/package.json)
-
-### 配置文件
-
-- 后端环境示例见 [backend/.env.example](backend/.env.example)
-- 前端环境示例见 [frontend/.env.example](frontend/.env.example)
-- 运行时模型与 key 配置模板见 [backend/runtime_config.example.json](backend/runtime_config.example.json)
-
-实际运行时：
-
-- 本地运行时配置会写入 `backend/.local/runtime_config.json`
-- 不要提交真实密钥到仓库
-
-## 使用流程
-
-### 写作功能
-
-1. 进入首页，选择“写作功能”
-2. 输入题目或上传原题文档、数据文件
-3. 等待任务依次经过分析、建模、求解、复核、写作与最终审查
-4. 在项目页查看过程消息、论文、Notebook 与导出文件
-
-### 论文润色
-
-1. 进入首页，选择“论文润色”
-2. 上传 Markdown、DOCX、PDF 或 zip 论文源文件
-3. 等待系统执行一致性检查、数据复核、图文核对与措辞修订
-4. 在项目页查看修订结果
-
-## 构建与检查
-
-### 前端构建
-
-```powershell
-cd frontend
-pnpm run build
-```
-
-### 后端语法编译
-
-```powershell
-cd backend
-..\.venv\Scripts\python.exe -m compileall app
-```
-
-## 产物说明
-
-每个任务都会在项目根目录的 `work_dir/<task_id>/` 下生成运行产物，通常包括：
-
-- `res.md`：论文 Markdown
-- `res.docx`：导出的 Word 文档
-- `res.json`：任务结果摘要
-- `notebook.ipynb`：代码执行记录
-- `*_structured_results.json`：结构化中间结果
-- 图表、CSV、JSON 等分析文件
-
-## 使用范围
-
-MCMer 用于数学建模学习、科研参考与教学演示。生成的论文、图表、代码和数值结果需要人工核验，不应直接用于竞赛、课程作业、学术论文或成果申报等正式提交。
-
-请遵守相应机构对原创性、AI 使用和署名的要求，勿将输出用于有偿代做、内容倒卖或虚假申报。
-
-## 许可证
-
-本项目使用 GPL-3.0-only，完整文本见 [LICENSE](LICENSE)。
+MCMer 采用 GPL-3.0-only 许可证。[许可证全文](LICENSE)

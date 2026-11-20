@@ -1,0 +1,271 @@
+{
+  "case_id": "ortools_simple_mip",
+  "date": "2026-11-20",
+  "source_url": "https://github.com/google/or-tools/blob/stable/ortools/linear_solver/samples/simple_mip_program.py",
+  "case_sha256": "b89517719a36c20e0c237fc844dce5ecaa92643bc794ecc14e88966286bb42c8",
+  "task_sha256": "25c0c88c8a62a759ca829fb8109f6e0b473d4850181a155aad38d837449cef0e",
+  "git_head": "bf5eb6c15aadc5fb8c795340bbff959f5eb5b606",
+  "code_sha256": "4646255a094735e67ee4a9b6d86b9099e741b58983ef669ea898905c021dcd8e",
+  "math_runtime": {
+    "node": "v24.11.1",
+    "package_lock_sha256": "5b73197b1f26fddd488940be80925a0d93c234786953bbd9d1a5a98d47dd2e30",
+    "installed_code_sha256": "69811787ddd63f41bf4ace0433a003480031441ef5734f4b82d83d4e41e7d996"
+  },
+  "model": "deepseek/deepseek-flash",
+  "budget": {
+    "model": "deepseek-flash",
+    "endpoint": "https://api.deepseek.com",
+    "max_calls": 12,
+    "max_total_tokens": 250000,
+    "max_total_run_seconds": 720,
+    "max_runs": 1
+  },
+  "outcome": "completed",
+  "publication_status": "verified",
+  "diagnostic_audit_status": "PASS",
+  "verification_status": "verified",
+  "verification_layers": {
+    "execution": "passed",
+    "evidence": "passed",
+    "source_coverage": "passed",
+    "mathematical_review": "passed",
+    "numerical_validation": "passed"
+  },
+  "review_status": "approved",
+  "model_review_api_calls": 1,
+  "executed_solver_operators": [
+    "optimization.milp"
+  ],
+  "calls_total": 9,
+  "total_tokens": 81320,
+  "unknown_usage_calls": 0,
+  "charged_tokens": 81320,
+  "seconds": 87.875,
+  "integrity_checks": {
+    "persistent_config_unchanged": true,
+    "code_unchanged": true,
+    "task_unchanged": true,
+    "credential_scan_passed": true
+  },
+  "authorization_checks": {
+    "within_authorized_limits": true,
+    "model_endpoint_and_usage_match_records": true,
+    "frozen_original_matches": true,
+    "authorized_revision_matches": true
+  },
+  "independently_accepted": true,
+  "calls": [
+    {
+      "number": 1,
+      "agent": "GuidanceDecomposerStructure",
+      "status": "returned",
+      "finish_reason": "stop",
+      "seconds": 5.422,
+      "prompt_tokens": 1901,
+      "completion_tokens": 901,
+      "total_tokens": 2802,
+      "request_sha256": "9b46869f9239602cce1646d0f773049920f2e1e2629a50002598f655f949b73c",
+      "response_sha256": "09bf74c7ccf791de4e8a52a91dba4dc8484cd4721176c79db99db7f83cde140b"
+    },
+    {
+      "number": 2,
+      "agent": "GuidanceDecomposerFacts",
+      "status": "returned",
+      "finish_reason": "stop",
+      "seconds": 18.875,
+      "prompt_tokens": 2048,
+      "completion_tokens": 4059,
+      "total_tokens": 6107,
+      "request_sha256": "ee1b351b2d9833f2173d45728546a8d857f68619c265361ffa8d1b1308dd6e65",
+      "response_sha256": "df4bdddb54af242aee92ec919cdb465ce520343ac6a09d211a853c11ac502a2d"
+    },
+    {
+      "number": 3,
+      "agent": "GuidanceSourceInterpreter",
+      "status": "returned",
+      "finish_reason": "stop",
+      "seconds": 10.516,
+      "prompt_tokens": 1776,
+      "completion_tokens": 1667,
+      "total_tokens": 3443,
+      "request_sha256": "7af4081025675b96696b466785a31c773ed634e333e96df37f82d72ddec8219e",
+      "response_sha256": "1a82d2376a222ec0460b65fe4571918f3b2bbca951182038d7f817068e26e9d4"
+    },
+    {
+      "number": 4,
+      "agent": "GuidanceSourceAdjudicator",
+      "status": "returned",
+      "finish_reason": "stop",
+      "seconds": 2.609,
+      "prompt_tokens": 1576,
+      "completion_tokens": 449,
+      "total_tokens": 2025,
+      "request_sha256": "797295f664bb73f17fc347c4403a557989896f159383bbdd620691fe99371423",
+      "response_sha256": "3ebb8d61a6abdd0ef5ea3467cb4b266aa936990d8d71ad8abeb09619210cee6e"
+    },
+    {
+      "number": 5,
+      "agent": "GuidanceModeler",
+      "status": "returned",
+      "finish_reason": "tool_calls",
+      "seconds": 2.094,
+      "prompt_tokens": 5902,
+      "completion_tokens": 323,
+      "total_tokens": 6225,
+      "request_sha256": "948133fabd4d65306932c6c8f254f427dfda433b5d3d8049f4ea337741b6528b",
+      "response_sha256": "691ee822fb8eb33fc702a0622ab11fa665706bb6091a99bb9ebc919d18fe34f7"
+    },
+    {
+      "number": 6,
+      "agent": "GuidanceModeler",
+      "status": "returned",
+      "finish_reason": "tool_calls",
+      "seconds": 17.516,
+      "prompt_tokens": 11698,
+      "completion_tokens": 3560,
+      "total_tokens": 15258,
+      "request_sha256": "046d60f86bb699d1078845eec6e966ecd26ddfc1626606d0df38f12d074a8b7e",
+      "response_sha256": "5677b3535fe71588d9c73a530e49748dbb57b2f1caf0f6a14e52ad050ad383e0"
+    },
+    {
+      "number": 7,
+      "agent": "GuidanceModeler",
+      "status": "returned",
+      "finish_reason": "tool_calls",
+      "seconds": 3.843,
+      "prompt_tokens": 15895,
+      "completion_tokens": 592,
+      "total_tokens": 16487,
+      "request_sha256": "cd885e8ce9dc27d88f1a765ee8f28d6d33c7d24ae0acabe3975e0cf13cfb966e",
+      "response_sha256": "427033e4779d2d67d88f36d0ac3ae3eac6550aa204267a9aeedd4ac556585c0e"
+    },
+    {
+      "number": 8,
+      "agent": "GuidanceModeler",
+      "status": "returned",
+      "finish_reason": "tool_calls",
+      "seconds": 0.594,
+      "prompt_tokens": 16522,
+      "completion_tokens": 25,
+      "total_tokens": 16547,
+      "request_sha256": "20bd5318446ee7600621d366095eb001133e542631653b11920c63a690cad270",
+      "response_sha256": "00dedcbf5600df71639c55b7290e06879f3a6b862cf0094ba3a87cd762042b2b"
+    },
+    {
+      "number": 9,
+      "agent": "GuidanceModelReviewer_problem1",
+      "status": "returned",
+      "finish_reason": "stop",
+      "seconds": 20.25,
+      "prompt_tokens": 8026,
+      "completion_tokens": 4400,
+      "total_tokens": 12426,
+      "request_sha256": "21aeaa0bc1125905d861c07cd07a8ecb1e911bbbcd690733b3cffb449f388ee8",
+      "response_sha256": "2360a5d2c5ae8952d399539d82e55ca57866eded1ce2e4e0f90b6db429a49143"
+    }
+  ],
+  "math_workspace": {
+    "engine": "deepseek-harness",
+    "agent": "GuidanceModeler",
+    "status": "submitted",
+    "provider_attempts": 4,
+    "diagnostic_sha256": "9fc1227269da44426e5a1017ddccd3761ab9298c3fe199eaf23e8c2a3b9b4e69",
+    "actions": [
+      {
+        "name": "inspect_model",
+        "ok": true
+      },
+      {
+        "name": "inspect_model",
+        "ok": true
+      },
+      {
+        "name": "inspect_model",
+        "ok": true
+      },
+      {
+        "name": "inspect_model",
+        "ok": true
+      },
+      {
+        "name": "inspect_model",
+        "ok": true
+      },
+      {
+        "name": "edit_model",
+        "ok": true
+      },
+      {
+        "name": "edit_model",
+        "ok": true
+      },
+      {
+        "name": "submit_model",
+        "ok": true
+      }
+    ]
+  },
+  "independent_solver_check": {
+    "decisions": {
+      "x": 3.0,
+      "y": 2.0
+    },
+    "objective": 23.0,
+    "enumeration": {
+      "feasible_point_count": 12,
+      "optimum": 23,
+      "optimal_points": [
+        [
+          3,
+          2
+        ]
+      ],
+      "constraint_slacks": [
+        0.5,
+        0.5
+      ]
+    }
+  },
+  "independent_publication_check": {
+    "passed": true,
+    "terminal_status": "completed",
+    "mapping": {
+      "x": "x",
+      "y": "y"
+    },
+    "verified_result_ids": [
+      "answer_x",
+      "answer_y",
+      "answer_objective",
+      "answer_feasibility",
+      "answer_optimality"
+    ],
+    "published_verified_results": 5,
+    "matching_answer_table_rows": 15,
+    "guidance_sha256": "88629edf5641a297127625f004b33900810fba2df9151ee38cb61c21dc5004b6"
+  },
+  "offline_response_replay": {
+    "passed": true,
+    "external_model_calls": 0,
+    "matched_requests": 9,
+    "status": "completed",
+    "publication_status": "verified",
+    "report_sha256": "88629edf5641a297127625f004b33900810fba2df9151ee38cb61c21dc5004b6"
+  },
+  "sha256": {
+    "run_metadata.json": "da5c79985398eaa0bbe20095dca12b0d1f130d945d8e65faa41e27ff8b98bf1a",
+    "run_summary.json": "297eaee1dde96a4bc063a7ca7a816da31f84ae965ae9ac73065853cbf845329a",
+    "pipeline_events.json": "88732947b470f0c14690e70d1a90f13b663572c44720e73a81e445d65df7cb47",
+    "problem_spec.json": "ceae13ac1974142443d90d14c1c1902628badde1cb102217aa05ae15b42951d9",
+    "model_ir.json": "0f6bd74768e4041ec5c27ea4de7f1e557da4199d54347ab166ab7ad9129842a7",
+    "approved_model_ir.json": "f6abd72cf337fd10f46d53a2321d5c4c507e3b79c8a492d09671ec14ef1edc24",
+    "model_review.json": "9d0b690c82299e93f68165d8ba2d7bb7a0b76dfe44054ceee90bd897aad82e5c",
+    "execution_plan.json": "3bc1ceb29e5a63cbafb828975b0541f99d0aa5c8aa7a7b6abe5945138bd4c60d",
+    "execution_manifest.json": "dca0da36f235066bbf4edac7571baa7c0859176d3ba970440976de54171ff5ac",
+    "verification_report.json": "920c7085c643bf925d0f7dda4c989ea4ec55b3c334259d37614b9f2d6149f2c3",
+    "result_registry.json": "34e412f43f88035661d377dd616fe91449854cc9b0d7a554a5f12830e615abff",
+    "guidance.md": "88629edf5641a297127625f004b33900810fba2df9151ee38cb61c21dc5004b6",
+    "guidance_audit_report.json": "d45adfdcd20f7d8f3813553d85774ec3d21fceb9d39c58abcd0d2899f67a6a34"
+  },
+  "ledger_sha256": "357e054350db96ee64df58e24c0682306bebf42332d3f3e9f570ddc4f0ceab66"
+}
