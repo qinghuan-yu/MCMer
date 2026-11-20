@@ -6,8 +6,6 @@ import asyncio
 import json
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
@@ -43,13 +41,6 @@ class ContractTruncationError(ContractGenerationError):
     """输出预算耗尽；即使正文可解析，也不能作为完整合同。"""
 
 
-@dataclass
-class ContractRetryBudget:
-    """同一子题的建模动作共享一次重试，包括超时和截断。"""
-
-    used: bool = False
-
-
 class StructuredContractRequester(Generic[ModelT]):
     def __init__(
         self,
@@ -81,10 +72,8 @@ class StructuredContractRequester(Generic[ModelT]):
             else getattr(llm, "request_timeout", None)
         )
 
-    async def request(self, payload: Any, *, retry_budget: ContractRetryBudget | None = None) -> ModelT:
+    async def request(self, payload: Any) -> ModelT:
         attempts: list[dict[str, Any]] = []
-        max_calls = 1 if retry_budget and retry_budget.used else 2
-        diagnostic = partial(self._write_diagnostic, attempts, max_calls=max_calls)
         history = self._initial_history(payload)
         checkpoint = RecoveryCheckpoint(self.artifact_dir, "contracts", self.agent_name)
         context = {
@@ -108,10 +97,7 @@ class StructuredContractRequester(Generic[ModelT]):
 
         attempt_number, transport_attempt = 1, 1
         request_tokens = self.initial_tokens
-        for call_number in range(1, max_calls + 1):
-            if call_number == 2 and retry_budget is not None:
-                retry_budget.used = True
-            may_retry = call_number < max_calls
+        for call_number in (1, 2):
             record = {
                 "attempt": attempt_number, "transport_attempt": transport_attempt,
                 "request_timeout_seconds": self.request_timeout,
@@ -128,14 +114,14 @@ class StructuredContractRequester(Generic[ModelT]):
                 )
             except ContractRequestTimeout as exc:
                 record.update(_failure_record("", exc, "timeout"))
-                diagnostic(status="retrying" if may_retry else "failed")
-                if not may_retry:
+                self._write_diagnostic(attempts, status="retrying" if call_number == 1 else "failed")
+                if call_number == 2:
                     raise
                 transport_attempt += 1
                 continue
             except Exception as exc:
                 record.update(_failure_record("", exc, "transport"))
-                diagnostic(status="failed")
+                self._write_diagnostic(attempts, status="failed")
                 raise
             raw_response = str(response.choices[0].message.content or "")
             record.update(finish_reason=getattr(response.choices[0], "finish_reason", None),
@@ -148,8 +134,8 @@ class StructuredContractRequester(Generic[ModelT]):
                     "reasoning_exhausted" if not raw_response.strip() and usage.get("completion_tokens")
                     and usage.get("reasoning_tokens") == usage["completion_tokens"] else "output_truncated"
                 )
-                can_recover = may_retry and request_tokens is not None and request_tokens < self.token_ceiling
-                diagnostic(status="retrying" if can_recover else "failed")
+                can_recover = call_number == 1 and request_tokens is not None and request_tokens < self.token_ceiling
+                self._write_diagnostic(attempts, status="retrying" if can_recover else "failed")
                 if can_recover:
                     # 截断没有有效语义反馈；用原始完整请求和预设额度重生成一次。
                     request_tokens = self.token_ceiling
@@ -170,15 +156,14 @@ class StructuredContractRequester(Generic[ModelT]):
                 if isinstance(exc, json.JSONDecodeError):
                     failure_kind = "syntax"
                 record.update(_failure_record(raw_response, exc, failure_kind))
-                diagnostic(status="retrying" if may_retry else "failed")
-                if not may_retry:
+                self._write_diagnostic(attempts, status="retrying" if call_number == 1 else "failed")
+                if call_number == 2:
                     raise ContractGenerationError(
                         f"{self.agent_name} failed to generate valid {self.model_type.__name__} "
                         f"after {attempt_number} complete attempts / {call_number} provider calls: {type(exc).__name__}: {exc}"
                     ) from exc
                 history = self._regeneration_history(
-                    original_payload=({**payload, "rejected_candidate": parsed}
-                                      if retry_budget is not None and failure_kind == "semantic" else payload),
+                    original_payload=payload,
                     raw_response=raw_response,
                     error=exc,
                     failure_kind=failure_kind,
@@ -188,7 +173,10 @@ class StructuredContractRequester(Generic[ModelT]):
                 continue
 
             record["status"] = "valid"
-            diagnostic(status="valid" if len(attempts) == 1 else "recovered")
+            self._write_diagnostic(
+                attempts,
+                status="valid" if len(attempts) == 1 else "recovered",
+            )
             checkpoint.save(context, contract.model_dump(mode="json", exclude_computed_fields=True))
             return contract
 
@@ -244,7 +232,7 @@ class StructuredContractRequester(Generic[ModelT]):
             {"role": "user", "content": json.dumps(correction, ensure_ascii=False)},
         ]
 
-    def _write_diagnostic(self, attempts: list[dict[str, Any]], *, status: str, max_calls: int) -> None:
+    def _write_diagnostic(self, attempts: list[dict[str, Any]], *, status: str) -> None:
         if self.artifact_dir is None:
             return
         directory = self.artifact_dir / "contract_diagnostics"
@@ -257,15 +245,14 @@ class StructuredContractRequester(Generic[ModelT]):
                     "contract": self.model_type.__name__,
                     "status": status,
                     "request_timeout_seconds": self.request_timeout,
-                    "max_provider_calls": max_calls,
+                    "max_provider_calls": 2,
                     "provider_calls": len(attempts),
                     "reserved_completion_tokens": (
                         sum(item["request_max_tokens"] for item in attempts)
                         if all(item["request_max_tokens"] is not None for item in attempts) else None
                     ),
                     "max_reserved_completion_tokens": (
-                        self.initial_tokens + (max_calls - 1) * self.token_ceiling
-                        if self.initial_tokens is not None else None
+                        self.initial_tokens + self.token_ceiling if self.initial_tokens is not None else None
                     ),
                     "usage_complete": all(
                         (item["usage"] or {}).get(key) is not None
@@ -279,6 +266,33 @@ class StructuredContractRequester(Generic[ModelT]):
             ),
             encoding="utf-8",
         )
+
+
+async def _request_model(
+    *,
+    llm,
+    model_type,
+    system_prompt: str,
+    payload,
+    agent_name: str,
+    artifact_dir: Path,
+    semantic_validator=None,
+    request_timeout: int | float | None = None,
+    checkpoint_context: Any = None,
+    token_budget: ContractTokenBudget | None = None,
+):
+    requester = StructuredContractRequester(
+        llm=llm,
+        model_type=model_type,
+        system_prompt=system_prompt,
+        agent_name=agent_name,
+        artifact_dir=artifact_dir,
+        semantic_validator=semantic_validator,
+        request_timeout=request_timeout,
+        checkpoint_context=checkpoint_context,
+        token_budget=token_budget,
+    )
+    return await requester.request(payload)
 
 
 def _failure_record(raw_response: str, error: Exception, failure_kind: str) -> dict[str, Any]:

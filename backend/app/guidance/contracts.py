@@ -304,6 +304,7 @@ class SubproblemStructureGenerationDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     id: str = Field(min_length=1, max_length=120)
+    request_quote: str = Field(default="", max_length=2000, description="要求独立交付该数学答案的题面原文；拆分多个子问题时必填。")
     title: str = Field(default="", max_length=500)
     objective: str = Field(default="", max_length=1000)
     description: str = Field(default="", max_length=1000)
@@ -438,7 +439,7 @@ def _promote_subproblems(
     for subproblem in subproblems:
         source = unicodedata.normalize("NFKC", subproblem.id).strip()
         promoted.append(SubproblemSpec.model_validate({
-            **subproblem.model_dump(mode="python"),
+            **subproblem.model_dump(mode="python", exclude={"request_quote"}),
             "id": identifiers_by_source[source],
             "required_fact_ids": [],
             "required_uncertainty_ids": [],

@@ -2,3 +2,5 @@
 backend/closeout/validation/*.xml -text
 backend/tests/fixtures/scipy_milp/question.txt text eol=lf
 backend/tests/fixtures/scipy_milp/case.json text eol=lf
+backend/tests/fixtures/ortools_simple_mip/question.txt text eol=lf
+backend/tests/fixtures/ortools_simple_mip/case.json text eol=lf

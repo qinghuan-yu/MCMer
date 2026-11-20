@@ -11,7 +11,7 @@ from app.core.workflow_budget import ContractTokenBudget
 from app.guidance.contracts import ProblemSpec
 from app.guidance.failure_contracts import bounded_failure_summary, safe_artifact_component
 from app.guidance.generation_validation import _validate_model_ir_semantics
-from app.guidance.model_generation import _request_model
+from app.guidance.contract_request import _request_model
 from app.guidance.model_ir import BlockedModelIR, ModelIR
 from app.guidance.model_review_contracts import ModelIRReview, SubproblemReviewSpec
 from app.guidance.model_review_validation import (

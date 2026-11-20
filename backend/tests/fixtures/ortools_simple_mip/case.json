@@ -1,0 +1,19 @@
+{
+  "case_id": "ortools_simple_mip",
+  "task_file": "question.txt",
+  "task_sha256": "25c0c88c8a62a759ca829fb8109f6e0b473d4850181a155aad38d837449cef0e",
+  "source_url": "https://github.com/google/or-tools/blob/stable/ortools/linear_solver/samples/simple_mip_program.py",
+  "budget": {
+    "model": "deepseek-flash",
+    "endpoint": "https://api.deepseek.com",
+    "max_calls": 12,
+    "max_total_tokens": 250000,
+    "max_total_run_seconds": 720,
+    "max_runs": 1
+  },
+  "acceptance": [
+    "The fresh default workflow uses the official tool loop with real model replies, passes review and numerical verification, and returns completed.",
+    "Both published decision values are nonnegative integers satisfying both original inequalities, and their objective matches independent enumeration.",
+    "The final report contains the solution and objective, passes its publication audit and matches the recorded digest. The reference solution stays outside all requests."
+  ]
+}

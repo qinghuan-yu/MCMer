@@ -3,7 +3,6 @@ import asyncio
 from copy import deepcopy
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import pytest
 
 from app.guidance.contracts import ProblemSpec
@@ -12,6 +11,7 @@ from app.guidance.model_ir_compiler import ModelIRCompiler
 from app.guidance.operator_catalog import build_default_operator_registry
 from app.guidance.operator_runtimes.milp import solve_milp
 from source_preflight_fixtures import write_source_preflight
+from math_tool_fixtures import scripted_model_reply
 
 
 def _term(variable, coefficient):
@@ -76,15 +76,14 @@ def test_joint_formulation_charges_each_defined_training_participant(tmp_path, o
         attempts = 0
 
         async def chat(self, **kwargs):
-            stage = kwargs["agent_name"]
-            response = formulation if stage.endswith("indexed_constraints") else {**architecture, "indexed_data": core}
-            if response is formulation:
-                self.attempts += 1
-                if omit_on_first_attempt and self.attempts == 1:
-                    response = deepcopy(formulation)
-                    response["objective"]["terms"].pop()
-                    response["constraints"].pop()
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(response)))])
+            if not any(msg["role"] == "tool" for msg in kwargs["history"]):
+                return scripted_model_reply({**architecture, "indexed_data": core}, kwargs)
+            self.attempts += 1
+            response = deepcopy(formulation)
+            if omit_on_first_attempt and self.attempts == 1:
+                response["objective"]["terms"].pop()
+                response["constraints"].pop()
+            return scripted_model_reply(response, kwargs)
 
     spec = ProblemSpec(task_summary="Train exactly 20 learners; charge 10 per learner and trainer, 5 per idle staff; 20 existing staff; capacity 10 learners per trainer.", subproblems=[{
         "id": "training", "required_fact_ids": [], "required_uncertainty_ids": [], "depends_on_subproblem_ids": [],

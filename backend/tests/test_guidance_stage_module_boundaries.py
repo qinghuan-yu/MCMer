@@ -63,49 +63,17 @@ def test_indexed_core_validator_keeps_resolvable_type_annotations() -> None:
     assert "evidence_profile" in get_type_hints(_validate_indexed_core_stage)
 
 
-def test_indexed_core_request_requires_exact_static_parameter_source(monkeypatch) -> None:
-    from app.guidance import model_generation
+def test_workbench_exposes_exact_static_parameter_source_schema():
     from app.guidance.contracts import ProblemSpec
+    from app.guidance.math_workspace import MathWorkspace
 
-    captured = {}
-    async def capture_request(**kwargs):
-        captured["prompt"] = kwargs["system_prompt"]
-        raise RuntimeError("captured proposal")
-
-    monkeypatch.setattr(model_generation, "_request_model", capture_request)
-    with pytest.raises(RuntimeError, match="captured proposal"):
-        asyncio.run(model_generation._request_single_subproblem_model(
-            llm=None,
-            system_prompt="Build the requested model.",
-            problem_spec=ProblemSpec(
-                task_summary="A finite indexed optimization.",
-                subproblems=[{
-                    "id": "problem1", "required_fact_ids": [],
-                    "required_uncertainty_ids": [], "depends_on_subproblem_ids": [],
-                }],
-            ),
-            compact_spec={"task_summary": "A finite indexed optimization."},
-            subproblem={"id": "problem1"},
-            slice_spec={"locked_facts": [], "uncertainties": []},
-            evidence_profile={"evidence": []},
-            registry=build_default_operator_registry(),
-            request_name="test_source_contract",
-            artifact_dir=Path("."),
-            previous_model=None,
-            review=None,
-            architecture_timeout=None,
-            indexed_core_timeout=None,
-            indexed_constraints_timeout=None,
-        ))
-
-    for rule in (
-        "binding",
-        "fact",
-        "table_column",
-        "table_range",
-        "零基",
-        "右开",
-        "程序读取",
-        "dense_values",
-    ):
-        assert rule in captured["prompt"]
+    spec = ProblemSpec(task_summary="A finite indexed optimization.", subproblems=[{
+        "id": "problem1", "required_fact_ids": [], "required_uncertainty_ids": [], "depends_on_subproblem_ids": [],
+    }])
+    ws = MathWorkspace(problem_spec=spec, subproblem_id="problem1", evidence_profile={"evidence": []},
+                       registry=build_default_operator_registry())
+    schema = ws.execute("inspect_model", {"schema": "parameters"})["schema"]
+    fields = schema["$defs"]["StaticIndexedParameterDraft"]["properties"]
+    assert "binding" in fields and "dense_values" not in fields
+    binding = fields["binding"]["discriminator"]["mapping"]
+    assert set(binding) == {"fact", "table_column", "table_range"}

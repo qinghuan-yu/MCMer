@@ -69,6 +69,9 @@ def _split_decomposition_payload(payload: dict) -> list[dict]:
         }
         for subproblem in payload.get("subproblems", [])
     ]
+    if len(structure["subproblems"]) > 1:
+        for item in structure["subproblems"]:
+            item["request_quote"] = item["objective"]
     facts = {
         "locked_facts": payload.get("locked_facts", []),
         "uncertainties": payload.get("uncertainties", []),
@@ -87,7 +90,7 @@ def _input_catalog() -> dict:
                 "block_id": "paragraph-2",
                 "source_ref": "inputs/problem.docx#paragraph-2",
                 "sha256": "b" * 64,
-                "text": "Each assembled unit requires four manipulators.",
+                "text": "Each assembled unit requires four manipulators. Minimize cost.",
                 "rows": [],
             },
             {
@@ -95,7 +98,7 @@ def _input_catalog() -> dict:
                 "block_id": "paragraph-5",
                 "source_ref": "inputs/problem.docx#paragraph-5",
                 "sha256": "c" * 64,
-                "text": "Future demand must be forecast.",
+                "text": "Future demand must be forecast. Minimize cost with losses.",
                 "rows": [],
             },
         ],
@@ -108,11 +111,11 @@ class _StubLLM:
         self.calls: list[dict] = []
 
     async def chat(self, **kwargs):
+        from math_tool_fixtures import scripted_model_reply
+
         self.calls.append(kwargs)
         payload = self.responses[len(self.calls) - 1]
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
-            content=json.dumps(payload, ensure_ascii=False)
-        ))])
+        return scripted_model_reply(payload, kwargs)
 
 
 def test_problem_spec_accepts_structured_evidence_bound_facts() -> None:
@@ -296,6 +299,55 @@ def test_decomposer_splits_structure_and_facts_then_projects_references() -> Non
     assert result.subproblems[1].required_uncertainty_ids == [
         "uncertainty.future_demand"
     ]
+
+
+def test_decomposer_repairs_workflow_phases_before_extracting_facts() -> None:
+    from app.guidance.decomposer import LLMProblemDecomposer
+
+    question = (Path(__file__).parent / "fixtures/scipy_milp/question.txt").read_text(encoding="utf-8")
+    # 三个标识符和目标取自真实失败运行的第一条模型响应。
+    phases = [
+        ("sp1_model_formulation", "把题目中的决策变量、目标与三条约束整理为标准整数规划模型。", []),
+        ("sp2_solve_optimal", "确定一个使 y 最大的可行整数解及对应的最大目标值。", ["sp1_model_formulation"]),
+        ("sp3_verify_report", "检查所得最优整数解是否满足全部约束，并格式化报告。", ["sp1_model_formulation", "sp2_solve_optimal"]),
+    ]
+    split = {"subproblems": [{"id": key, "objective": objective, "depends_on_subproblem_ids": deps}
+                             for key, objective, deps in phases]}
+    corrected = {"subproblems": [{"id": "optimum", "objective": "使 y 尽可能大",
+                                  "outputs": ["最优解", "目标值", "约束满足情况"], "depends_on_subproblem_ids": []}]}
+    llm = _StubLLM([split, corrected, {"locked_facts": [], "uncertainties": []}])
+    result = __import__("asyncio").run(LLMProblemDecomposer(llm).decompose(
+        question=question, input_catalog=_input_catalog(), evidence_profile={"evidence": []}, task={},
+    ))
+    assert [item.id for item in result.subproblems] == ["optimum"]
+    assert [call["agent_name"] for call in llm.calls] == [
+        "GuidanceDecomposerStructure", "GuidanceDecomposerStructure", "GuidanceDecomposerFacts"]
+    error = json.loads(llm.calls[1]["history"][1]["content"])["validation_error"]
+    assert "request_quote" in error and "sp1_model_formulation" in error
+
+
+@pytest.mark.parametrize("bad_quote", ["an invented requirement", "Estimate quarterly demand.", "quarterly demand"])
+def test_decomposer_requires_distinct_grounded_requests_and_keeps_dependencies(bad_quote) -> None:
+    from app.guidance.decomposer import LLMProblemDecomposer
+
+    first = "Estimate quarterly demand."
+    second = "Use the forecast to choose a replenishment plan."
+    catalog = _input_catalog()
+    catalog["blocks"][0]["text"] = first + " " + second
+    def deliverables(quote):
+        return {"subproblems": [
+            {"id": "forecast", "request_quote": first, "depends_on_subproblem_ids": []},
+            {"id": "plan", "request_quote": quote, "depends_on_subproblem_ids": ["forecast"]},
+        ]}
+    llm = _StubLLM([deliverables(bad_quote), deliverables(second), {"locked_facts": [], "uncertainties": []}])
+    result = __import__("asyncio").run(LLMProblemDecomposer(llm).decompose(
+        question="Complete the attached problem.", input_catalog=catalog, evidence_profile={"evidence": []}, task={},
+    ))
+    assert [(item.id, item.depends_on_subproblem_ids) for item in result.subproblems] == [
+        ("forecast", []), ("plan", ["forecast"])]
+    feedback = json.loads(llm.calls[1]["history"][1]["content"])
+    assert feedback["failure_kind"] == "semantic"
+    assert "request_quote" in feedback["validation_error"] and "plan" in feedback["validation_error"]
 
 
 def test_decomposer_fact_request_compacts_large_registered_tables() -> None:
@@ -623,7 +675,7 @@ def test_decomposer_rejects_subproblem_identifier_collisions() -> None:
         match="subproblem_id normalization collision",
     ):
         __import__("asyncio").run(LLMProblemDecomposer(llm).decompose(
-            question="Build an evidence-bound model.",
+            question="First formulation. Second formulation.",
             evidence_profile={"evidence": []},
             input_catalog=_input_catalog(),
             task={},

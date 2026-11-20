@@ -71,13 +71,14 @@ class BudgetLedger:
         return sum(c["usage"]["total_tokens"] if c.get("usage") else c["reserved_tokens"]
                    for c in self.state["calls"])
 
-    def reserve(self, *, history, max_tokens, agent):
+    def reserve(self, *, history, max_tokens, agent, tools=None):
         if len(self.state["calls"]) >= self.limits["max_calls"]:
             raise RuntimeError("total API call budget exhausted")
         if type(max_tokens) is not int or not 0 < max_tokens <= 32768:
             raise ValueError("invalid output token limit")
         # UTF-8 字节数作为文本 token 的保守预留，并包含消息封装余量；不调用网络计数器。
-        reserved = len(json.dumps(history, ensure_ascii=False).encode("utf-8")) + max_tokens + 1024
+        model_input = {"messages": history, "tools": tools} if tools else history
+        reserved = len(json.dumps(model_input, ensure_ascii=False).encode("utf-8")) + max_tokens + 1024
         if self.charged_tokens() + reserved > self.limits["max_total_tokens"]:
             raise RuntimeError("total token budget cannot reserve this request")
         record = {"number": len(self.state["calls"]) + 1, "agent": agent, "status": "started",
@@ -129,6 +130,21 @@ def prepare_run(case_path, root):
     return task
 
 
+def validate_request(request):
+    if request.get("max_attempts") != 1:
+        raise ValueError("unrecorded retries are prohibited")
+    supplied = request.get("tools")
+    if not supplied:
+        return
+    from app.guidance.math_workspace import MathWorkspace
+
+    agent = str(request.get("agent_name") or "").split("_", 1)[0]
+    allowed = MathWorkspace.tools()
+    if (agent not in {"GuidanceModeler", "GuidanceModelReviser"} or not isinstance(supplied, list)
+            or len(supplied) != len(allowed) or any(tool not in supplied for tool in allowed)):
+        raise ValueError("only the registered mathematical workspace tools may be sent during modeling")
+
+
 def build_pipeline(*, ledger=None, root=None, secret="", live=False):
     from app.guidance import workflow
     from app.core.llm.llm import LLM
@@ -141,13 +157,13 @@ def build_pipeline(*, ledger=None, root=None, secret="", live=False):
                 raise ValueError("provider or credential binding changed")
 
         async def chat(self, **kwargs):
-            if kwargs.get("max_attempts") != 1 or kwargs.get("tools"):
-                raise ValueError("unrecorded retries or generated-code tools are prohibited")
+            validate_request(kwargs)
             outgoing = {"model": self.model, "endpoint": self.base_url,
                         "temperature": self.temperature, **kwargs}
             if secret in json.dumps(outgoing, ensure_ascii=False):
                 raise ValueError("credential appeared in request content")
-            number = ledger.reserve(history=kwargs["history"], max_tokens=kwargs["max_tokens"], agent=kwargs.get("agent_name"))
+            number = ledger.reserve(history=kwargs["history"], max_tokens=kwargs["max_tokens"],
+                                    agent=kwargs.get("agent_name"), tools=kwargs.get("tools"))
             save(root / "api" / f"{number:03d}_request.json", outgoing, secret)
             print(json.dumps({"event": "api_started", "number": number, "agent": kwargs.get("agent_name")}), flush=True)
             started = time.monotonic()
@@ -189,9 +205,27 @@ def build_pipeline(*, ledger=None, root=None, secret="", live=False):
         workflow.LLM = original
 
 
-def code_sha():
-    files = [*sorted((BACKEND / "app").rglob("*.py")), Path(__file__).resolve()]
-    payload = [(str(p.relative_to(BACKEND)), sha(p)) for p in files]
+def math_runtime_snapshot(runtime_dir):
+    """实际执行的 Node 版本、锁定版本与本机模块字节共同进入运行回执。"""
+    lock = json.loads((runtime_dir / "package-lock.json").read_bytes())
+    for relative, metadata in lock["packages"].items():
+        if relative:
+            installed = json.loads((runtime_dir / relative / "package.json").read_bytes())
+            if installed["version"] != metadata["version"]:
+                raise ValueError(f"installed DeepSeek Harness dependency version mismatch: {relative}")
+    modules = runtime_dir / "node_modules"
+    files = sorted(p for p in modules.rglob("*") if p.suffix in {".js", ".cjs", ".mjs", ".json", ".node", ".wasm"})
+    content = [(p.relative_to(modules).as_posix(), sha(p)) for p in files]
+    return {"node": subprocess.check_output(["node", "--version"], text=True).strip(),
+            "package_lock_sha256": sha(runtime_dir / "package-lock.json"),
+            "installed_code_sha256": hashlib.sha256(json.dumps(content).encode()).hexdigest()}
+
+
+def code_sha(runtime_snapshot):
+    files = [*sorted((BACKEND / "app").rglob("*.py")), Path(__file__).resolve(),
+             *(BACKEND / "dsh" / name for name in ("math-turn.mjs", "package.json", "package-lock.json"))]
+    payload = [(p.relative_to(BACKEND).as_posix(), sha(p)) for p in files]
+    payload.append(("installed_math_runtime", runtime_snapshot))
     return hashlib.sha256(json.dumps(payload).encode()).hexdigest()
 
 
@@ -229,7 +263,8 @@ async def main():
         ledger = BudgetLedger(suite_root / "ledger.json", case["budget"], sha(args.case))
         repair = sha(args.repair_evidence) if args.repair_evidence else None
         config_hash = sha(config_manager.CONFIG_FILE)
-        current_code = code_sha()
+        runtime_snapshot = math_runtime_snapshot(BACKEND / "dsh")
+        current_code = code_sha(runtime_snapshot)
         number = ledger.begin_run(code_sha=current_code, repair_evidence=repair)
         root = suite_root / f"run-{number:02d}"
         started = time.monotonic()
@@ -240,6 +275,7 @@ async def main():
             pipeline = build_pipeline(ledger=ledger, root=root, secret=secret, live=True)
             metadata = {"mode": "live", "model": MODEL, "endpoint": ENDPOINT,
                 "case_sha256": sha(args.case), "code_sha256": current_code, "budget": case["budget"],
+                "math_runtime": runtime_snapshot,
                 "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=BACKEND, text=True).strip(),
                 "stages": {k: type(v).__name__ for k, v in pipeline._stages.items()}}
             save(root / "run_metadata.json", metadata, secret)
@@ -259,10 +295,21 @@ async def main():
             summary.update(error_type=type(error).__name__, error=str(error).replace(secret, "[REDACTED]"))
         finally:
             summary["seconds"] = round(time.monotonic() - started, 3)
-            summary["persistent_config_unchanged"] = config_hash == sha(config_manager.CONFIG_FILE)
-            summary["code_unchanged"] = current_code == code_sha()
-            summary["task_unchanged"] = sha(root / "inputs/question" / case["task_file"]) == case["task_sha256"]
-            summary["credential_scan_passed"] = all(secret.encode() not in p.read_bytes() for p in root.rglob("*") if p.is_file())
+            checks = {
+                "persistent_config_unchanged": lambda: config_hash == sha(config_manager.CONFIG_FILE),
+                "code_unchanged": lambda: current_code == code_sha(math_runtime_snapshot(BACKEND / "dsh")),
+                "task_unchanged": lambda: sha(root / "inputs/question" / case["task_file"]) == case["task_sha256"],
+                "credential_scan_passed": lambda: all(secret.encode() not in p.read_bytes()
+                                                      for p in root.rglob("*") if p.is_file()),
+            }
+            for field, check in checks.items():
+                try:
+                    summary[field] = check()
+                except (OSError, ValueError, LookupError, TypeError, subprocess.SubprocessError) as error:
+                    summary[field] = False
+                    summary.setdefault("verification_errors", {})[field] = type(error).__name__
+                if not summary[field]:
+                    summary["status"] = "failed"
             ledger.end_run(status=summary["status"], seconds=summary["seconds"])
             summary["calls_total"] = len(ledger.state["calls"])
             summary["known_tokens"] = sum(c["usage"]["total_tokens"] for c in ledger.state["calls"] if c.get("usage"))

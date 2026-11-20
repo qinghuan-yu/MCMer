@@ -353,7 +353,7 @@ class IndexedLinearConstraintDraft(IRModel):
 
 
 class IndexedLinearCoreDraft(IRModel):
-    index_sets: list[IndexSetSpec] = Field(min_length=1, max_length=20)
+    index_sets: list[IndexSetSpec] = Field(max_length=20)
     parameters: list[IndexedParameterDraft] = Field(default_factory=list, max_length=100)
 
     def promote_core(self, *, locked_facts=None, evidence_profile=None) -> IndexedLinearDataSpec:
@@ -377,7 +377,7 @@ class ConstraintIndexSetSymbol(IRModel):
 class FormulationContext(IRModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
-    index_sets: tuple[ConstraintIndexSetSymbol, ...] = Field(min_length=1, max_length=20)
+    index_sets: tuple[ConstraintIndexSetSymbol, ...] = Field(max_length=20)
     parameters: tuple[IndexedParameterSpec, ...] = Field(
         default_factory=tuple,
         max_length=100,

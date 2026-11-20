@@ -33,7 +33,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./backend:/app
+      - ./backend/app:/app/app
+      - ./backend/project:/app/project
       - ./work_dir:/app/work_dir
       - ./backend/.local:/app/.local
       - ./backend/logs:/app/logs

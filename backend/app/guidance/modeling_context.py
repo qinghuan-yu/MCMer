@@ -13,7 +13,23 @@ from app.guidance.model_ir import (
 from app.guidance.model_review_contracts import ModelIRReview
 
 
-MODEL_IR_ARCHITECTURE_CONTRACT = """按目标 Schema 查询算子或提交当前子问题的候选。候选中只写架构和所需的索引数据绑定，subproblem_id 使用目标 id。可解子问题必须声明 execution_components、数据引用、显式 assumptions、推荐模型与简单基线、验证计划和证据绑定的最终答案；架构阶段禁止输出 fact_bindings 或预猜任何 canonical JSON 路径。每个实际使用题面事实的算子节点必须在 source_fact_ids 中登记 locked_facts 的 fact_id；没有使用事实的算子登记空数组，纯 operator_graph 必须由这些节点覆盖全部 required_fact_ids；禁止从 description 猜测未登记的事实 ID，也禁止把 data_sources[].id 当作 fact_id。题面锁定事实不是假设，不得复制到 assumptions；没有额外假设时 assumptions 必须为 []。每条 assumption 的 alternative_scenarios 和 sensitivity_checks 必须非空。题意歧义但可用替代情景检验时，不得误报算子不足；应登记 problem_ambiguity 假设，其 source_refs 必须逐项精确使用 problem_spec.json#uncertainties/<uncertainty_id>，禁止使用数组索引或集合级简写；同时列出受影响模型元素、替代情景和敏感性检查，最终结论只能是条件解。有限索引线性/整数优化必须在 execution_components 中包含 indexed_linear_model，候选的 indexed_data 给出数据绑定，系统返回参数快照后再构建数学关系与 optimization.milp，架构阶段禁止自行输出 optimization.milp。不含 operator_graph 时 operators 和 candidate_models.operator_node_ids 必须为空，由系统追加 MILP 节点。若索引模型还依赖预测、估计或数据变换的输出，execution_components 必须同时包含 operator_graph，并用已注册算子显式产出供索引参数绑定的工件；混合执行图中，只使用系统 MILP 的候选保持 operator_node_ids 为空，需要上游工件的候选只引用实际存在的上游节点，系统随后为全部候选追加 MILP 节点。operator_id 必须精确来自 available_operators，目录公开端口，需要 parameters_schema 时先查询详细合同，inputs、outputs 和 parameters 须符合注册定义；默认值由系统物化，未声明参数与未实现能力一律禁止。system_managed 算子仅由对应执行组件构建，不得自行调用。禁止 free-text equations、Python、solve.py、自创算子、题名或题号路由。只建模目标子问题明确要求的范围。evidence_profile 中登记的来源视为实际存在；source_requirements 中 status=missing 的来源才是确定缺失。数据、物理关系或算子不足时输出 blocked，区分 missing_inputs 与缺失算子并给出 recovery_action 和 expected_outputs；禁止用经验常数或正则化伪造可解性。"""
+MODEL_IR_ARCHITECTURE_CONTRACT = """你在数学工作台上构建一个可审核的 ModelIR。每一步可调用数学工具，根据返回的实际观测修正草稿。
+先识别题目要求交付的量、决策变量、单位、定义域、目标、约束和数据来源。只处理 target_subproblem_id。
+edit_model 的集合按 id 更新。先建变量和来源，再写引用它们的目标与约束；可批量提交彼此一致的编辑。
+结构性事实用 variables、objective、constraints 或图节点的 source_fact_ids 登记。例如整数性属于变量 domain，关系符属于约束 relation。
+parameters 只放实际会参与数值计算的数据；标量绑定为 {"id":"参数名","source_kind":"static","binding":{"kind":"fact","fact_id":"事实ID"}}。
+表格按已登记来源读取。工作台返回的数值已做单位换算，百分比不得再次缩放。没有索引的标量问题可省略 index_sets。
+变量示例 {"id":"v","domain":"integer","lower_bound":0,"source_fact_ids":["变量域的事实ID"]}；线性项含 variable 和 coefficient，
+例如 {"variable":{"variable_id":"v"},"coefficient":{"kind":"parameter","parameter_id":"参数名"}}。重复约束可用 for_each；非零 offset 必须绑定到排除越界端点的 auxiliary index set。
+不确定字段先 inspect_model(schema=字段名)，需要已验证输入值时 inspect_model(parameter_id=参数名)。工具错误会给出字段和原因，可逐项修订。
+architecture 包含 model_id 和一个 subproblems 条目。可解条目声明 execution_components、data、assumptions、candidate_models、validation、final_answers。
+有限索引优化使用 indexed_linear_model，系统生成 optimization.milp；operator_graph 才声明 variables 和已注册的 operators。
+架构中的 variables 是图工件；决策变量在 edit_model 的顶层 variables 登记。混合模型可将图输出作为索引参数的 runtime_source。
+为基线和推荐路线注明 selection_metric 与 applicability_boundary。纯索引候选的 operator_node_ids 留空。最终答案引用实际输出和证据节点。
+只使用 available_operators 中的算子，inspect_operators 可查询合同。不要写 free-text equations、Python、solve.py 或预猜 fact_bindings 路径。
+已知事实与额外假设分别记录；假设需要替代情景和敏感性检查。题意歧义引用 problem_spec.json#uncertainties/<uncertainty_id>。
+若确实缺少输入、关系或可执行能力，提交 blocked 架构并登记 blocking_reason、missing_inputs、recovery_action、expected_outputs。
+完成时调用 submit_model。提交只进入独立审核；工具观测和校验记录决定能否继续执行。"""
 
 def _subproblem_review_payload(
     review: ModelIRReview,

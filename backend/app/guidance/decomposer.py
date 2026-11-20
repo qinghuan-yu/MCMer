@@ -14,6 +14,7 @@ from app.guidance.decomposition_context import (
     _compact_fact_evidence_profile,
     _compact_fact_input_catalog,
     _project_registered_data_sources,
+    validate_deliverable_requests,
 )
 from app.guidance.evidence_consistency import validate_problem_evidence_consistency
 from app.guidance.modeling_context import _task_artifact_dir
@@ -44,10 +45,14 @@ class LLMProblemDecomposer:
         structure_requester = StructuredContractRequester(
             llm=self.llm,
             model_type=ProblemStructureGenerationDraft,
-            system_prompt="""你是数学建模拆题专家。只输出题目结构 JSON，不输出 locked_facts、uncertainties、required_fact_ids 或 required_uncertainty_ids。拆出全部子问题、目标、对象、输入、约束、输出要求、问题类型、候选方向、数据来源与来源需求。每个子问题必须显式填写 depends_on_subproblem_ids，只登记题意要求的真实前置关系，不得根据描述猜测事实标识符。data_sources 只登记 evidence_profile.evidence 中的结构化表格或上传文件，其 source_ref 必须精确使用已登记值；普通题面正文不是 data source。evidence_profile 中登记的来源不得写成缺失。不得提出最终参数。""",
+            system_prompt="""你是数学建模拆题专家。只输出题目结构 JSON，不输出 locked_facts、uncertainties、required_fact_ids 或 required_uncertainty_ids。
+按题面要求独立交付的数学答案划分子问题。一个最优方案的变量取值、目标值、约束检验和说明应合在一个子题的 outputs 内。建模、求解、验算和报告是一个答案的工作步骤，放入该子题的 goals。
+若题面明确要求多个独立答案（例如需求预测，以及依据该预测确定的订货量），为每个子题的 request_quote 逐字引用 question 或 input_catalog 中要求该答案的原文。保留题面直接要求的建模或证明交付。没有分别要求独立答案的依据时，保留一个子题。
+登记各子问题的目标、对象、输入、约束、输出要求、问题类型、候选方向、数据来源与来源需求。每个子问题必须显式填写 depends_on_subproblem_ids，只登记题意要求的真实前置关系，不得根据描述猜测事实标识符。data_sources 只登记 evidence_profile.evidence 中的结构化表格或上传文件，其 source_ref 必须精确使用已登记值；普通题面正文不是 data source。evidence_profile 中登记的来源不得写成缺失。不得提出最终参数。""",
             agent_name="GuidanceDecomposerStructure",
             artifact_dir=_task_artifact_dir(task),
             enrich_payload=lambda payload: {**payload, "task_summary": question},
+            semantic_validator=lambda structure: validate_deliverable_requests(structure, input_catalog),
             request_timeout=self.request_timeout,
             token_budget=self.structure_token_budget,
         )

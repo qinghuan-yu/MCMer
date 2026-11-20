@@ -221,7 +221,7 @@ class IndexedLinearConstraint(IRModel):
 
 
 class IndexedLinearDataSpec(IRModel):
-    index_sets: list[IndexSetSpec] = Field(min_length=1, max_length=20)
+    index_sets: list[IndexSetSpec] = Field(max_length=20)
     parameters: list[IndexedParameterSpec] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")

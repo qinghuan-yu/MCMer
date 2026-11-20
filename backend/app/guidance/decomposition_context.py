@@ -7,6 +7,30 @@ from app.guidance.contracts import ProblemStructureGenerationDraft
 
 _FACT_EXTRACTION_TABLE_CELL_LIMIT = 64
 
+
+def validate_deliverable_requests(
+    structure: ProblemStructureGenerationDraft, input_catalog: dict,
+) -> None:
+    if not structure.subproblems:
+        raise ValueError("缺少题目要求的交付目标。请登记一个整体数学问题或多个有题面依据的独立问题。")
+    source_texts = [structure.task_summary]
+    for block in input_catalog.get("blocks", []):
+        source_texts.append(block.get("text", ""))
+        for row in block.get("rows", []):
+            source_texts.extend(cell for cell in row if isinstance(cell, str))
+    quotes = set()
+    for subproblem in structure.subproblems:
+        quote = subproblem.request_quote
+        if not quote and len(structure.subproblems) == 1:
+            continue
+        if (not quote or not any(quote in source for source in source_texts)
+                or any(quote in prior or prior in quote for prior in quotes)):
+            raise ValueError(
+                f"{subproblem.id}.request_quote 必须逐字引用题面中要求独立答案的不同原文。"
+                "若条目都是为同一答案建模、求解或验算，请合并为一个子题，把这些要求放入 goals 和 outputs。"
+            )
+        quotes.add(quote)
+
 def _compact_fact_input_catalog(input_catalog: dict) -> dict:
     return {
         **input_catalog,

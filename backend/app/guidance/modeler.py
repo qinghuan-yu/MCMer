@@ -265,7 +265,6 @@ async def _request_subproblem_models(
                 llm=llm,
                 system_prompt=system_prompt,
                 problem_spec=problem_spec,
-                compact_spec=compact_spec,
                 subproblem=subproblem,
                 slice_spec=slice_spec,
                 evidence_profile=evidence_profile,

@@ -10,6 +10,7 @@ venv
 
 node_modules
 frontend/node_modules
+backend/dsh/node_modules
 frontend/dist
 frontend/.vite
 

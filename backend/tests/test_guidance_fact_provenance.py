@@ -2,7 +2,9 @@ from app.guidance.operator_catalog import build_default_operator_registry
 import asyncio
 from copy import deepcopy
 import json
-from types import SimpleNamespace
+from litellm import ModelResponse
+from math_tool_fixtures import scripted_model_reply
+from test_guidance_contract_agents import _tool_observations
 
 import pytest
 from pydantic import ValidationError
@@ -375,14 +377,17 @@ class _StageLLM:
 
     async def chat(self, **kwargs):
         self.calls.append(kwargs)
-        stage = "indexed_constraints" if kwargs["agent_name"].endswith("indexed_constraints") else "proposal"
+        observations = _tool_observations(kwargs, "edit_model")
+        if observations and not observations[-1]["ok"] and self.attempts.get("proposal", 0) >= len(self.responses["proposal"]):
+            return ModelResponse(choices=[{"finish_reason": "stop", "message": {"role": "assistant", "content": "Stopping."}}])
+        if _tool_observations(kwargs, "submit_model"):
+            return ModelResponse(choices=[{"finish_reason": "stop", "message": {"role": "assistant", "content": "Stopping."}}])
+        stage = "indexed_constraints" if observations and observations[-1]["ok"] else "proposal"
         attempt = self.attempts.get(stage, 0)
         self.attempts[stage] = attempt + 1
         responses = self.responses[stage]
         response = responses[min(attempt, len(responses) - 1)] if isinstance(responses, list) else responses
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
-            content=json.dumps(response),
-        ))])
+        return scripted_model_reply(response, kwargs)
 
 
 def _shared_fact_generation():
@@ -439,7 +444,7 @@ def test_modeler_reuses_a_fact_in_architecture_parameters_and_constraints(tmp_pa
     assert subproblem.execution_status == "solvable", subproblem.model_dump()
     assert len(llm.calls) == 2
     for call in llm.calls:
-        payload = json.loads(call["history"][1]["content"])
+        payload = json.loads(next(m["content"] for m in call["history"] if m["role"] == "user"))
         assert payload["locked_facts"] == original_spec["locked_facts"]
     assert spec.model_dump(mode="json") == original_spec
     assert [binding.model_dump() for binding in subproblem.fact_bindings] == [{
@@ -450,9 +455,9 @@ def test_modeler_reuses_a_fact_in_architecture_parameters_and_constraints(tmp_pa
             "/execution_components/1/model/constraints/0",
         ],
     }]
-    constraint_payload = json.loads(llm.calls[1]["history"][1]["content"])
-    assert constraint_payload["fact_coverage"]["uncovered_fact_ids"] == []
-    assert len(constraint_payload["fact_coverage"]["uses"]) == 2
+    accepted = _tool_observations(llm.calls[1], "edit_model")[-1]
+    assert accepted["uncovered_fact_ids"] == []
+    assert accepted["changed"]["architecture"] and accepted["changed"]["parameters"] == ["demand"]
 
 
 @pytest.mark.parametrize("stage", ["architecture", "indexed_core", "indexed_constraints"])
@@ -493,8 +498,8 @@ def test_modeler_rejects_unknown_and_cross_scope_facts_at_every_stage(tmp_path, 
     assert invalid_fact in diagnostic["error"]
     for call in llm.calls:
         if call["agent_name"].startswith("GuidanceModeler_problem1"):
-            sent = json.loads(call["history"][1]["content"])
-            scoped = sent.get("original_input", sent)["locked_facts"]
+            sent = json.loads(next(m["content"] for m in call["history"] if m["role"] == "user"))
+            scoped = sent["locked_facts"]
             assert [fact["fact_id"] for fact in scoped] == ["fact.parameter"]
 
 
@@ -571,8 +576,8 @@ def test_rejected_core_attempt_cannot_satisfy_final_coverage(tmp_path):
 
     assert result.subproblems[0].execution_status == "blocked"
     assert llm.attempts["proposal"] == 2
-    constraint_payload = json.loads(llm.calls[2]["history"][1]["content"])
-    assert constraint_payload["fact_coverage"]["uncovered_fact_ids"] == ["fact.rule"]
+    accepted = _tool_observations(llm.calls[2], "edit_model")[-1]
+    assert accepted["uncovered_fact_ids"] == ["fact.rule"]
     diagnostic = json.loads((tmp_path / "modeling_failure_problem1.json").read_text(encoding="utf-8"))
     assert "fact coverage mismatch" in diagnostic["error"]
     assert "fact.rule" in diagnostic["error"]

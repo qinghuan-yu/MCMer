@@ -5,7 +5,7 @@ from itertools import product
 import json
 from pathlib import Path
 import shutil
-from types import SimpleNamespace
+from math_tool_fixtures import scripted_model_reply
 
 from app.artifacts.evidence_profile import build_evidence_profile
 from app.guidance import workflow
@@ -70,9 +70,8 @@ class ScriptedIntegerExample:
                       "subproblem_ids": ["integer_optimum"]} for key, row in zip(ROW_IDS, rows, strict=True)]
             reply = {"locked_facts": facts, "uncertainties": []}
         elif agent_name == "GuidanceModeler":
-            reply = _proposal(payload["locked_facts"])
-        elif agent_name == "GuidanceModeler_indexed_constraints":
-            reply = _formulation()
+            observed = any(message["role"] == "tool" for message in history)
+            reply = _formulation() if observed else _proposal(payload["locked_facts"])
         elif agent_name == "GuidanceModelReviewer_integer_optimum":
             base = "/execution_components/0/model"
             checks = [{"requirement_id": row, "model_paths": [f"{base}/parameters/{i}", f"{base}/constraints/{i}"],
@@ -86,8 +85,7 @@ class ScriptedIntegerExample:
             reply = {"subproblem_id": "integer_optimum", "status": "approved", "mathematical_checks": checks}
         else:
             raise AssertionError(agent_name)
-        return SimpleNamespace(choices=[SimpleNamespace(
-            finish_reason="stop", message=SimpleNamespace(content=json.dumps(reply)))])
+        return scripted_model_reply(reply, kwargs)
 
 
 def test_integer_optimum_matches_exhaustive_enumeration(tmp_path, monkeypatch):

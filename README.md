@@ -2,13 +2,13 @@
 
 MCMer 是一个面向数学建模场景的实验性全栈系统，保留来源追踪、ModelIR、数值算子、验证与报告能力。
 
-**2026-11-20 重新开启 Guidance 子题建模。** 默认入口由 LLM 提交候选及参数来源，可按需查询一次算子。harness 读取实际参数，校验模型，按具体错误最多纠正一次。审核、计算、结果验证和报告沿用同一工作流。
+**本分支在 Guidance 默认入口运行 DeepSeek Harness 数学工作台。** 模型可以查看草稿与算子、逐项编辑模型并提交审核。工作台会将题面事实绑定到变量定义、数值参数、目标或约束。失败的编辑会返回具体原因，此前接受的编辑可以继续使用。独立审核、求解、数值验证和报告发布由 MCMer 完成。
 
 ## 运行与复核
 
-在应用里照常创建建模指导任务即可使用新流程。离线示例用脚本响应代替模型供应商，从冻结题目一直运行到导出的报告，并独立枚举四资产的 81 种收费情形。真实模型对该题的验收仍待新的调用额度。
+在应用里创建建模指导任务即可使用新流程。从源码运行需要 Node.js 22.12 或更新版本。在仓库根目录运行 `npm ci --ignore-scripts --prefix backend/dsh` 安装锁定的官方组件。Docker 镜像在构建时安装这些组件。离线示例用脚本提供模型回复，从冻结题目运行到导出的报告，其中四资产案例独立枚举 81 种收费情形。
 
-2026-11-20 另用 SciPy 整数规划例题实测。独立穷举得到两个最优解 (1, 2) 和 (2, 2)，两者均使 y 达到最大值 2。脚本提供模型回复时，默认流程求解和导出通过。真实模型在首个子题误用文本参数，纠正输出被截断，任务随即阻断。实测共 5 次请求、75502 tokens，正式数值结果为 0。五条原响应离线回放产生相同的阻断报告。[题面](backend/tests/fixtures/scipy_milp/question.txt) · [实测回执](backend/tests/fixtures/scipy_milp/live_receipt.json)
+重做前的 SciPy 整数规划例题保留为基线。独立穷举得到两个最优解 (1, 2) 和 (2, 2)，两者均使 y 达到最大值 2。脚本提供模型回复时，默认流程求解和导出通过。旧版真实模型在首个子题误用文本参数，纠正输出被截断，任务随即阻断。实测共 5 次请求、75502 tokens，正式数值结果为 0。五条原响应离线回放产生相同的阻断报告。[题面](backend/tests/fixtures/scipy_milp/question.txt) · [实测回执](backend/tests/fixtures/scipy_milp/live_receipt.json)
 
 在 `backend` 目录运行：
 
@@ -150,6 +150,7 @@ py -3.11 -m venv .venv
 
 python -m pip install --upgrade pip
 pip install -e .\backend
+npm ci --ignore-scripts --prefix backend/dsh
 ```
 
 说明：
@@ -263,7 +264,7 @@ Copy-Item .\backend\runtime_config.example.json .\backend\.local\runtime_config.
 docker compose up --build
 ```
 
-日常修改后端 Python 代码时不需要重新构建镜像。Compose 会把 `./backend` 挂载到容器内 `/app`，后端以 `uvicorn --reload` 启动；保存 `.py` 文件后容器会自动重载。只有修改 `backend/Dockerfile`、`backend/pyproject.toml` 或新增系统/ Python 依赖时，才需要重新执行 `docker compose up -d --build`。
+Compose 把 `./backend/app` 挂载到容器内 `/app/app`，保存应用源码后 `uvicorn` 会自动重载。修改 `backend/dsh` 的桥接脚本或依赖、后端 Dockerfile、Python 或系统依赖后，运行 `docker compose up -d --build` 更新镜像。
 
 启动后可访问：
 
@@ -299,7 +300,7 @@ docker compose down -v
 ### Node.js
 
 - 需要本地已安装 `pnpm`
-- 建议 Node.js 18+
+- Guidance 数学工作台要求 Node.js 22.12 或更新版本
 - 前端依赖定义在 [frontend/package.json](frontend/package.json)
 
 ### 配置文件

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from source_preflight_fixtures import write_source_preflight
+from math_tool_fixtures import scripted_model_reply
 
 
 class StubLLM:
@@ -20,10 +21,18 @@ class StubLLM:
     async def chat(self, **kwargs):
         self.calls.append(kwargs)
         response = self.responses[len(self.calls) - 1]
-        content = response if isinstance(response, str) else json.dumps(response, ensure_ascii=False)
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
-        )
+        return scripted_model_reply(response, kwargs)
+
+
+def _tool_observations(request: dict, name: str) -> list[dict]:
+    calls = {}
+    observations = []
+    for message in request["history"]:
+        for call in message.get("tool_calls") or []:
+            calls[call["id"]] = call["function"]["name"]
+        if message["role"] == "tool" and calls.get(message["tool_call_id"]) == name:
+            observations.append(json.loads(message["content"]))
+    return observations
 
 
 def _input_catalog(question: str) -> dict:
@@ -221,10 +230,12 @@ def test_problem_decomposer_regenerates_complete_json_once_after_syntax_error() 
             "subproblems": [
                 {
                     "id": "problem_1",
+                    "request_quote": "估计需求",
                     "depends_on_subproblem_ids": [],
                 },
                 {
                     "id": "problem_2",
+                    "request_quote": "优化库存",
                     "depends_on_subproblem_ids": [],
                 },
             ],
@@ -233,9 +244,9 @@ def test_problem_decomposer_regenerates_complete_json_once_after_syntax_error() 
     ])
 
     result = asyncio.run(LLMProblemDecomposer(llm).decompose(
-        question="完成两个子问题。",
+        question="估计需求，优化库存。",
         evidence_profile={"evidence": []},
-        input_catalog=_input_catalog("完成两个子问题。"),
+        input_catalog=_input_catalog("估计需求，优化库存。"),
         task={},
     ))
 
@@ -256,10 +267,12 @@ def test_contract_request_prompts_for_strict_json_without_markdown_fences() -> N
             "subproblems": [
                 {
                     "id": "problem1",
+                    "request_quote": "Estimate demand",
                     "depends_on_subproblem_ids": [],
                 },
                 {
                     "id": "problem2",
+                    "request_quote": "Optimize inventory",
                     "depends_on_subproblem_ids": [],
                 },
             ],
@@ -268,9 +281,9 @@ def test_contract_request_prompts_for_strict_json_without_markdown_fences() -> N
     ])
 
     asyncio.run(LLMProblemDecomposer(llm).decompose(
-        question="Generate a valid contract.",
+        question="Estimate demand. Optimize inventory.",
         evidence_profile={"evidence": []},
-        input_catalog=_input_catalog("Generate a valid contract."),
+        input_catalog=_input_catalog("Estimate demand. Optimize inventory."),
         task={},
     ))
 
@@ -305,7 +318,8 @@ def test_modeler_requests_typed_model_ir_and_retries_complete_contract(tmp_path:
     diagnostic = json.loads(
         (tmp_path / "contract_diagnostics" / "GuidanceModeler.json").read_text(encoding="utf-8")
     )
-    assert diagnostic["status"] == "recovered"
+    assert diagnostic["status"] == "submitted"
+    assert any(action["name"] == "edit_model" and not action["ok"] for action in diagnostic["actions"])
 
 
 @pytest.mark.parametrize("omit_variables", [False, True], ids=["empty", "omitted"])
@@ -341,15 +355,16 @@ def test_modeler_retries_operator_graph_architecture_without_variables(
     ))
 
     assert len(llm.calls) == 2
-    assert "operator_graph architecture requires variables" in llm.calls[1]["history"][1]["content"]
+    rejection, = _tool_observations(llm.calls[1], "edit_model")
+    assert not rejection["ok"] and "operator_graph architecture requires variables" in rejection["error"]
     assert result.subproblems[0].execution_status == "solvable"
     component = result.subproblems[0].execution_components[0]
     assert [item.model_dump() for item in component.variables] == subproblem["variables"]
     diagnostic = json.loads(
         (tmp_path / "contract_diagnostics" / "GuidanceModeler.json").read_text(encoding="utf-8")
     )
-    assert diagnostic["status"] == "recovered"
-    assert diagnostic["attempts"][0]["error_type"] == "ValidationError"
+    assert diagnostic["status"] == "submitted"
+    assert any(action["name"] == "edit_model" and not action["ok"] for action in diagnostic["actions"])
 
 
 def test_hybrid_architecture_rejects_empty_operator_graph_variables() -> None:
@@ -366,6 +381,7 @@ def test_hybrid_architecture_rejects_empty_operator_graph_variables() -> None:
 
 
 def test_modeler_and_reviser_receive_the_same_architecture_contract(tmp_path: Path) -> None:
+    from app.guidance.modeling_context import MODEL_IR_ARCHITECTURE_CONTRACT
     from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
     from app.guidance.model_ir import (ModelIR)
@@ -409,19 +425,12 @@ def test_modeler_and_reviser_receive_the_same_architecture_contract(tmp_path: Pa
 
     initial_prompt = initial_llm.calls[0]["history"][0]["content"]
     revision_prompt = revision_llm.calls[0]["history"][0]["content"]
-    shared_rules = [
-        "execution_components",
-        "同时包含 operator_graph",
-        "架构阶段禁止自行输出 optimization.milp",
-        "problem_spec.json#uncertainties/<uncertainty_id>",
-        "题面锁定事实不是假设",
-        "每条 assumption 的 alternative_scenarios 和 sensitivity_checks 必须非空",
-        "禁止使用数组索引或集合级简写",
-        "evidence_profile 中登记的来源视为实际存在",
-    ]
-    for rule in shared_rules:
-        assert rule in initial_prompt
-        assert rule in revision_prompt
+    assert MODEL_IR_ARCHITECTURE_CONTRACT in initial_prompt
+    assert MODEL_IR_ARCHITECTURE_CONTRACT in revision_prompt
+    assert initial_llm.calls[0]["tools"] == revision_llm.calls[0]["tools"]
+    assert {tool["function"]["name"] for tool in initial_llm.calls[0]["tools"]} == {
+        "inspect_operators", "inspect_model", "edit_model", "submit_model",
+    }
     revision_instruction = (
         "逐条处理 model_review.subproblem_reviews[0].required_revisions"
     )
@@ -551,7 +560,7 @@ def test_model_reviser_uses_compact_architecture_payload(tmp_path: Path) -> None
     )]
     for call in llm.calls[1:]:
         stage_payload = json.loads(call["history"][1]["content"])
-        assert stage_payload["problem_context"].startswith(
+        assert stage_payload["task_summary"].startswith(
             "A shared physical multiplier"
         )
         assert stage_payload["model_review"]["subproblem_reviews"][0][
@@ -1020,7 +1029,8 @@ def test_modeler_receives_the_runtime_operator_catalog(tmp_path: Path) -> None:
     forecast = next(item for item in descriptions if item["operator_id"] == "forecast.future_basis_rolling_origin")
     assert set(forecast["inputs"]) == {"time", "target"}
     assert "parameters_schema" not in forecast
-    selected, = json.loads(llm.calls[1]["history"][1]["content"])["operator_contracts"]
+    inspection, = _tool_observations(llm.calls[1], "inspect_operators")
+    selected, = inspection["contracts"]
     assert selected["operator_id"] == forecast["operator_id"]
     assert "future_time" in selected["parameters_schema"]["properties"]
 
@@ -1093,11 +1103,17 @@ def test_modeler_isolates_subproblem_contract_failure_and_continues(
     from app.guidance.modeler import LLMModeler
     from app.guidance.contracts import ProblemSpec
 
-    llm = StubLLM([
-        "{invalid problem1 attempt one",
-        "{invalid problem1 attempt two",
-        _blocked_ir("slice-two", "problem2"),
-    ])
+    class StopsAfterRejectedEdit(StubLLM):
+        async def chat(self, **kwargs):
+            self.calls.append(kwargs)
+            target = json.loads(kwargs["history"][1]["content"])["target_subproblem_id"]
+            if target == "problem2":
+                return scripted_model_reply(_blocked_ir("slice-two", target), kwargs)
+            if any(msg["role"] == "tool" for msg in kwargs["history"]):
+                return scripted_model_reply("I cannot complete the model.", {})
+            return scripted_model_reply({"unknown_edit": 1}, kwargs)
+
+    llm = StopsAfterRejectedEdit([])
     problem_spec = ProblemSpec(
         task_summary="Build two independent models.",
         subproblems=[
@@ -1140,7 +1156,7 @@ def test_modeler_isolates_subproblem_contract_failure_and_continues(
         (tmp_path / "modeling_failure_problem1.json").read_text(encoding="utf-8")
     )
     assert failure["subproblem_id"] == "problem1"
-    assert "after 2 complete attempts" in failure["error"]
+    assert "submit" in failure["error"].lower()
     assert len(llm.calls) == 3
     first_payload = json.loads(llm.calls[0]["history"][1]["content"])
     second_payload = json.loads(llm.calls[2]["history"][1]["content"])
@@ -1221,7 +1237,7 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
     assert result_subproblem.validation.model_families == ["mixed_integer_linear_optimization"]
     if retry_wrong_family:
         assert "optimization" in invalid["subproblems"][0]["validation"]["model_families"]
-        feedback = llm.calls[1]["history"][1]["content"]
+        feedback = _tool_observations(llm.calls[1], "edit_model")[0]["error"]
         assert "validation_family_method_mismatch" in feedback
         assert "optimization.constrained_quadratic_multistart" in feedback
     assert indexed_component.solver_node_id == "solve_indexed_model"
@@ -1234,21 +1250,17 @@ def test_modeler_promotes_indexed_generation_draft_without_duplicate_ast(
         answer.value_ref == "solution"
         for answer in result.subproblems[0].final_answers
     )
-    constraint_prompt = llm.calls[-1]["history"][0]["content"]
-    assert "非零 offset 必须绑定到排除越界端点的 auxiliary index set" in (
-        constraint_prompt
-    )
-    assert "首期或末期边界条件必须使用独立约束族" in constraint_prompt
-    constraint_payload = json.loads(llm.calls[-1]["history"][1]["content"])
-    assert "indexed_core" not in constraint_payload
-    constraint_context = constraint_payload["constraint_context"]
-    assert "objective" not in constraint_context
-    assert constraint_context["index_sets"] == core["index_sets"]
-    assert constraint_context["parameters"] == [
-        parameter.model_dump(mode="json")
-        for parameter in indexed_component.model.parameters
-    ]
-    assert "variables" not in constraint_context
+    tool_names = {tool["function"]["name"] for tool in llm.calls[-1]["tools"]}
+    assert {"inspect_model", "edit_model", "submit_model"} <= tool_names
+    observations = _tool_observations(llm.calls[-1], "edit_model")
+    binding = observations[-1]
+    assert binding["ok"]
+    parameters = {parameter.id: parameter for parameter in indexed_component.model.parameters}
+    assert {entry["id"] for entry in binding["parameters"]} == set(parameters)
+    for entry in binding["parameters"]:
+        values = parameters[entry["id"]].values
+        assert entry["total_values"] == len(values)
+        assert entry["values"] == [value.model_dump(mode="json", exclude_none=True) for value in values[:8]]
 
 
 
@@ -1465,7 +1477,8 @@ def test_indexed_core_semantics_retry_before_constraints_generation(tmp_path: Pa
         for component in result.subproblems[0].execution_components
     )
     assert len(llm.calls) == 3
-    assert "unknown parameter index sets" in llm.calls[1]["history"][1]["content"]
+    rejected, = _tool_observations(llm.calls[1], "edit_model")
+    assert not rejected["ok"] and "unknown" in rejected["error"] and "unknown_period" in rejected["error"]
 
 
 

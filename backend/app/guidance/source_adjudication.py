@@ -44,7 +44,7 @@ class LLMSourceAdjudicator:
         self, *, problem_spec: ProblemSpec, input_catalog: dict | None,
         evidence_profile: dict, work_dir: Path,
     ) -> tuple[ProblemSpec, SourcePreflightRecord]:
-        from app.guidance.model_generation import _request_model
+        from app.guidance.contract_request import _request_model
 
         # 两次请求与最终许可始终持有同一份不可共享输入，防止await期间被改写。
         problem_spec = problem_spec.model_copy(deep=True)

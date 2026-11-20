@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-from types import SimpleNamespace
+from math_tool_fixtures import scripted_model_reply
 
 import pytest
 
@@ -133,15 +133,13 @@ class OfflinePortfolioLLM:
         elif agent_name == "GuidanceDecomposerFacts":
             reply = _facts(payload["input_catalog"]["blocks"])
         elif agent_name == "GuidanceModeler":
-            reply = _proposal(payload["locked_facts"])
-        elif agent_name == "GuidanceModeler_indexed_constraints":
-            reply = _formulation()
+            observed = any(message["role"] == "tool" for message in history)
+            reply = _formulation() if observed else _proposal(payload["locked_facts"])
         elif agent_name == "GuidanceModelReviewer_portfolio":
             reply = _review(payload["subproblem_model"])
         else:
             raise AssertionError(f"unexpected offline model request: {agent_name}")
-        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop",
-                               message=SimpleNamespace(content=json.dumps(reply)))])
+        return scripted_model_reply(reply, kwargs)
 
 
 def test_frozen_portfolio_through_default_pipeline_and_independent_verifier(tmp_path, monkeypatch):
